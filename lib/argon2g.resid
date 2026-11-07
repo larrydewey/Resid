@@ -22,32 +22,19 @@ import "word.resid";
 import "blake2bg.resid";
 
 /// What Argon2 needs beyond Word64 from a word type `W` over bytes `B`.
-/// The 32x32->64 multiply of BlaMka, and publishing the previous block's first word for data-dependent addressing.
+/// The 32x32->64 multiply of BlaMka.
 behavior Argon2Aux(W, B) {
     W a_mul32(W a, W b);                   // (a mod 2^32) * (b mod 2^32), a 64-bit word
-    List(Int) a_publish8(List(B) xs);      // the first 8 bytes, public
 }
 
 UInt(64) ai_mul32(UInt(64) a, UInt(64) b) { return wrapping_umul(a & 4294967295, b & 4294967295); }
-List(Int) ai_pub8(List(Int) xs) { return xs[0..8]; }
-Argon2Aux(UInt(64), Int) = { .a_mul32 = ai_mul32, .a_publish8 = ai_pub8 };
+Argon2Aux(UInt(64), Int) = ai_mul32;
 
 Secret(UInt(64)) as_mul32(Secret(UInt(64)) a, Secret(UInt(64)) b) {
     return wrapping_umul(a & (UInt(64)) 4294967295, b & (UInt(64)) 4294967295);
 }
 
-@requires(declassify)
-List(Int) as_pub8(List(Secret(UInt(8))) xs) {
-    List(UInt(8)) out = declassify(secret_join(xs[0..8]), "Argon2id data-dependent addressing is public by design (RFC 9106 3.4.1.3)");
-    return as_widen(out, 0, ListBuf());
-}
-
-List(Int) as_widen(List(UInt(8)) b, Int i, ListBuf(Int) acc) {
-    if (i >= b.len()) { return acc.finish(); }
-    return as_widen(b, i + 1, acc.push((Int) ct_public(b[i])));
-}
-
-Argon2Aux(Secret(UInt(64)), Secret(UInt(8))) = { .a_mul32 = as_mul32, .a_publish8 = as_pub8 };
+Argon2Aux(Secret(UInt(64)), Secret(UInt(8))) = as_mul32;
 
 /// Argon2's memory words: four bytes `B` packed little-endian into a
 /// 32-bit `H` (Int for public bytes, Secret(UInt(32)) for secret ones).
@@ -65,6 +52,31 @@ Secret(UInt(32)) asm_pack(Secret(UInt(8)) b0, Secret(UInt(8)) b1, Secret(UInt(8)
 }
 Secret(UInt(8)) asm_byte(Secret(UInt(32)) h, Int k) { return wrapping_u8(h >> (8 * k)); }
 Argon2Mem(Secret(UInt(8)), Secret(UInt(32))) = { .a_pack = asm_pack, .a_byte = asm_byte };
+
+/// Argon2's 64-bit words W read from and written to memory words H: the
+/// fill loop works on whole words, never on bytes.
+behavior Argon2Words(W, H) {
+    W a_word(H lo, H hi);                  // lo + 2^32 hi
+    H a_lo(W w);                           // the low 32 bits
+    H a_hi(W w);                           // the high 32 bits
+    UInt(64) a_pub_word(H lo, H hi);       // the word, public (data-dependent addressing)
+}
+
+UInt(64) aw_word(Int lo, Int hi) { return wrapping_u64(lo & 4294967295) | (wrapping_u64(hi & 4294967295) << (UInt(64)) 32); }
+Int aw_lo(UInt(64) w) { return wrapping_i64(w & (UInt(64)) 4294967295); }
+Int aw_hi(UInt(64) w) { return wrapping_i64(w >> (UInt(64)) 32); }
+Argon2Words(UInt(64), Int) = { .a_word = aw_word, .a_lo = aw_lo, .a_hi = aw_hi, .a_pub_word = aw_word };
+
+Secret(UInt(64)) aws_word(Secret(UInt(32)) lo, Secret(UInt(32)) hi) { return wrapping_u64(lo) | (wrapping_u64(hi) << (UInt(64)) 32); }
+Secret(UInt(32)) aws_lo(Secret(UInt(64)) w) { return wrapping_u32(w); }
+Secret(UInt(32)) aws_hi(Secret(UInt(64)) w) { return wrapping_u32(w >> (UInt(64)) 32); }
+
+@requires(declassify)
+UInt(64) aws_pub(Secret(UInt(32)) lo, Secret(UInt(32)) hi) {
+    return ct_public(declassify(aws_word(lo, hi), "Argon2id data-dependent addressing is public by design (RFC 9106 3.4.1.3)"));
+}
+
+Argon2Words(Secret(UInt(64)), Secret(UInt(32))) = { .a_word = aws_word, .a_lo = aws_lo, .a_hi = aws_hi, .a_pub_word = aws_pub };
 
 // ─── Lifting public values ─────────────────────────────────────
 
@@ -168,87 +180,128 @@ Int a2_ix(Int mode, Int k, Int j) {
     return if (mode == 0) { 16 * k + j } else { 16 * (j / 2) + 2 * k + j % 2 };
 }
 
-@needs(Word64(W, B))
-W a2_w(List(B) blk, Int mode, Int k, Int j) { return blake2b_load(blk, 8 * a2_ix(mode, k, j)); }
+// Word k (0..127) of the block at word offset `o` of `m`.
+@needs(Word64(W, B), Argon2Words(W, H))
+W a2_wd(List(H) m, Int o, Int k) { return a_word(m[o + 2 * k], m[o + 2 * k + 1]); }
 
-@needs(Word64(W, B))
-V16(W) a2_load16(List(B) blk, Int mode, Int k) {
+@needs(Word64(W, B), Argon2Words(W, H))
+V16(W) a2_load16(List(H) blk, Int mode, Int k) {
     return V16 {
-        .v0 = a2_w(blk, mode, k, 0), .v1 = a2_w(blk, mode, k, 1), .v2 = a2_w(blk, mode, k, 2), .v3 = a2_w(blk, mode, k, 3),
-        .v4 = a2_w(blk, mode, k, 4), .v5 = a2_w(blk, mode, k, 5), .v6 = a2_w(blk, mode, k, 6), .v7 = a2_w(blk, mode, k, 7),
-        .v8 = a2_w(blk, mode, k, 8), .v9 = a2_w(blk, mode, k, 9), .v10 = a2_w(blk, mode, k, 10), .v11 = a2_w(blk, mode, k, 11),
-        .v12 = a2_w(blk, mode, k, 12), .v13 = a2_w(blk, mode, k, 13), .v14 = a2_w(blk, mode, k, 14), .v15 = a2_w(blk, mode, k, 15) };
+        .v0 = a2_wd(blk, 0, a2_ix(mode, k, 0)), .v1 = a2_wd(blk, 0, a2_ix(mode, k, 1)), .v2 = a2_wd(blk, 0, a2_ix(mode, k, 2)), .v3 = a2_wd(blk, 0, a2_ix(mode, k, 3)),
+        .v4 = a2_wd(blk, 0, a2_ix(mode, k, 4)), .v5 = a2_wd(blk, 0, a2_ix(mode, k, 5)), .v6 = a2_wd(blk, 0, a2_ix(mode, k, 6)), .v7 = a2_wd(blk, 0, a2_ix(mode, k, 7)),
+        .v8 = a2_wd(blk, 0, a2_ix(mode, k, 8)), .v9 = a2_wd(blk, 0, a2_ix(mode, k, 9)), .v10 = a2_wd(blk, 0, a2_ix(mode, k, 10)), .v11 = a2_wd(blk, 0, a2_ix(mode, k, 11)),
+        .v12 = a2_wd(blk, 0, a2_ix(mode, k, 12)), .v13 = a2_wd(blk, 0, a2_ix(mode, k, 13)), .v14 = a2_wd(blk, 0, a2_ix(mode, k, 14)), .v15 = a2_wd(blk, 0, a2_ix(mode, k, 15)) };
 }
 
-@needs(Word64(W, B))
-ListBuf(B) a2_store16(V16(W) v, ListBuf(B) acc) {
-    ListBuf(B) a0 = blake2b_store(v.v0, acc); ListBuf(B) a1 = blake2b_store(v.v1, a0);
-    ListBuf(B) a2 = blake2b_store(v.v2, a1); ListBuf(B) a3 = blake2b_store(v.v3, a2);
-    ListBuf(B) a4 = blake2b_store(v.v4, a3); ListBuf(B) a5 = blake2b_store(v.v5, a4);
-    ListBuf(B) a6 = blake2b_store(v.v6, a5); ListBuf(B) a7 = blake2b_store(v.v7, a6);
-    ListBuf(B) a8 = blake2b_store(v.v8, a7); ListBuf(B) a9 = blake2b_store(v.v9, a8);
-    ListBuf(B) a10 = blake2b_store(v.v10, a9); ListBuf(B) a11 = blake2b_store(v.v11, a10);
-    ListBuf(B) a12 = blake2b_store(v.v12, a11); ListBuf(B) a13 = blake2b_store(v.v13, a12);
-    ListBuf(B) a14 = blake2b_store(v.v14, a13);
-    return blake2b_store(v.v15, a14);
+@needs(Word64(W, B), Argon2Words(W, H))
+ListBuf(H) a2_push_w(W w, ListBuf(H) acc) { return acc.push(a_lo(w)).push(a_hi(w)); }
+
+@needs(Word64(W, B), Argon2Words(W, H))
+ListBuf(H) a2_store16(V16(W) v, ListBuf(H) acc) {
+    ListBuf(H) a0 = a2_push_w(v.v0, acc); ListBuf(H) a1 = a2_push_w(v.v1, a0);
+    ListBuf(H) a2 = a2_push_w(v.v2, a1); ListBuf(H) a3 = a2_push_w(v.v3, a2);
+    ListBuf(H) a4 = a2_push_w(v.v4, a3); ListBuf(H) a5 = a2_push_w(v.v5, a4);
+    ListBuf(H) a6 = a2_push_w(v.v6, a5); ListBuf(H) a7 = a2_push_w(v.v7, a6);
+    ListBuf(H) a8 = a2_push_w(v.v8, a7); ListBuf(H) a9 = a2_push_w(v.v9, a8);
+    ListBuf(H) a10 = a2_push_w(v.v10, a9); ListBuf(H) a11 = a2_push_w(v.v11, a10);
+    ListBuf(H) a12 = a2_push_w(v.v12, a11); ListBuf(H) a13 = a2_push_w(v.v13, a12);
+    ListBuf(H) a14 = a2_push_w(v.v14, a13);
+    return a2_push_w(v.v15, a14);
 }
 
-// R = X xor Y, as bytes.
-@needs(Word64(W, B))
-List(B) a2_xor_blocks(List(B) x, List(B) y, Int k, ListBuf(B) acc) {
+// R = X xor Y, the blocks at word offsets `xo` of `xm` and `yo` of `ym`.
+@needs(Word64(W, B), Argon2Words(W, H))
+List(H) a2_xor_blocks(List(H) xm, Int xo, List(H) ym, Int yo, Int k, ListBuf(H) acc) {
     if (k >= 128) { return acc.finish(); }
-    W w = d_xor(blake2b_load(x, 8 * k), blake2b_load(y, 8 * k));
-    return a2_xor_blocks(x, y, k + 1, blake2b_store(w, acc));
+    W w = d_xor(a2_wd(xm, xo, k), a2_wd(ym, yo, k));
+    return a2_xor_blocks(xm, xo, ym, yo, k + 1, a2_push_w(w, acc));
 }
 
-// Applies P to each of the eight rows (mode 0) or columns (mode 1); the
-// results are the eight 128-byte parts, in order.
-@needs(Word64(W, B), Argon2Aux(W, B))
-List(List(B)) a2_parts(List(B) blk, Int mode, Int k, ListBuf(List(B)) acc) {
-    if (k >= 8) { return acc.finish(); }
-    ListBuf(B) bb = ListBuf();
-    List(B) part = a2_store16(a2_perm(a2_load16(blk, mode, k)), bb).finish();
-    return a2_parts(blk, mode, k + 1, acc.push(part));
+// P applied to the rows (mode 0) or columns (mode 1) k..7 of `blk`, each
+// result's sixteen words appended in turn: rows give the block in order,
+// columns give it column by column.
+@needs(Word64(W, B), Argon2Aux(W, B), Argon2Words(W, H))
+ListBuf(H) a2_parts(List(H) blk, Int mode, Int k, ListBuf(H) acc) {
+    if (k >= 8) { return acc; }
+    return a2_parts(blk, mode, k + 1, a2_store16(a2_perm(a2_load16(blk, mode, k)), acc));
 }
 
-@needs(Word64(W, B))
-List(B) a2_cat(List(List(B)) parts, Int i, ListBuf(B) acc) {
-    if (i >= parts.len()) { return acc.finish(); }
-    return a2_cat(parts, i + 1, a2_push_all(parts[i], 0, acc));
+// Word k of Z, held column by column in `zc`: column c = (k mod 16)/2, at
+// position 2r + k mod 2 of that column's sixteen, r = k/16.
+@needs(Word64(W, B), Argon2Words(W, H))
+W a2_z(List(H) zc, Int k) { return a2_wd(zc, 0, 16 * ((k % 16) / 2) + 2 * (k / 16) + k % 2); }
+
+// Z xor R as a new block.
+@needs(Word64(W, B), Argon2Words(W, H))
+List(H) a2_out_list(List(H) r, List(H) zc, Int k, ListBuf(H) acc) {
+    if (k >= 128) { return acc.finish(); }
+    return a2_out_list(r, zc, k + 1, a2_push_w(d_xor(a2_z(zc, k), a2_wd(r, 0, k)), acc));
+}
+
+// R and Z of G(X, Y) (RFC 9106 3.5): R = X xor Y, Q = P on R's rows, Z = P on
+// Q's columns (column by column).
+@needs(Word64(W, B), Argon2Aux(W, B), Argon2Words(W, H))
+List(H) a2_zc(List(H) r) {
+    ListBuf(H) b1 = ListBuf();
+    ListBuf(H) b2 = ListBuf();
+    List(H) q = a2_parts(r, 0, 0, b1).finish();
+    return a2_parts(q, 1, 0, b2).finish();
+}
+
+// ─── G in place, on scratch blocks the fill loop carries ─────────
+
+// `b` with word k set to `w` (in place: b is not used after).
+@needs(Word64(W, B), Argon2Words(W, H))
+List(H) a2_set_w(List(H) b, Int k, W w) { return b.with(2 * k, a_lo(w)).with(2 * k + 1, a_hi(w)); }
+
+// R = X xor Y, the blocks at offsets `xo` and `yo` of `m`, written into `r`.
+@needs(Word64(W, B), Argon2Words(W, H))
+List(H) a2_xor_into(List(H) r, List(H) m, Int xo, Int yo, Int k) {
+    if (k >= 128) { return r; }
+    return a2_xor_into(a2_set_w(r, k, d_xor(a2_wd(m, xo, k), a2_wd(m, yo, k))), m, xo, yo, k + 1);
+}
+
+// The sixteen words of row (mode 0) or column (mode 1) k written back to
+// the places they were read from.
+@needs(Word64(W, B), Argon2Words(W, H))
+List(H) a2_put16(List(H) d, V16(W) v, Int mode, Int k) {
+    List(H) d1 = a2_set_w(a2_set_w(a2_set_w(a2_set_w(d, a2_ix(mode, k, 0), v.v0), a2_ix(mode, k, 1), v.v1), a2_ix(mode, k, 2), v.v2), a2_ix(mode, k, 3), v.v3);
+    List(H) d2 = a2_set_w(a2_set_w(a2_set_w(a2_set_w(d1, a2_ix(mode, k, 4), v.v4), a2_ix(mode, k, 5), v.v5), a2_ix(mode, k, 6), v.v6), a2_ix(mode, k, 7), v.v7);
+    List(H) d3 = a2_set_w(a2_set_w(a2_set_w(a2_set_w(d2, a2_ix(mode, k, 8), v.v8), a2_ix(mode, k, 9), v.v9), a2_ix(mode, k, 10), v.v10), a2_ix(mode, k, 11), v.v11);
+    return a2_set_w(a2_set_w(a2_set_w(a2_set_w(d3, a2_ix(mode, k, 12), v.v12), a2_ix(mode, k, 13), v.v13), a2_ix(mode, k, 14), v.v14), a2_ix(mode, k, 15), v.v15);
+}
+
+// P applied to the rows (mode 0) or columns (mode 1) k..7 of `src`, the
+// results written into `d` in the same places.
+@needs(Word64(W, B), Argon2Aux(W, B), Argon2Words(W, H))
+List(H) a2_p_into(List(H) d, List(H) src, Int mode, Int k) {
+    if (k >= 8) { return d; }
+    return a2_p_into(a2_put16(d, a2_perm(a2_load16(src, mode, k)), mode, k), src, mode, k + 1);
+}
+
+// Z xor R written over the block at offset `o` of `mem`, xored with what
+// was there when `xor_old`.
+@needs(Word64(W, B), Argon2Words(W, H))
+List(H) a2_out_into(List(H) mem, Int o, List(H) r, List(H) z, Bool xor_old, Int k) {
+    if (k >= 128) { return mem; }
+    W base = d_xor(a2_wd(z, 0, k), a2_wd(r, 0, k));
+    W out = if (xor_old) { d_xor(base, a2_wd(mem, o, k)) } else { base };
+    return a2_out_into(a2_set_w(mem, o / 2 + k, out), o, r, z, xor_old, k + 1);
+}
+
+// G(X, Y) of two separate blocks, as a new block (address blocks).
+@needs(Word64(W, B), Argon2Aux(W, B), Argon2Words(W, H))
+List(H) a2_g(List(H) x, List(H) y) {
+    ListBuf(H) b0 = ListBuf();
+    ListBuf(H) b1 = ListBuf();
+    List(H) r = a2_xor_blocks(x, 0, y, 0, 0, b0);
+    return a2_out_list(r, a2_zc(r), 0, b1);
 }
 
 @needs(Word64(W, B))
 ListBuf(B) a2_push_all(List(B) xs, Int i, ListBuf(B) acc) {
     if (i >= xs.len()) { return acc; }
     return a2_push_all(xs, i + 1, acc.push(xs[i]));
-}
-
-// Word k of the output: column c = (k mod 16)/2, row r = k/16, held at
-// position 2r + k mod 2 of column c's result.
-@needs(Word64(W, B))
-List(B) a2_finish(List(B) rb, List(List(B)) cols, List(B) old, Bool xor_old, Int k, ListBuf(B) acc) {
-    if (k >= 128) { return acc.finish(); }
-    Int c = (k % 16) / 2;
-    Int pos = 2 * (k / 16) + k % 2;
-    W z = blake2b_load(cols[c], 8 * pos);
-    W r = blake2b_load(rb, 8 * k);
-    W base = d_xor(z, r);
-    W out = if (xor_old) { d_xor(base, blake2b_load(old, 8 * k)) } else { base };
-    return a2_finish(rb, cols, old, xor_old, k + 1, blake2b_store(out, acc));
-}
-
-// G(X, Y), xored with `old` when `xor_old` (passes after the first).
-@needs(Word64(W, B), Argon2Aux(W, B))
-List(B) a2_g(List(B) x, List(B) y, List(B) old, Bool xor_old) {
-    ListBuf(B) b0 = ListBuf();
-    ListBuf(B) b1 = ListBuf();
-    ListBuf(B) b2 = ListBuf();
-    List(B) rb = a2_xor_blocks(x, y, 0, b0);
-    ListBuf(List(B)) pl = ListBuf();
-    List(B) q = a2_cat(a2_parts(rb, 0, 0, pl), 0, b1);
-    ListBuf(List(B)) pl2 = ListBuf();
-    List(List(B)) cols = a2_parts(q, 1, 0, pl2);
-    return a2_finish(rb, cols, old, xor_old, 0, b2);
 }
 
 // ─── Reference block selection (RFC 9106 §3.4.1) ────────────────
@@ -268,8 +321,8 @@ Int a2_ref_pos(Int pass, Int slice, Int idx, Bool same_lane, Int q, Int seglen, 
 }
 
 // The address block of counter `ctr` (data-independent addressing), always
-// computed on public data.
-List(Int) a2_zero_block() { return a2_zeros(1024, 0, ListBuf()); }
+// computed on public data, as 256 32-bit words.
+List(Int) a2_zero_block() { return a2_zeros(256, 0, ListBuf()); }
 
 List(Int) a2_zeros(Int n, Int i, ListBuf(Int) acc) {
     if (i >= n) { return acc.finish(); }
@@ -278,16 +331,17 @@ List(Int) a2_zeros(Int n, Int i, ListBuf(Int) acc) {
 
 List(Int) a2_addr_block(Int pass, Int lane, Int slice, Int total, Int t, Int ctr) {
     List(Int) words = [pass, lane, slice, total, t, 2, ctr];
-    List(Int) zb = a2_words_le(words, 0, ListBuf()).concat(a2_zeros(1024 - 56, 0, ListBuf()));
+    List(Int) zb = a2_words_le(words, 0, ListBuf()).concat(a2_zeros(256 - 14, 0, ListBuf()));
     List(Int) z0 = a2_zero_block();
-    List(Int) g1 = a2_g(z0, zb, z0, false);
-    return a2_g(z0, g1, z0, false);
+    List(Int) g1 = a2_g(z0, zb);
+    return a2_g(z0, g1);
 }
 
+// Each value as a 64-bit word: two 32-bit halves, low first.
 List(Int) a2_words_le(List(Int) ws, Int i, ListBuf(Int) acc) {
     if (i >= ws.len()) { return acc.finish(); }
     Int v = ws[i];
-    return a2_words_le(ws, i + 1, acc.push(v & 255).push((v >> 8) & 255).push((v >> 16) & 255).push((v >> 24) & 255).push(0).push(0).push(0).push(0));
+    return a2_words_le(ws, i + 1, acc.push(v & 4294967295).push((v >> 32) & 4294967295));
 }
 
 // ─── The fill loop ──────────────────────────────────────────────
@@ -306,59 +360,43 @@ List(B) a2_unpack(List(H) mem, Int i, Int end, ListBuf(B) acc) {
     return a2_unpack(mem, i + 1, end, acc.push(a_byte(h, 0)).push(a_byte(h, 1)).push(a_byte(h, 2)).push(a_byte(h, 3)));
 }
 
-// `mem` with block b replaced by the bytes `blk`, in place (mem is not
-// used after).
-@needs(Word64(W, B), Argon2Mem(B, H))
-List(H) a2_put(List(H) mem, Int b, List(B) blk, Int i) {
-    if (i >= 256) { return mem; }
-    return a2_put(mem.with(256 * b + i, a_pack(blk[4 * i], blk[4 * i + 1], blk[4 * i + 2], blk[4 * i + 3])), b, blk, i + 1);
-}
-
-@needs(Word64(W, B), Argon2Aux(W, B), Argon2Mem(B, H))
-List(H) a2_fill_idx(List(H) mem, Int p, Int q, Int seglen, Int t, Int pass, Int slice, Int lane, Int idx, List(Int) addr) {
-    if (idx >= seglen) { return mem; }
+// The fill loop (RFC 9106 3.4): every block of every pass, slice, lane
+// and index in one loop, so the memory and the scratch blocks R, Q and Z it
+// carries are written in place and leave the loop once. `addr` is the
+// current address block of data-independent addressing, [] at a segment's
+// start.
+@needs(Word64(W, B), Argon2Aux(W, B), Argon2Words(W, H))
+List(H) a2_fill(List(H) mem, List(H) r, List(H) qq, List(H) z, Int p, Int q, Int seglen, Int t, Int pass, Int slice, Int lane, Int idx, List(Int) addr) {
+    List(Int) none = [];
+    if (pass >= t) { return mem; }
+    if (slice >= 4) { return a2_fill(mem, r, qq, z, p, q, seglen, t, pass + 1, 0, 0, 0, none); }
+    if (lane >= p) { return a2_fill(mem, r, qq, z, p, q, seglen, t, pass, slice + 1, 0, 0, none); }
+    if (idx >= seglen) { return a2_fill(mem, r, qq, z, p, q, seglen, t, pass, slice, lane + 1, 0, none); }
     Int j = slice * seglen + idx;
-    if (pass == 0 && j < 2) { return a2_fill_idx(mem, p, q, seglen, t, pass, slice, lane, idx + 1, addr); }
-    List(B) prev = a2_block(mem, if (j == 0) { lane * q + q - 1 } else { lane * q + j - 1 });
+    if (pass == 0 && j < 2) { return a2_fill(mem, r, qq, z, p, q, seglen, t, pass, slice, lane, idx + 1, addr); }
+    Int po = 256 * (if (j == 0) { lane * q + q - 1 } else { lane * q + j - 1 });
     Bool independent = pass == 0 && slice < 2;
     // The address block is regenerated every 128 entries.
     List(Int) addr2 = if (independent && (idx % 128 == 0 || (idx == 2 && pass == 0 && slice == 0 && addr.len() == 0))) {
         a2_addr_block(pass, lane, slice, p * q, t, idx / 128 + 1)
     } else { addr };
     UInt(64) jw = if (independent) {
-        blake2b_load(addr2, 8 * (idx % 128))
+        aw_word(addr2[2 * (idx % 128)], addr2[2 * (idx % 128) + 1])
     } else {
-        blake2b_load(a_publish8(prev), 0)
+        a_pub_word(mem[po], mem[po + 1])
     };
     UInt(64) j1 = jw & 4294967295;
     UInt(64) j2 = jw >> 32;
     Int ref_lane = if (pass == 0 && slice == 0) { lane } else { (Int) (j2 % u64(p)) };
     Int pos = a2_ref_pos(pass, slice, idx, ref_lane == lane, q, seglen, j1);
-    List(B) reference = a2_block(mem, ref_lane * q + pos);
-    // The first pass overwrites a block that is still zero: `old` is unused.
-    List(B) old = if (pass > 0) { a2_block(mem, lane * q + j) } else { prev };
-    List(B) blk = a2_g(prev, reference, old, pass > 0);
-    return a2_fill_idx(a2_put(mem, lane * q + j, blk, 0), p, q, seglen, t, pass, slice, lane, idx + 1, addr2);
-}
-
-@needs(Word64(W, B), Argon2Aux(W, B), Argon2Mem(B, H))
-List(H) a2_fill_lanes(List(H) mem, Int p, Int q, Int seglen, Int t, Int pass, Int slice, Int lane) {
-    if (lane >= p) { return mem; }
-    List(Int) none = [];
-    List(H) m2 = a2_fill_idx(mem, p, q, seglen, t, pass, slice, lane, 0, none);
-    return a2_fill_lanes(m2, p, q, seglen, t, pass, slice, lane + 1);
-}
-
-@needs(Word64(W, B), Argon2Aux(W, B), Argon2Mem(B, H))
-List(H) a2_fill_pass(List(H) mem, Int p, Int q, Int seglen, Int t, Int pass, Int slice) {
-    if (slice >= 4) { return mem; }
-    return a2_fill_pass(a2_fill_lanes(mem, p, q, seglen, t, pass, slice, 0), p, q, seglen, t, pass, slice + 1);
-}
-
-@needs(Word64(W, B), Argon2Aux(W, B), Argon2Mem(B, H))
-List(H) a2_fill(List(H) mem, Int p, Int q, Int seglen, Int t, Int pass) {
-    if (pass >= t) { return mem; }
-    return a2_fill(a2_fill_pass(mem, p, q, seglen, t, pass, 0), p, q, seglen, t, pass + 1);
+    // G(prev, ref): R = prev xor ref, Q = P on R's rows, Z = P on Q's
+    // columns; the block becomes Z xor R (xored with itself after the first
+    // pass, which overwrites a block that is still zero).
+    List(H) r2 = a2_xor_into(r, mem, po, 256 * (ref_lane * q + pos), 0);
+    List(H) q2 = a2_p_into(qq, r2, 0, 0);
+    List(H) z2 = a2_p_into(z, q2, 1, 0);
+    List(H) m2 = a2_out_into(mem, 256 * (lane * q + j), r2, z2, pass > 0, 0);
+    return a2_fill(m2, r2, q2, z2, p, q, seglen, t, pass, slice, lane, idx + 1, addr2);
 }
 
 // The memory, packed: per lane B[lane][0] and B[lane][1] from H0 (RFC 9106
@@ -405,11 +443,18 @@ List(B) a2_xor_bytes(List(B) a, List(B) b, Int i, ListBuf(B) acc) {
     return a2_xor_bytes(a, b, i + 8, blake2b_store(d_xor(x, y), acc));
 }
 
+// `n` copies of `x` (scratch words, overwritten before they are read).
+@needs(Word64(W, B), Argon2Words(W, H))
+List(H) a2_scratch(H x, Int n, ListBuf(H) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return a2_scratch(x, n - 1, acc.push(x));
+}
+
 /// Argon2id of `pwd` (secret at secret types) with public `salt` and
 /// associated data `ad`, an optional secret `key`, `p` lanes, `m` KiB of
 /// memory, `t` passes and a tag of `tag_len` bytes (4 or more). Needs
 /// `m >= 8 * p`. Returns the tag.
-@needs(Word64(W, B), Argon2Aux(W, B), Argon2Mem(B, H))
+@needs(Word64(W, B), Argon2Aux(W, B), Argon2Mem(B, H), Argon2Words(W, H))
 @key_from(pwd, key)
 pub List(B) argon2id(List(B) pwd, List(Int) salt, List(B) key, List(Int) ad, Int p, Int m, Int t, Int tag_len) {
     Int q = (m / (4 * p)) * 4;
@@ -417,7 +462,10 @@ pub List(B) argon2id(List(B) pwd, List(Int) salt, List(B) key, List(Int) ad, Int
     List(B) h0 = a2_h0(pwd, salt, key, ad, p, tag_len, m, t);
     ListBuf(H) mb = ListBuf();
     List(H) mem0 = a2_init(h0, p, q, 0, mb);
-    List(H) mem = a2_fill(mem0, p, q, seglen, t, 0);
+    ListBuf(H) sb = ListBuf();
+    List(H) scratch = a2_scratch(mem0[0], 512, sb);
+    List(Int) none = [];
+    List(H) mem = a2_fill(mem0, scratch[0..256], scratch[256..512], scratch[0..256], p, q, seglen, t, 0, 0, 0, 0, none);
     List(B) c = a2_xor_lanes(mem, p, q, 0, h0);
     return a2_hprime(c, tag_len);
 }

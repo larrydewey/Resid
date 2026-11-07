@@ -57,7 +57,9 @@ lib/verify/seal.resid seal_to_evidence needs Appraised evidence (tests/attest ke
 lib/verify/seal.resid seal_publish publishes HPKE ciphertext (declassify per byte, no branch)
 lib/verify/seal.resid open_released needs a release (tests/attest key_broker); its secret work is hpkeg_setup_receiver_full and hpkeg_open (hpke-open-secret), whose verdict is public
 lib/dev/device.resid device_engine_read_pci_attr device I/O: the engine runs the device host; its secret outputs reach the program only through dv_answer
+lib/dev/device.resid device_engine_ctaphid device I/O: the engine runs the device host; its secret outputs reach the program only through dv_answer
 lib/dev/device_write.resid device_engine_transact_chain_w device I/O: the writing engine; its secret outputs reach the program only through dv_answer
+lib/dev/device_write.resid device_engine_ctaphid_w device I/O: the engine runs the device host; its secret outputs reach the program only through dv_answer
 lib/spdm_requester.resid spdm_connect transport I/O through the SpdmIo closure (GET_VERSION to ALGORITHMS); the requester's secret work is spdm_session's (spdm-session-secret) and the signing curves' (cases)
 lib/spdm_requester.resid spdm_get_digests transport I/O through the SpdmIo closure; nothing secret is computed, the connection's config (its key) is carried
 lib/spdm_requester.resid spdm_get_certificate transport I/O through the SpdmIo closure; nothing secret is computed, the connection's config (its key) is carried

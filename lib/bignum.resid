@@ -734,6 +734,8 @@ UInt(4224) bw_exp(Bool two, UInt(4224) bm, List(UInt(64)) exp, Int i, UInt(4224)
 // base^exp mod m for an odd m of at most 4096 bits; base < m; `bits` is the
 // size class (64 times the limb count of m).
 List(UInt(64)) bn_native_exp(List(UInt(64)) base, List(UInt(64)) exp, List(UInt(64)) m, Int bits) {
+    if (bits <= 1024) { return bk_exp_native(base, exp, m); }
+    if (bits <= 2048) { return bd_exp_native(base, exp, m); }
     Bool two = bits > 2048;
     Int rbits = if (two) { 4096 } else { 2048 };
     UInt(4224) n = bw_of(m, m.len() - 1, 0);
@@ -747,6 +749,135 @@ List(UInt(64)) bn_native_exp(List(UInt(64)) base, List(UInt(64)) exp, List(UInt(
     return bw_to(out, m.len(), 0, ListBuf());
 }
 
+
+// Moduli of up to 1024 bits (Miller-Rabin on 1024-bit candidates, the
+// Paillier primes) with R = 2^1024. Values are UInt(1024) scalars, widened
+// only for the full products, so LLVM multiplies 1024-bit halves and never
+// the zero tops of a wider type: a product is about a tenth of the work of
+// the 2048-bit class.
+
+UInt(1024) bk_of(List(UInt(64)) x, Int i, UInt(1024) acc) {
+    if (i < 0) { return acc; }
+    return bk_of(x, i - 1, (acc << 64) | (UInt(1024)) x[i]);
+}
+
+List(UInt(64)) bk_to(UInt(1024) v, Int limbs, Int i, ListBuf(UInt(64)) acc) {
+    if (i >= limbs) { return bn_trim(acc.finish()); }
+    UInt(1024) sh = v >> (UInt(1024)) (64 * i);
+    return bk_to(v, limbs, i + 1, acc.push(wrapping_u64(sh & 18446744073709551615)));
+}
+
+// -n^-1 mod 2^1024 for odd n, by Newton's iteration (n is its own inverse
+// mod 8, and each step doubles the correct bits: 3 * 2^9 > 1024).
+UInt(1024) bk_ninv(UInt(1024) n) {
+    UInt(1024) x = bk_newton(n, n, 0);
+    return wrapping_usub((UInt(1024)) 0, x);
+}
+
+UInt(1024) bk_newton(UInt(1024) n, UInt(1024) x, Int i) {
+    if (i >= 9) { return x; }
+    UInt(1024) nx = wrapping_umul(n, x);
+    UInt(1024) two_minus = wrapping_usub((UInt(1024)) 2, nx);
+    return bk_newton(n, wrapping_umul(x, two_minus), i + 1);
+}
+
+// x * 2^count mod n, by repeated doubling (x < n).
+UInt(1024) bk_double(UInt(1024) x, UInt(1024) n, Int count) {
+    if (count <= 0) { return x; }
+    UInt(1088) d = (UInt(1088)) x << 1;
+    UInt(1088) nw = (UInt(1088)) n;
+    return bk_double((UInt(1024)) (if (d >= nw) { d - nw } else { d }), n, count - 1);
+}
+
+// Montgomery product a b R^-1 mod n, for a, b < n < 2^1024.
+UInt(1024) bk_mm(UInt(1024) a, UInt(1024) b, UInt(1024) n, UInt(1024) ninv) {
+    UInt(2112) t = (UInt(2112)) a * (UInt(2112)) b;
+    UInt(1024) m = wrapping_umul((UInt(1024)) (t & (((UInt(2112)) 1 << 1024) - 1)), ninv);
+    UInt(2112) u = (t + (UInt(2112)) m * (UInt(2112)) n) >> 1024;
+    UInt(2112) nw = (UInt(2112)) n;
+    return (UInt(1024)) (if (u >= nw) { u - nw } else { u });
+}
+
+UInt(1024) bk_exp(UInt(1024) bm, List(UInt(64)) exp, Int i, UInt(1024) n, UInt(1024) ninv, UInt(1024) acc) {
+    if (i < 0) { return acc; }
+    UInt(1024) sq = bk_mm(acc, acc, n, ninv);
+    UInt(1024) nx = if (bn_bit(exp, i) == 1) { bk_mm(sq, bm, n, ninv) } else { sq };
+    return bk_exp(bm, exp, i - 1, n, ninv, nx);
+}
+
+// base^exp mod m for an odd m of at most 1024 bits; base < m.
+List(UInt(64)) bk_exp_native(List(UInt(64)) base, List(UInt(64)) exp, List(UInt(64)) m) {
+    UInt(1024) n = bk_of(m, m.len() - 1, 0);
+    UInt(1024) ninv = bk_ninv(n);
+    UInt(1024) r1 = bk_double(1, n, 1024);
+    UInt(1024) r2 = bk_double(r1, n, 1024);
+    UInt(1024) bm = bk_mm(bk_of(base, base.len() - 1, 0), r2, n, ninv);
+    UInt(1024) acc = bk_exp(bm, exp, bn_bit_len(exp) - 1, n, ninv, r1);
+    return bk_to(bk_mm(acc, 1, n, ninv), m.len(), 0, ListBuf());
+}
+
+// Moduli of 1025 to 2048 bits (Paillier moduli, Pedersen parameters) the
+// same way, with R = 2^2048.
+
+UInt(2048) bd_of(List(UInt(64)) x, Int i, UInt(2048) acc) {
+    if (i < 0) { return acc; }
+    return bd_of(x, i - 1, (acc << 64) | (UInt(2048)) x[i]);
+}
+
+List(UInt(64)) bd_to(UInt(2048) v, Int limbs, Int i, ListBuf(UInt(64)) acc) {
+    if (i >= limbs) { return bn_trim(acc.finish()); }
+    UInt(2048) sh = v >> (UInt(2048)) (64 * i);
+    return bd_to(v, limbs, i + 1, acc.push(wrapping_u64(sh & 18446744073709551615)));
+}
+
+// -n^-1 mod 2^1024 for odd n, by Newton's iteration (n is its own inverse
+// mod 8, and each step doubles the correct bits: 3 * 2^10 > 2048).
+UInt(2048) bd_ninv(UInt(2048) n) {
+    UInt(2048) x = bd_newton(n, n, 0);
+    return wrapping_usub((UInt(2048)) 0, x);
+}
+
+UInt(2048) bd_newton(UInt(2048) n, UInt(2048) x, Int i) {
+    if (i >= 10) { return x; }
+    UInt(2048) nx = wrapping_umul(n, x);
+    UInt(2048) two_minus = wrapping_usub((UInt(2048)) 2, nx);
+    return bd_newton(n, wrapping_umul(x, two_minus), i + 1);
+}
+
+// x * 2^count mod n, by repeated doubling (x < n).
+UInt(2048) bd_double(UInt(2048) x, UInt(2048) n, Int count) {
+    if (count <= 0) { return x; }
+    UInt(2112) d = (UInt(2112)) x << 1;
+    UInt(2112) nw = (UInt(2112)) n;
+    return bd_double((UInt(2048)) (if (d >= nw) { d - nw } else { d }), n, count - 1);
+}
+
+// Montgomery product a b R^-1 mod n, for a, b < n < 2^1024.
+UInt(2048) bd_mm(UInt(2048) a, UInt(2048) b, UInt(2048) n, UInt(2048) ninv) {
+    UInt(4160) t = (UInt(4160)) a * (UInt(4160)) b;
+    UInt(2048) m = wrapping_umul((UInt(2048)) (t & (((UInt(4160)) 1 << 2048) - 1)), ninv);
+    UInt(4160) u = (t + (UInt(4160)) m * (UInt(4160)) n) >> 2048;
+    UInt(4160) nw = (UInt(4160)) n;
+    return (UInt(2048)) (if (u >= nw) { u - nw } else { u });
+}
+
+UInt(2048) bd_exp(UInt(2048) bm, List(UInt(64)) exp, Int i, UInt(2048) n, UInt(2048) ninv, UInt(2048) acc) {
+    if (i < 0) { return acc; }
+    UInt(2048) sq = bd_mm(acc, acc, n, ninv);
+    UInt(2048) nx = if (bn_bit(exp, i) == 1) { bd_mm(sq, bm, n, ninv) } else { sq };
+    return bd_exp(bm, exp, i - 1, n, ninv, nx);
+}
+
+// base^exp mod m for an odd m of at most 1024 bits; base < m.
+List(UInt(64)) bd_exp_native(List(UInt(64)) base, List(UInt(64)) exp, List(UInt(64)) m) {
+    UInt(2048) n = bd_of(m, m.len() - 1, 0);
+    UInt(2048) ninv = bd_ninv(n);
+    UInt(2048) r1 = bd_double(1, n, 2048);
+    UInt(2048) r2 = bd_double(r1, n, 2048);
+    UInt(2048) bm = bd_mm(bd_of(base, base.len() - 1, 0), r2, n, ninv);
+    UInt(2048) acc = bd_exp(bm, exp, bn_bit_len(exp) - 1, n, ninv, r1);
+    return bd_to(bd_mm(acc, 1, n, ninv), m.len(), 0, ListBuf());
+}
 
 // Halves x mod m for odd m (x < m): x/2 if even, (x + m)/2 otherwise.
 UInt(4224) bw_half(UInt(4224) x, UInt(4224) m) {
