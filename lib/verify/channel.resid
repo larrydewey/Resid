@@ -36,9 +36,9 @@ pub Result(ChannelSealed, VerifyError) seal_to_channel(Appraised(T) e, ChannelEx
 }
 
 @requires(declassify)
-List(Int) ch_plain(List(Secret(UInt(8))) v, Int i, ListBuf(Int) acc) {
+List(UInt(8)) ch_plain(List(Secret(UInt(8))) v, Int i, ListBuf(UInt(8)) acc) {
     if (i >= v.len()) { return acc.finish(); }
-    return ch_plain(v, i + 1, acc.push(ct_public((Int) declassify(v[i], "a release written on the attested connection (TLS encrypts it to that peer)"))));
+    return ch_plain(v, i + 1, acc.push(ct_public(declassify(v[i], "a release written on the attested connection (TLS encrypts it to that peer)"))));
 }
 
 /// Write a sealed value on a server connection: refused unless it is the

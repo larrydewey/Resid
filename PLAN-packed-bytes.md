@@ -69,7 +69,36 @@ Bulk builtins:
   lists, which is correct and only forgoes the optimization. A byte
   version comes later if a profile asks for it.
 
-### Phase 3: library migration (the API change)
+### Phase 3: library migration
+
+**Revised 2026-11-07 (with the user): generic, no flag day.** The measured
+scope of a hard flip was about 1,200 public signatures (`hex_encode` alone
+has 465 call sites). Byte functions instead become generic over the
+`Byte(B)` behavior (`lib/word.resid`: instances `Int` and `UInt(8)`), so
+`List(Int)` callers keep compiling and `List(UInt(8))` callers get packed
+storage; the hot paths move to `UInt(8)` inside. Packed public word
+instances need their own word type (`Word(UInt(32), UInt(8))`): an
+instance sharing `W` with `Word(Int, Int)` makes every W-only verb call
+ambiguous. Generic copies now keep their `@needs` (substituted), so a
+verb inside a copy resolves through them (`compiler/mono.resid`).
+
+Done so far:
+
+- `lib/wire.resid`: `Wire` and `Session` carry `List(UInt(8))`
+  (plumbing behaviors; their only users were in this repository).
+  `lib/tlswire.resid` and `lib/tlsclient.resid` convert at that boundary;
+  their record layers are still `List(Int)`.
+- `lib/httpserv.resid`: the loop's buffers, framing and parser are packed;
+  `HttpRequest.body`, `HttpReply.body` and `HttpStep.out` stay `List(Int)`
+  and are converted once. `http_text` is generic.
+- `resid_tcp_recv_some_u8`; the send builtins take either type.
+
+Measured (one worker, 16 keep-alive clients): 64 KB replies 3.0-3.6k to
+11.7-12.3k requests/s, server memory 64-72 MB to 26 MB; 1 KB replies +8%.
+
+The original phase text follows, as the list of what remains.
+
+### Phase 3 (original text): library migration (the API change)
 
 1. Byte functions take and return `List(UInt(8))`, starting with the
    modules where bytes are the payload:

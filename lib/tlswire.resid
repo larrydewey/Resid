@@ -24,6 +24,7 @@ import "httpserv.resid";
 import "tls.resid";
 import "tlsserver.resid";
 import "tlskey.resid";
+import "word.resid";
 
 /// A TLS connection: the socket, the keys and record counters the
 /// handshake left behind, and the record bytes read past its Finished.
@@ -53,12 +54,12 @@ pub TlsCfg tls_cfg(ServerKey key, List(List(Int)) chain, List(Str) alpn) {
 // arrived without being asked for. A record that fails its tag ends the
 // connection -- it is not a request, and it is not an empty one either.
 @requires(network(readonly), declassify)
-WireIn(TlsConn) tls_fill(TlsConn c, List(Int) have, Int want, Int cap) {
+WireIn(TlsConn) tls_fill(TlsConn c, List(UInt(8)) have, Int want, Int cap) {
     return tls_fill_at(c, have, want, cap, 8);
 }
 
 @requires(network(readonly), declassify)
-WireIn(TlsConn) tls_fill_at(TlsConn c, List(Int) have, Int want, Int cap, Int rounds) {
+WireIn(TlsConn) tls_fill_at(TlsConn c, List(UInt(8)) have, Int want, Int cap, Int rounds) {
     Int n = have.len();
     if (n >= want || c.eof || rounds <= 0 || n > cap) {
         return WireIn { .conn = c, .data = have, .eof = c.eof };
@@ -73,7 +74,7 @@ WireIn(TlsConn) tls_fill_at(TlsConn c, List(Int) have, Int want, Int cap, Int ro
 }
 
 @requires(network(readonly), declassify)
-WireIn(TlsConn) tls_fill_rec(TlsConn c, TsRec r, List(Int) have, Int want, Int cap, Int rounds) {
+WireIn(TlsConn) tls_fill_rec(TlsConn c, TsRec r, List(UInt(8)) have, Int want, Int cap, Int rounds) {
     TlsKeys k2 = tls_keys_rseq(c.keys, c.keys.rseq + 1);
     if (r.ctype != 23) {
         TlsConn next = TlsConn { .fd = c.fd, .keys = c.keys, .eof = c.eof, .buf = r.in.buf };
@@ -89,7 +90,7 @@ WireIn(TlsConn) tls_fill_rec(TlsConn c, TsRec r, List(Int) have, Int want, Int c
     Int clen = pt.len() - 1;
     List(Int) content = pt[0..clen];
     if (inner == 23) {
-        List(Int) both = have.concat(content);
+        List(UInt(8)) both = have.concat(bytes_u8(content));
         return WireIn { .conn = stepped, .data = both, .eof = false };
     }
     if (inner == 21) {
@@ -105,19 +106,19 @@ WireIn(TlsConn) tls_fill_rec(TlsConn c, TsRec r, List(Int) have, Int want, Int c
 // its own sequence number (RFC 8446 §5.1): a reply larger than a record
 // is ordinary -- a static file is -- so this splits rather than refusing.
 @requires(network(readonly), declassify)
-WireOut(TlsConn) tls_send(TlsConn c, List(Int) b) {
+WireOut(TlsConn) tls_send(TlsConn c, List(UInt(8)) b) {
     return tls_send_at(c, b, 0, true);
 }
 
 @requires(network(readonly), declassify)
-WireOut(TlsConn) tls_send_at(TlsConn c, List(Int) b, Int at, Bool ok) {
+WireOut(TlsConn) tls_send_at(TlsConn c, List(UInt(8)) b, Int at, Bool ok) {
     Int n = b.len();
     if (at >= n) {
         return WireOut { .conn = c, .ok = ok };
     }
     Int left = n - at;
     Int take = if (left > 16384) { 16384 } else { left };
-    List(Int) chunk = b[at..(at + take)];
+    List(Int) chunk = bytes_int(b[at..(at + take)]);
     List(Int) rec = tls_keys_protect(c.keys, chunk, 23);
     Bool wrote = resid_tcp_send_bin(c.fd, rec);
     TlsKeys k2 = tls_keys_wseq(c.keys, c.keys.wseq + 1);
@@ -190,7 +191,7 @@ TlsSess tls_sess_with(TlsSess s, Int phase, List(Int) raw, Int seen) {
 }
 
 SessIn(TlsSess) tls_sess_end(TlsSess s, List(Int) out) {
-    return SessIn { .sess = tls_sess_with(s, 3, [], 0), .plain = [], .out = out, .status = 2 };
+    return SessIn { .sess = tls_sess_with(s, 3, [], 0), .plain = [], .out = bytes_u8(out), .status = 2 };
 }
 
 // A handshake that reads more than this, or this many records, without
@@ -199,9 +200,9 @@ Int tls_hs_max_bytes() { return 65536; }
 Int tls_hs_max_records() { return 16; }
 
 @requires(network(readonly), declassify)
-SessIn(TlsSess) tls_sess_input(TlsCfg conf, TlsSess s, List(Int) raw) {
+SessIn(TlsSess) tls_sess_input(TlsCfg conf, TlsSess s, List(UInt(8)) raw) {
     if (s.phase == 3) { return tls_sess_end(s, []); }
-    return tls_sess_step(conf, tls_sess_with(s, s.phase, s.raw.concat(raw), s.seen), [], []);
+    return tls_sess_step(conf, tls_sess_with(s, s.phase, s.raw.concat(bytes_int(raw)), s.seen), [], []);
 }
 
 // Advance as far as the bytes in hand allow, collecting what to send.
@@ -210,7 +211,7 @@ SessIn(TlsSess) tls_sess_step(TlsCfg conf, TlsSess s, List(Int) plain, List(Int)
     if (s.phase == 2) {
         TlsOpened o = tls_open_ready(s.keys, s.raw, 0, plain);
         TlsSess next = TlsSess { .phase = if (o.status == 0) { 2 } else { 3 }, .raw = o.raw, .seen = 0, .pend = s.pend, .keys = o.keys };
-        return SessIn { .sess = next, .plain = o.plain, .out = out, .status = o.status };
+        return SessIn { .sess = next, .plain = bytes_u8(o.plain), .out = bytes_u8(out), .status = o.status };
     }
     Int count = tls_records_in(s.raw, 0, 0);
     if (s.raw.len() > tls_hs_max_bytes() || count > tls_hs_max_records()) {
@@ -218,7 +219,7 @@ SessIn(TlsSess) tls_sess_step(TlsCfg conf, TlsSess s, List(Int) plain, List(Int)
         return tls_sess_end(s, out.concat(refuse));
     }
     if (count <= s.seen) {
-        return SessIn { .sess = s, .plain = plain, .out = out, .status = 0 };
+        return SessIn { .sess = s, .plain = bytes_u8(plain), .out = bytes_u8(out), .status = 0 };
     }
     // fd -1 is no socket: a read past what is buffered is an end of input,
     // which here means "not yet", never a refusal.
@@ -226,7 +227,7 @@ SessIn(TlsSess) tls_sess_step(TlsCfg conf, TlsSess s, List(Int) plain, List(Int)
     if (s.phase == 0) {
         TsPlain hello = ts_read_plain(in, [], 1, 8);
         if (!hello.ok && hello.alert < 0 && hello.in.eof) {
-            return SessIn { .sess = tls_sess_with(s, 0, s.raw, count), .plain = plain, .out = out, .status = 0 };
+            return SessIn { .sess = tls_sess_with(s, 0, s.raw, count), .plain = bytes_u8(plain), .out = bytes_u8(out), .status = 0 };
         }
         if (!hello.ok) {
             List(Int) refuse = if (hello.alert >= 0) { [] } else { ts_plain_alert_record(ts_alert_internal_error()) };
@@ -239,7 +240,7 @@ SessIn(TlsSess) tls_sess_step(TlsCfg conf, TlsSess s, List(Int) plain, List(Int)
     }
     TsProt done = ts_read_prot(in, s.pend.c_key, s.pend.c_iv, 0, [], 8);
     if (!done.ok && done.alert < 0 && done.in.eof) {
-        return SessIn { .sess = tls_sess_with(s, 1, s.raw, count), .plain = plain, .out = out, .status = 0 };
+        return SessIn { .sess = tls_sess_with(s, 1, s.raw, count), .plain = bytes_u8(plain), .out = bytes_u8(out), .status = 0 };
     }
     TsDone d = if (done.ok) { ts_server_finish(s.pend, done.msg, done.in.buf) } else { ts_finish_failed(s.pend, done) };
     if (d.err != 0) { return tls_sess_end(s, out.concat(d.out)); }
@@ -295,19 +296,19 @@ TlsSealed tls_seal_all(TlsKeys k, List(Int) b, Int at, List(Int) acc) {
 }
 
 @requires(declassify)
-SessOut(TlsSess) tls_sess_output(TlsSess s, List(Int) plain) {
+SessOut(TlsSess) tls_sess_output(TlsSess s, List(UInt(8)) plain) {
     if (s.phase != 2) { return SessOut { .sess = s, .out = [] }; }
-    TlsSealed sealed = tls_seal_all(s.keys, plain, 0, []);
+    TlsSealed sealed = tls_seal_all(s.keys, bytes_int(plain), 0, []);
     TlsSess next = TlsSess { .phase = 2, .raw = s.raw, .seen = 0, .pend = s.pend, .keys = sealed.keys };
-    return SessOut { .sess = next, .out = sealed.bytes };
+    return SessOut { .sess = next, .out = bytes_u8(sealed.bytes) };
 }
 
 // A close_notify, so the client reads a clean end rather than a
 // truncated reply.
 @requires(declassify)
-List(Int) tls_sess_goodbye(TlsSess s) {
+List(UInt(8)) tls_sess_goodbye(TlsSess s) {
     if (s.phase != 2) { return []; }
-    return tls_keys_protect(s.keys, [1, 0], 21);
+    return bytes_u8(tls_keys_protect(s.keys, [1, 0], 21));
 }
 
 Session(TlsSess, TlsCfg) = { .sess_open = tls_sess_open, .sess_input = tls_sess_input, .sess_output = tls_sess_output, .sess_goodbye = tls_sess_goodbye };

@@ -76,7 +76,7 @@ Result(ChannelSealed, VerifyError) release(List(UInt(8)) evidence, ChallengeReco
 
 // Read until n bytes arrived.
 @requires(network(readonly), declassify)
-WireIn(TlsConn) read_n(TlsConn c, List(Int) have, Int n) {
+WireIn(TlsConn) read_n(TlsConn c, List(UInt(8)) have, Int n) {
     if (have.len() >= n) { return WireIn {.conn = c, .data = have, .eof = false}; }
     WireIn(TlsConn) r = wire_fill(c, have, n, n);
     if (r.eof || r.data.len() == have.len()) { return r; }
@@ -84,7 +84,7 @@ WireIn(TlsConn) read_n(TlsConn c, List(Int) have, Int n) {
 }
 
 @requires(network(readonly), declassify)
-WireIn(TlsClient) read_c(TlsClient c, List(Int) have, Int n) {
+WireIn(TlsClient) read_c(TlsClient c, List(UInt(8)) have, Int n) {
     if (have.len() >= n) { return WireIn {.conn = c, .data = have, .eof = false}; }
     WireIn(TlsClient) r = wire_fill(c, have, n, n);
     if (r.eof || r.data.len() == have.len()) { return r; }
@@ -100,7 +100,7 @@ Str broker(Int lfd, TlsCfg cfg, ChallengeRecord c, List(Secret(UInt(8))) key, Bo
     if (!a.ok) { return "server handshake failed"; }
     WireIn(TlsConn) r = read_n(a.conn, [], 1184);
     ChannelExporter x = if (wrong) { other } else { tlsserver_exporter(r.conn) };
-    Str out = match (release(snp_env(chal_bytes(r.data[0..1184])), c, x, key)) {
+    Str out = match (release(snp_env(r.data[0..1184]), c, x, key)) {
         Ok(s) => match (tlsserver_send_bound(r.conn, s)) { Ok(cn) => "sent", Err(e) => "send: " + verify_error_text(e) },
         Err(e) => "release: " + verify_error_text(e),
     };
@@ -115,10 +115,10 @@ Str attester(Int port, TrustStore store, List(UInt(8)) value) {
     TlsDial d = tls_client_connect("localhost", port, tls_client_cfg("localhost", store, ["http/1.1"]));
     if (d.err != "") { return "dial: " + d.err; }
     List(UInt(8)) bound = match (challenge_with_channel(value, tlsclient_exporter(d.conn))) { Ok(b) => b, Err(e) => [] };
-    WireOut(TlsClient) o = wire_send(d.conn, chal_ints(report_for(bound)));
+    WireOut(TlsClient) o = wire_send(d.conn, bytes_u8(chal_ints(report_for(bound))));
     WireIn(TlsClient) r = read_c(o.conn, [], 32);
     _ = wire_close(r.conn);
-    return hex_encode(r.data);
+    return hex_encode(bytes_int(r.data));
 }
 
 @requires(filesystem(readonly), network, clock(readonly), declassify, provision)

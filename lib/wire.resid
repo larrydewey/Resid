@@ -19,6 +19,9 @@
 // rather than storing it somewhere both can see. A TLS connection advances
 // a record counter on every read and every write, and there is no interior
 // mutability to put it in.
+//
+// Bytes on a connection are packed, List(UInt(8)) (one byte per element):
+// a request or reply crosses the loop without being widened to words.
 
 import "crypto.resid";
 
@@ -26,7 +29,7 @@ import "crypto.resid";
 /// transport. The transport is advanced past whatever it consumed; on TLS
 /// that is records, answered with decrypted application data. `eof` is set
 /// when the peer is done.
-type WireIn(T) = { T conn; List(Int) data; Bool eof; };
+type WireIn(T) = { T conn; List(UInt(8)) data; Bool eof; };
 
 /// What a send produced: the transport with its write side advanced, and
 /// whether every byte went out.
@@ -38,9 +41,9 @@ type WireOut(T) = { T conn; Bool ok; };
 behavior Wire(T) {
     // Add plaintext until `have` holds at least `want` bytes, the peer
     // is done, or the total would pass `cap`.
-    WireIn(T) wire_fill(T w, List(Int) have, Int want, Int cap);
+    WireIn(T) wire_fill(T w, List(UInt(8)) have, Int want, Int cap);
     // Write every byte of `b`, in whatever pieces the transport needs.
-    WireOut(T) wire_send(T w, List(Int) b);
+    WireOut(T) wire_send(T w, List(UInt(8)) b);
     // End the connection, leaving nothing unsent.
     Bool wire_close(T w);
     // Make every read end `ms` from now (0 clears); see resid_tcp_deadline.
@@ -70,9 +73,9 @@ behavior Accept(T, C) {
 /// they complete, and bytes to send. `status` is 0 to go on (including
 /// "not enough yet"), 1 when the peer ended cleanly, 2 when it must end
 /// now; `out` is sent either way -- a handshake flight, or an alert.
-type SessIn(S) = { S sess; List(Int) plain; List(Int) out; Int status; };
+type SessIn(S) = { S sess; List(UInt(8)) plain; List(UInt(8)) out; Int status; };
 /// What a session made of plaintext to send: its new state and the bytes.
-type SessOut(S) = { S sess; List(Int) out; };
+type SessOut(S) = { S sess; List(UInt(8)) out; };
 
 /// A transport as a non-blocking state machine over bytes, with state `S`
 /// and configuration `C`, for a server's event loop.
@@ -80,11 +83,11 @@ behavior Session(S, C) {
     // The state of a freshly accepted connection.
     S sess_open(C conf);
     // Bytes that arrived; the plaintext they complete.
-    SessIn(S) sess_input(C conf, S s, List(Int) raw);
+    SessIn(S) sess_input(C conf, S s, List(UInt(8)) raw);
     // Plaintext to send; the bytes that carry it.
-    SessOut(S) sess_output(S s, List(Int) plain);
+    SessOut(S) sess_output(S s, List(UInt(8)) plain);
     // What to send before closing: nothing, or a close_notify.
-    List(Int) sess_goodbye(S s);
+    List(UInt(8)) sess_goodbye(S s);
 }
 
 // ─── Plain: a socket ───────────────────────────────────────────────────
@@ -103,7 +106,7 @@ pub PlainCfg plain_cfg() {
 }
 
 @requires(network(readonly))
-WireIn(Int) plain_fill(Int fd, List(Int) have, Int want, Int cap) {
+WireIn(Int) plain_fill(Int fd, List(UInt(8)) have, Int want, Int cap) {
     Int room = if (cap > have.len()) { cap - have.len() } else { 0 };
     Int ask = if (room > 16384) { 16384 } else { room };
     if (ask <= 0) {
@@ -114,15 +117,15 @@ WireIn(Int) plain_fill(Int fd, List(Int) have, Int want, Int cap) {
     // *exactly* n bytes and zero-pads the rest, which is right when the
     // length is already known and wrong here, where the bytes arriving are
     // whatever the peer chose to send.
-    List(Int) more = resid_tcp_recv_some(fd, ask);
-    List(Int) both = have.concat(more);
+    List(UInt(8)) more = resid_tcp_recv_some_u8(fd, ask);
+    List(UInt(8)) both = have.concat(more);
     Bool done = more.len() == 0;
     WireIn(Int) out = WireIn { .conn = fd, .data = both, .eof = done };
     return out;
 }
 
 @requires(network(readonly))
-WireOut(Int) plain_send(Int fd, List(Int) b) {
+WireOut(Int) plain_send(Int fd, List(UInt(8)) b) {
     Bool ok = plain_send_at(fd, b, 0);
     WireOut(Int) out = WireOut { .conn = fd, .ok = ok };
     return out;
@@ -131,7 +134,7 @@ WireOut(Int) plain_send(Int fd, List(Int) b) {
 // Write in pieces the runtime accepts (1 MiB), so a large artifact is not
 // one call the socket will refuse.
 @requires(network(readonly))
-Bool plain_send_at(Int fd, List(Int) b, Int at) {
+Bool plain_send_at(Int fd, List(UInt(8)) b, Int at) {
     Int n = b.len() - at;
     if (n <= 0) { return true; }
     Int take = if (n > 1048576) { 1048576 } else { n };
@@ -154,7 +157,7 @@ Bool plain_close(Int fd) {
 @requires(network(readonly))
 Int plain_drain(Int fd, Int rounds) {
     if (rounds <= 0) { return 0; }
-    List(Int) got = resid_tcp_recv_some(fd, 16384);
+    List(UInt(8)) got = resid_tcp_recv_some_u8(fd, 16384);
     if (got.len() == 0) { return 0; }
     Int nr = rounds - 1;
     return plain_drain(fd, nr);
@@ -176,15 +179,15 @@ type PlainSess = { Bool none; };
 PlainSess plain_sess_open(PlainCfg conf) { return PlainSess { .none = true }; }
 
 @requires(network(readonly))
-SessIn(PlainSess) plain_sess_input(PlainCfg conf, PlainSess s, List(Int) raw) {
+SessIn(PlainSess) plain_sess_input(PlainCfg conf, PlainSess s, List(UInt(8)) raw) {
     return SessIn { .sess = s, .plain = raw, .out = [], .status = 0 };
 }
 
-SessOut(PlainSess) plain_sess_output(PlainSess s, List(Int) plain) {
+SessOut(PlainSess) plain_sess_output(PlainSess s, List(UInt(8)) plain) {
     return SessOut { .sess = s, .out = plain };
 }
 
-List(Int) plain_sess_goodbye(PlainSess s) { return []; }
+List(UInt(8)) plain_sess_goodbye(PlainSess s) { return []; }
 
 Session(PlainSess, PlainCfg) = { .sess_open = plain_sess_open, .sess_input = plain_sess_input, .sess_output = plain_sess_output, .sess_goodbye = plain_sess_goodbye };
 

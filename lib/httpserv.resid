@@ -31,6 +31,7 @@
 // for the next, which is how server-sent events are served.
 
 import "wire.resid";
+import "word.resid";
 
 /// A parsed request, as a handler receives it.
 /// `headers` keys are lower-cased; repeated fields are joined with ", ".
@@ -86,27 +87,40 @@ pub Int http_bound_port(Int lfd) { return resid_tcp_bound_port(lfd); }
 // ─── Bytes and text ─────────────────────────────────────────────────────
 
 /// The UTF-8 bytes of `s`.
-pub List(Int) http_bytes(Str s) { return hs_enc_at(s, 0, str_len(s), ListBuf()); }
+pub List(Int) http_bytes(Str s) {
+    ListBuf(Int) b = ListBuf();
+    return hs_enc_at(s, 0, str_len(s), b);
+}
 
-List(Int) hs_enc_at(Str s, Int i, Int n, ListBuf(Int) acc) {
+// The same as packed bytes, for the loop's buffers.
+List(UInt(8)) hs_bytes8(Str s) {
+    ListBuf(UInt(8)) b = ListBuf();
+    return hs_enc_at(s, 0, str_len(s), b);
+}
+
+@needs(Byte(B))
+List(B) hs_enc_at(Str s, Int i, Int n, ListBuf(B) acc) {
     if (i >= n) { return acc.finish(); }
     return hs_enc_at(s, i + 1, n, hs_enc_cp(acc, str_char_at(s, i)));
 }
 
-ListBuf(Int) hs_enc_cp(ListBuf(Int) b, Int c) {
-    if (c < 128) { return b.push(c); }
-    if (c < 2048) { return b.push(192 | (c >> 6)).push(128 | (c & 63)); }
-    if (c < 65536) { return b.push(224 | (c >> 12)).push(128 | ((c >> 6) & 63)).push(128 | (c & 63)); }
-    return b.push(240 | (c >> 18)).push(128 | ((c >> 12) & 63)).push(128 | ((c >> 6) & 63)).push(128 | (c & 63));
+@needs(Byte(B))
+ListBuf(B) hs_enc_cp(ListBuf(B) b, Int c) {
+    if (c < 128) { return b.push(byte_of(c)); }
+    if (c < 2048) { return b.push(byte_of(192 | (c >> 6))).push(byte_of(128 | (c & 63))); }
+    if (c < 65536) { return b.push(byte_of(224 | (c >> 12))).push(byte_of(128 | ((c >> 6) & 63))).push(byte_of(128 | (c & 63))); }
+    return b.push(byte_of(240 | (c >> 18))).push(byte_of(128 | ((c >> 12) & 63))).push(byte_of(128 | ((c >> 6) & 63))).push(byte_of(128 | (c & 63)));
 }
 
 /// Bytes [`i`, `e`) of `b` decoded as UTF-8.
 /// Each malformed or truncated sequence's lead byte decodes to U+FFFD.
-pub Str http_text(List(Int) b, Int i, Int e) { return hs_dec_at(b, i, e, StrBuf()); }
+@needs(Byte(B))
+pub Str http_text(List(B) b, Int i, Int e) { return hs_dec_at(b, i, e, StrBuf()); }
 
-Str hs_dec_at(List(Int) b, Int i, Int e, StrBuf acc) {
+@needs(Byte(B))
+Str hs_dec_at(List(B) b, Int i, Int e, StrBuf acc) {
     if (i >= e) { return acc.finish(); }
-    Int c = b[i];
+    Int c = byte_int(b[i]);
     if (c < 128) { return hs_dec_at(b, i + 1, e, acc.push_char(c)); }
     Int k = if (c >= 240 && c < 248) { 3 } else { if (c >= 224 && c < 240) { 2 } else { if (c >= 194 && c < 224) { 1 } else { -1 } } };
     if (k < 0 || i + k >= e) { return hs_dec_at(b, i + 1, e, acc.push_char(65533)); }
@@ -119,22 +133,23 @@ Str hs_dec_at(List(Int) b, Int i, Int e, StrBuf acc) {
     return hs_dec_at(b, i + 1 + k, e, acc.push_char(cp));
 }
 
-Int hs_dec_cont(List(Int) b, Int i, Int k, Int acc) {
+@needs(Byte(B))
+Int hs_dec_cont(List(B) b, Int i, Int k, Int acc) {
     if (k == 0) { return acc; }
-    Int c = b[i];
+    Int c = byte_int(b[i]);
     if ((c & 192) != 128) { return -1; }
     return hs_dec_cont(b, i + 1, k - 1, acc * 64 + (c & 63));
 }
 
 // Bytes [i, e) as text, one Str char per byte (header fields are ASCII;
 // anything else arrives as U+0080..U+00FF and is never confused with it).
-Str hs_ascii(List(Int) b, Int i, Int e, StrBuf acc) {
+Str hs_ascii(List(UInt(8)) b, Int i, Int e, StrBuf acc) {
     if (i >= e) { return acc.finish(); }
-    return hs_ascii(b, i + 1, e, acc.push_char(b[i]));
+    return hs_ascii(b, i + 1, e, acc.push_char((Int) b[i]));
 }
 
 // First index at or after `from` where `pat` occurs in `b`, or -1.
-Int hs_find(List(Int) b, List(Int) pat, Int from) {
+Int hs_find(List(UInt(8)) b, List(UInt(8)) pat, Int from) {
     Int n = b.len();
     Int m = pat.len();
     if (from + m > n) { return -1; }
@@ -142,7 +157,7 @@ Int hs_find(List(Int) b, List(Int) pat, Int from) {
     return hs_find(b, pat, from + 1);
 }
 
-Bool hs_match_at(List(Int) b, List(Int) pat, Int at, Int j, Int m) {
+Bool hs_match_at(List(UInt(8)) b, List(UInt(8)) pat, Int at, Int j, Int m) {
     if (j >= m) { return true; }
     if (b[at + j] != pat[j]) { return false; }
     return hs_match_at(b, pat, at, j + 1, m);
@@ -156,7 +171,7 @@ Bool hs_match_at(List(Int) b, List(Int) pat, Int at, Int j, Int m) {
 /// are lost. `eof` is set once the peer closed, the receive timed out, or
 /// the transport could not make sense of what came next -- a record that
 /// fails its tag ends the connection rather than becoming request bytes.
-type HsBuf(T) = { T conn; List(Int) data; Bool eof; };
+type HsBuf(T) = { T conn; List(UInt(8)) data; Bool eof; };
 
 // Read until `b` holds at least `want` bytes, the peer is done, or the
 // total would pass `cap`. One read is not one read's worth of a request,
@@ -274,9 +289,9 @@ Bool hs_all_digits(Str s, Int i) {
 
 // No byte in [i, e) is a control other than HT, LF and CR, or DEL, and
 // LF and CR appear only as a CRLF pair.
-Bool hs_ctl_free(List(Int) b, Int i, Int e) {
+Bool hs_ctl_free(List(UInt(8)) b, Int i, Int e) {
     if (i >= e) { return true; }
-    Int c = b[i];
+    Int c = (Int) b[i];
     if ((c < 32 && c != 9 && c != 10 && c != 13) || c == 127) { return false; }
     if (c == 10) {
         if (i == 0) { return false; }
@@ -292,7 +307,7 @@ Bool hs_ctl_free(List(Int) b, Int i, Int e) {
 // Parse the head (bytes [0, end) of `b`). The body is not read here.
 // A control byte is refused before the head becomes text, where a NUL
 // would end it early.
-HttpRequest hs_parse_head(List(Int) b, Int end) {
+HttpRequest hs_parse_head(List(UInt(8)) b, Int end) {
     if (!hs_ctl_free(b, 0, end)) { return hs_reject(400); }
     Str head = hs_ascii(b, 0, end, StrBuf());
     List(Str) lines = str_split(head, "\r\n");
@@ -377,7 +392,7 @@ HsReq(T) hs_read_body(HttpRequest r, HsBuf(T) b, HttpLimits lim) {
     if (kind > lim.body_max) { return hs_fail(413, b); }
     HsBuf(T) full = hs_fill(b, kind, lim.body_max + 16384);
     if (full.data.len() < kind) { return hs_fail(400, full); }
-    HttpRequest r2 = HttpRequest { .method = r.method, .target = r.target, .path = r.path, .query = r.query, .version = r.version, .headers = r.headers, .body = full.data[0..kind], .keep_alive = r.keep_alive, .ok = true, .status = 0 };
+    HttpRequest r2 = HttpRequest { .method = r.method, .target = r.target, .path = r.path, .query = r.query, .version = r.version, .headers = r.headers, .body = bytes_int(full.data[0..kind]), .keep_alive = r.keep_alive, .ok = true, .status = 0 };
     HsBuf(T) left = HsBuf { .conn = full.conn, .data = full.data[kind..], .eof = full.eof };
     HsReq(T) out = HsReq { .req = r2, .rest = left };
     return out;
@@ -391,7 +406,7 @@ Int hs_chunks_max() { return 4096; }
 // read by index, not sliced per chunk. `total` bytes in `count` chunks so far.
 @requires(network(readonly))
 @needs(Wire(T))
-HsReq(T) hs_read_chunked(HttpRequest r, HsBuf(T) b0, Int at, HttpLimits lim, List(Int) acc, Int total, Int count) {
+HsReq(T) hs_read_chunked(HttpRequest r, HsBuf(T) b0, Int at, HttpLimits lim, List(UInt(8)) acc, Int total, Int count) {
     HsHead(T) ln = hs_read_line_at(b0, at, at, 1024);
     if (ln.end < 0) { return hs_fail(400, ln.buf); }
     HsBuf(T) b = ln.buf;
@@ -421,7 +436,7 @@ HsReq(T) hs_read_chunked(HttpRequest r, HsBuf(T) b0, Int at, HttpLimits lim, Lis
 // lines the request is refused, as in the event loop's framer.
 @requires(network(readonly))
 @needs(Wire(T))
-HsReq(T) hs_chunk_trailers(HttpRequest r, HsBuf(T) b0, List(Int) acc, Int lines) {
+HsReq(T) hs_chunk_trailers(HttpRequest r, HsBuf(T) b0, List(UInt(8)) acc, Int lines) {
     HsHead(T) ln = hs_read_line(b0, 8192);
     if (ln.end < 0) { return hs_fail(400, ln.buf); }
     HsBuf(T) lb = ln.buf;
@@ -431,7 +446,7 @@ HsReq(T) hs_chunk_trailers(HttpRequest r, HsBuf(T) b0, List(Int) acc, Int lines)
         if (lines >= 64) { return hs_fail(400, rest); }
         return hs_chunk_trailers(r, rest, acc, lines + 1);
     }
-    HttpRequest r2 = HttpRequest { .method = r.method, .target = r.target, .path = r.path, .query = r.query, .version = r.version, .headers = r.headers, .body = acc, .keep_alive = r.keep_alive, .ok = true, .status = 0 };
+    HttpRequest r2 = HttpRequest { .method = r.method, .target = r.target, .path = r.path, .query = r.query, .version = r.version, .headers = r.headers, .body = bytes_int(acc), .keep_alive = r.keep_alive, .ok = true, .status = 0 };
     HsReq(T) out = HsReq { .req = r2, .rest = rest };
     return out;
 }
@@ -575,14 +590,17 @@ Str hs_header_lines(List(Str) hs, Int i, StrBuf acc) {
 /// The HTTP/1.1 wire bytes of `reply`, with Content-Length and Connection.
 /// `keep_alive` picks the Connection value. A HEAD reply (`head_only`) and
 /// a 1xx, 204 or 304 carry no body; Content-Length still names its length.
-pub List(Int) http_reply_wire(HttpReply reply, Bool keep_alive, Bool head_only) {
+pub List(Int) http_reply_wire(HttpReply reply, Bool keep_alive, Bool head_only) { return bytes_int(hs_wire(reply, keep_alive, head_only)); }
+
+// http_reply_wire as packed bytes: the body is narrowed once, here.
+List(UInt(8)) hs_wire(HttpReply reply, Bool keep_alive, Bool head_only) {
     Int n = reply.body.len();
     Str conn = if (keep_alive) { "keep-alive" } else { "close" };
     Str head = f"HTTP/1.1 {reply.status} " + http_reason(reply.status) + "\r\n"
         + hs_header_lines(reply.headers, 0, StrBuf())
         + f"Content-Length: {n}\r\nConnection: " + conn + "\r\n\r\n";
     Bool bodyless = head_only || reply.status == 204 || reply.status == 304 || (reply.status >= 100 && reply.status < 200);
-    return if (bodyless) { http_bytes(head) } else { http_bytes(head).concat(reply.body) };
+    return if (bodyless) { hs_bytes8(head) } else { hs_bytes8(head).concat(bytes_u8(reply.body)) };
 }
 
 /// Write every byte of `b` through the connection's transport.
@@ -590,7 +608,7 @@ pub List(Int) http_reply_wire(HttpReply reply, Bool keep_alive, Bool head_only) 
 @requires(network(readonly))
 @needs(Wire(T))
 pub WireOut(T) http_send(T conn, List(Int) b) {
-    return wire_send(conn, b);
+    return wire_send(conn, bytes_u8(b));
 }
 
 // ─── Serving ────────────────────────────────────────────────────────────
@@ -623,14 +641,14 @@ Int hs_serve_at(T conn, HttpReply closure(HttpRequest) handler, HttpLimits lim, 
     HttpRequest r = rq.req;
     if (!r.ok) {
         if (r.status == 0) { return served; }
-        List(Int) body = http_reply_wire(http_reply_status(r.status), false, false);
+        List(UInt(8)) body = hs_wire(http_reply_status(r.status), false, false);
         _ = wire_deadline(rq.rest.conn, lim.reply_ms);
         _ = wire_send(rq.rest.conn, body);
         return served + 1;
     }
     HttpReply reply = handler(r);
     Bool keep = r.keep_alive && served + 1 < lim.requests_max;
-    List(Int) wire = http_reply_wire(reply, keep, r.method == "HEAD");
+    List(UInt(8)) wire = hs_wire(reply, keep, r.method == "HEAD");
     _ = wire_deadline(rq.rest.conn, lim.reply_ms);
     WireOut(T) sent = wire_send(rq.rest.conn, wire);
     if (!sent.ok || !keep) { return served + 1; }
@@ -680,7 +698,7 @@ HsFrame hs_frame_chunk(HsFrame f, Int cpos, Int cstate, Int total, Int lines) {
 }
 
 /// The framing of request bytes `b`, resumed from `f`; used by the event loop.
-pub HsFrame hs_frame(List(Int) b, HsFrame f, HttpLimits lim) {
+pub HsFrame hs_frame(List(UInt(8)) b, HsFrame f, HttpLimits lim) {
     if (f.ready) { return f; }
     Int n = b.len();
     if (f.head_end < 0) {
@@ -707,7 +725,7 @@ pub HsFrame hs_frame(List(Int) b, HsFrame f, HttpLimits lim) {
 }
 
 // The next CRLF at or after `from` and before `stop`, or -1.
-Int hs_crlf(List(Int) b, Int from, Int stop) {
+Int hs_crlf(List(UInt(8)) b, Int from, Int stop) {
     Int lim = if (stop < b.len()) { stop } else { b.len() };
     if (from + 1 >= lim) { return -1; }
     if (b[from] == 13 && b[from + 1] == 10) { return from; }
@@ -717,7 +735,7 @@ Int hs_crlf(List(Int) b, Int from, Int stop) {
 // Chunked framing, resumed where it stopped: the size lines and trailers
 // are found, the chunk data is skipped by its length, and anything the
 // parser would refuse makes the request ready so that it is refused.
-HsFrame hs_chunks(List(Int) b, HsFrame f, HttpLimits lim) {
+HsFrame hs_chunks(List(UInt(8)) b, HsFrame f, HttpLimits lim) {
     Int n = b.len();
     if (f.cstate == 1) {
         return if (n >= f.cpos) { hs_chunks(b, hs_frame_chunk(f, f.cpos, 0, f.total, f.lines), lim) } else { f };
@@ -749,10 +767,10 @@ HsFrame hs_chunks(List(Int) b, HsFrame f, HttpLimits lim) {
 /// above should make impossible.
 type HsMem = { Bool starved; };
 
-WireIn(HsMem) hs_mem_fill(HsMem m, List(Int) have, Int want, Int cap) {
+WireIn(HsMem) hs_mem_fill(HsMem m, List(UInt(8)) have, Int want, Int cap) {
     return WireIn { .conn = HsMem { .starved = true }, .data = have, .eof = true };
 }
-WireOut(HsMem) hs_mem_send(HsMem m, List(Int) b) { return WireOut { .conn = m, .ok = false }; }
+WireOut(HsMem) hs_mem_send(HsMem m, List(UInt(8)) b) { return WireOut { .conn = m, .ok = false }; }
 Bool hs_mem_close(HsMem m) { return true; }
 Bool hs_mem_deadline(HsMem m, Int ms) { return true; }
 
@@ -792,15 +810,15 @@ pub HttpStep(K) http_step_end(K state, List(Int) out) {
 }
 
 // One chunk of a chunked body; an empty one is skipped (it would end it).
-List(Int) hs_chunk(List(Int) b, Bool chunked) {
-    if (!chunked || b.len() == 0) { return b; }
-    return http_bytes(f"{b.len():hex}\r\n").concat(b).concat([13, 10]);
+List(UInt(8)) hs_chunk(List(Int) b, Bool chunked) {
+    if (!chunked || b.len() == 0) { return bytes_u8(b); }
+    return hs_bytes8(f"{b.len():hex}\r\n").concat(bytes_u8(b)).concat([13, 10]);
 }
 
-List(Int) hs_stream_head(HttpStream(K) s, Bool chunked, Bool keep) {
+List(UInt(8)) hs_stream_head(HttpStream(K) s, Bool chunked, Bool keep) {
     Str te = if (chunked) { "Transfer-Encoding: chunked\r\n" } else { "" };
     Str conn = if (keep) { "" } else { "Connection: close\r\n" };
-    return http_bytes(f"HTTP/1.1 {s.status} " + http_reason(s.status) + "\r\n" + hs_header_lines(s.headers, 0, StrBuf()) + te + conn + "\r\n");
+    return hs_bytes8(f"HTTP/1.1 {s.status} " + http_reason(s.status) + "\r\n" + hs_header_lines(s.headers, 0, StrBuf()) + te + conn + "\r\n");
 }
 
 /// A stream in progress on a connection.
@@ -812,17 +830,17 @@ type HsLive(K) = { K state; HttpStep(K) closure(K) next; Int wait_ms; Bool chunk
 /// 5 streams (`live`). `outb[out_at..]` is still to send.
 type HsConn(S, K) = {
     Int fd; Int seq; S sess;
-    List(Int) inb; HsFrame frame;
-    List(Int) outb; Int out_at;
+    List(UInt(8)) inb; HsFrame frame;
+    List(UInt(8)) outb; Int out_at;
     Int phase; Int served; Bool peer_done;
     Option(HsLive(K)) live;
 };
 
-HsConn(S, K) hs_conn_set(HsConn(S, K) c, S sess, List(Int) inb, HsFrame frame, List(Int) outb, Int out_at, Int phase, Int served, Bool peer_done) {
+HsConn(S, K) hs_conn_set(HsConn(S, K) c, S sess, List(UInt(8)) inb, HsFrame frame, List(UInt(8)) outb, Int out_at, Int phase, Int served, Bool peer_done) {
     return HsConn { .fd = c.fd, .seq = c.seq, .sess = sess, .inb = inb, .frame = frame, .outb = outb, .out_at = out_at, .phase = phase, .served = served, .peer_done = peer_done, .live = c.live };
 }
 
-HsConn(S, K) hs_conn_live(HsConn(S, K) c, S sess, List(Int) inb, List(Int) outb, Int phase, Int served, Option(HsLive(K)) live) {
+HsConn(S, K) hs_conn_live(HsConn(S, K) c, S sess, List(UInt(8)) inb, List(UInt(8)) outb, Int phase, Int served, Option(HsLive(K)) live) {
     return HsConn { .fd = c.fd, .seq = c.seq, .sess = sess, .inb = inb, .frame = hs_frame_new(), .outb = outb, .out_at = 0, .phase = phase, .served = served, .peer_done = c.peer_done, .live = live };
 }
 
@@ -845,23 +863,23 @@ HsConn(S, K) hs_ev_answer(HsConn(S, K) c, HttpOut(K) closure(HttpRequest) handle
     HttpRequest r0 = rq.req;
     HttpRequest r = if (rq.rest.conn.starved && r0.ok) { hs_reject(400) } else { r0 };
     if (!r.ok && r.status == 0) { return hs_conn_phase(c, 4); }
-    if (!r.ok) { return hs_ev_reply(c, rq.rest.data, http_reply_wire(http_reply_status(r.status), false, false), false, lim); }
+    if (!r.ok) { return hs_ev_reply(c, rq.rest.data, hs_wire(http_reply_status(r.status), false, false), false, lim); }
     HttpOut(K) out = handler(r);
     Bool keep = r.keep_alive && !c.peer_done && c.served + 1 < lim.requests_max;
     Bool head = r.method == "HEAD";
     return match out {
-        Whole(reply) => hs_ev_reply(c, rq.rest.data, http_reply_wire(reply, keep, head), keep, lim),
-        Stream(s) => if (head) { hs_ev_reply(c, rq.rest.data, http_reply_wire(HttpReply { .status = s.status, .headers = s.headers, .body = [] }, keep, true), keep, lim) } else { hs_ev_stream(c, rq.rest.data, s, keep, r.version == "HTTP/1.1", lim) }
+        Whole(reply) => hs_ev_reply(c, rq.rest.data, hs_wire(reply, keep, head), keep, lim),
+        Stream(s) => if (head) { hs_ev_reply(c, rq.rest.data, hs_wire(HttpReply { .status = s.status, .headers = s.headers, .body = [] }, keep, true), keep, lim) } else { hs_ev_stream(c, rq.rest.data, s, keep, r.version == "HTTP/1.1", lim) }
     };
 }
 
 // Queue a whole reply's bytes.
 @needs(Session(S, C))
 @requires(network(readonly))
-HsConn(S, K) hs_ev_reply(HsConn(S, K) c, List(Int) rest, List(Int) wire, Bool keep, HttpLimits lim) {
+HsConn(S, K) hs_ev_reply(HsConn(S, K) c, List(UInt(8)) rest, List(UInt(8)) wire, Bool keep, HttpLimits lim) {
     SessOut(S) so = sess_output(c.sess, wire);
-    List(Int) bye = if (keep) { [] } else { sess_goodbye(so.sess) };
-    List(Int) pending = c.outb[c.out_at..c.outb.len()];
+    List(UInt(8)) bye = if (keep) { [] } else { sess_goodbye(so.sess) };
+    List(UInt(8)) pending = c.outb[c.out_at..c.outb.len()];
     _ = resid_tcp_deadline(c.fd, lim.reply_ms);
     Int ph = if (keep) { 1 } else { 2 };
     return hs_conn_live(c, so.sess, rest, pending.concat(so.out).concat(bye), ph, c.served + 1, None);
@@ -870,7 +888,7 @@ HsConn(S, K) hs_ev_reply(HsConn(S, K) c, List(Int) rest, List(Int) wire, Bool ke
 // Start a stream: its head and first step.
 @needs(Session(S, C))
 @requires(network(readonly))
-HsConn(S, K) hs_ev_stream(HsConn(S, K) c, List(Int) rest, HttpStream(K) s, Bool keep0, Bool chunked, HttpLimits lim) {
+HsConn(S, K) hs_ev_stream(HsConn(S, K) c, List(UInt(8)) rest, HttpStream(K) s, Bool keep0, Bool chunked, HttpLimits lim) {
     Bool keep = keep0 && chunked;
     HsLive(K) lv = HsLive { .state = s.first.state, .next = s.next, .wait_ms = s.first.wait_ms, .chunked = chunked, .keep = keep };
     HsConn(S, K) counted = hs_conn_live(c, c.sess, rest, c.outb[c.out_at..c.outb.len()], 5, c.served + 1, None);
@@ -880,19 +898,19 @@ HsConn(S, K) hs_ev_stream(HsConn(S, K) c, List(Int) rest, HttpStream(K) s, Bool 
 // Queue a step's bytes; the stream ends with it when it is `done`.
 @needs(Session(S, C))
 @requires(network(readonly))
-HsConn(S, K) hs_ev_emit(HsConn(S, K) c, HsLive(K) lv, HttpStep(K) st, List(Int) lead, HttpLimits lim) {
-    List(Int) last = if (st.done && lv.chunked) { [48, 13, 10, 13, 10] } else { [] };
-    List(Int) fresh = lead.concat(hs_chunk(st.out, lv.chunked)).concat(last);
+HsConn(S, K) hs_ev_emit(HsConn(S, K) c, HsLive(K) lv, HttpStep(K) st, List(UInt(8)) lead, HttpLimits lim) {
+    List(UInt(8)) last = if (st.done && lv.chunked) { [48, 13, 10, 13, 10] } else { [] };
+    List(UInt(8)) fresh = lead.concat(hs_chunk(st.out, lv.chunked)).concat(last);
     SessOut(S) so = if (fresh.len() > 0) { sess_output(c.sess, fresh) } else { SessOut { .sess = c.sess, .out = [] } };
-    List(Int) pending = c.outb[c.out_at..c.outb.len()];
+    List(UInt(8)) pending = c.outb[c.out_at..c.outb.len()];
     if (st.done) {
-        List(Int) bye = if (lv.keep) { [] } else { sess_goodbye(so.sess) };
+        List(UInt(8)) bye = if (lv.keep) { [] } else { sess_goodbye(so.sess) };
         _ = resid_tcp_deadline(c.fd, lim.reply_ms);
         Int ph = if (lv.keep) { 1 } else { 2 };
         return hs_conn_live(c, so.sess, c.inb, pending.concat(so.out).concat(bye), ph, c.served, None);
     }
     HsLive(K) next = HsLive { .state = st.state, .next = lv.next, .wait_ms = st.wait_ms, .chunked = lv.chunked, .keep = lv.keep };
-    List(Int) outb = pending.concat(so.out);
+    List(UInt(8)) outb = pending.concat(so.out);
     Int ms = if (outb.len() > 0) { lim.reply_ms } else { st.wait_ms };
     _ = resid_tcp_deadline(c.fd, ms);
     return hs_conn_live(c, so.sess, c.inb, outb, 5, c.served, Some(next));
@@ -920,17 +938,17 @@ HsConn(S, K) hs_ev_tick_with(HsConn(S, K) c, HsLive(K) lv, HttpLimits lim) {
 @needs(Session(S, C))
 @requires(network(readonly))
 HsConn(S, K) hs_ev_read(C conf, HsConn(S, K) c, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim) {
-    List(Int) got = resid_tcp_recv_some(c.fd, 65536);
+    List(UInt(8)) got = resid_tcp_recv_some_u8(c.fd, 65536);
     if (got.len() == 0) { return hs_conn_phase(c, 4); }
     if (c.phase == 3) { return c; }
     SessIn(S) si = sess_input(conf, c.sess, got);
-    List(Int) outb = c.outb.concat(si.out);
+    List(UInt(8)) outb = c.outb.concat(si.out);
     if (si.status == 2) {
         Int ph = if (outb.len() > c.out_at && c.phase != 5) { 2 } else { 4 };
         _ = resid_tcp_deadline(c.fd, lim.reply_ms);
         return hs_conn_set(c, si.sess, [], c.frame, outb, c.out_at, ph, c.served, true);
     }
-    List(Int) inb = c.inb.concat(si.plain);
+    List(UInt(8)) inb = c.inb.concat(si.plain);
     if (inb.len() > lim.head_max + lim.body_max + 65536) { return hs_conn_phase(c, 4); }
     HsConn(S, K) fed = hs_conn_set(c, si.sess, inb, c.frame, outb, c.out_at, c.phase, c.served, c.peer_done || si.status == 1);
     return hs_ev_answer(fed, handler, lim);
