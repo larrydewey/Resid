@@ -428,7 +428,7 @@ KP gm_clone(Kg g, Int root, Int id, GU u, Str name, Str label, Str use) {
     Bool wv = sub && gm_all_digits(text);
     Str uses = if (use == "") { "" } else { " @using(" + use + ")" };
     Str kind = if (wv) { "lit" } else { n.kind };
-    Str aux = if (wv) { "int" } else if (isroot) { gm_strip_needs(n.aux) + " @inst(" + label + ")" + uses } else { n.aux };
+    Str aux = if (wv) { "int" } else if (isroot) { gm_subst_needs(n.aux, u) + " @inst(" + label + ")" + uses } else { n.aux };
     return kg_add(ks.g, kind, text, aux, ks.ids, n.sp, n.ep);
 }
 
@@ -450,13 +450,20 @@ GN gm_clone_kids(Kg g, Int root, Int id, Int i, GU u, Str name, Str label, Str u
     return gm_clone_kids(c.g, root, id, i + 1, u, name, label, use, acc.push(c.id));
 }
 
-// A copy's prefix: its type is concrete, so its @needs are dropped
-// (they were checked where it was instantiated).
-Str gm_strip_needs(Str aux) {
+// A copy's prefix: its @needs with the copy's types, so a verb whose
+// own types leave a behavior parameter open (`w_lift(0)` when two
+// instances share W) takes it from them (gm_improve's context).
+Str gm_subst_needs(Str aux, GU u) {
     Int at = str_find(aux, "@needs(");
     if (at < 0) { return aux; }
     Int e = imp_close_paren(aux, at + 7, 0);
-    return str_trim(str_slice(aux, 0, at) + str_slice(aux, e, str_len(aux)));
+    List(Str) ns = ty_args("N(" + str_slice(aux, at + 7, e - 1) + ")");
+    return str_trim(str_slice(aux, 0, at) + "@needs(" + gm_subst_list(ns, u, 0, "") + ")" + str_slice(aux, e, str_len(aux)));
+}
+
+Str gm_subst_list(List(Str) ns, GU u, Int i, Str acc) {
+    if (i >= ns.len()) { return acc; }
+    return gm_subst_list(ns, u, i + 1, (if (i == 0) { "" } else { acc + ", " }) + gm_subst(ns[i], u));
 }
 
 // ─── Dropping generic declarations ──────────────────────────────────

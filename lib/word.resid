@@ -16,6 +16,38 @@
 // operands are public. Publish(B) turns bytes that are public by design
 // (signatures, public keys) into public bytes.
 
+/// A public byte type: Int (one byte per 8-byte slot) or UInt(8) (packed,
+/// one byte per element). Byte functions are generic over it, so a
+/// List(Int) caller and a List(UInt(8)) caller use the same code.
+behavior Byte(B) {
+    Int byte_int(B b);       // the byte's value, 0..255
+    B byte_of(Int k);        // the low eight bits of k
+}
+
+Int byi_int(Int b) { return b & 255; }
+Int byi_of(Int k) { return k & 255; }
+Int byu_int(UInt(8) b) { return (Int) b; }
+UInt(8) byu_of(Int k) { return wrapping_u8(k); }
+
+Byte(Int) = { .byte_int = byi_int, .byte_of = byi_of };
+Byte(UInt(8)) = { .byte_int = byu_int, .byte_of = byu_of };
+
+/// The bytes of `bs` as packed UInt(8) bytes (each value's low eight bits).
+pub List(UInt(8)) bytes_u8(List(Int) bs) { return bytes_u8_at(bs, 0, ListBuf()); }
+
+List(UInt(8)) bytes_u8_at(List(Int) bs, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= bs.len()) { return acc.finish(); }
+    return bytes_u8_at(bs, i + 1, acc.push(wrapping_u8(bs[i])));
+}
+
+/// The packed bytes `bs` as a List(Int).
+pub List(Int) bytes_int(List(UInt(8)) bs) { return bytes_int_at(bs, 0, ListBuf()); }
+
+List(Int) bytes_int_at(List(UInt(8)) bs, Int i, ListBuf(Int) acc) {
+    if (i >= bs.len()) { return acc.finish(); }
+    return bytes_int_at(bs, i + 1, acc.push((Int) bs[i]));
+}
+
 /// The 32-bit word operations generic code is written against (SHA-256, ChaCha20).
 behavior Word(W, B) {
     W w_xor(W a, W b);
@@ -56,6 +88,29 @@ Int bi_xor(Int a, Int b) { return a ^ b; }
 Int bi_lift(Int k) { return k; }
 
 Word(Int, Int) = { .w_xor = wi_xor, .w_and = wi_and, .w_or = wi_or, .w_add = wi_add, .w_addk = wi_addk, .w_xork = wi_xork, .w_andk = wi_andk, .w_rotr = wi_rotr, .w_shr = wi_shr, .w_shl = wi_shl, .w_not = wi_not, .w_lift = wi_lift, .w_from_byte = wi_from_byte, .w_byte = wi_byte, .b_xork = bi_xork, .b_xor = bi_xor, .b_lift = bi_lift };
+
+// Public words over packed bytes (a List(UInt(8)) holds one byte per
+// element, runtime/rt/bytelist.resid): UInt(32) words, so the instance is
+// told apart from Word(Int, Int) by the word type alone.
+UInt(32) wu_xor(UInt(32) a, UInt(32) b) { return a ^ b; }
+UInt(32) wu_and(UInt(32) a, UInt(32) b) { return a & b; }
+UInt(32) wu_or(UInt(32) a, UInt(32) b) { return a | b; }
+UInt(32) wu_add(UInt(32) a, UInt(32) b) { return wrapping_uadd(a, b); }
+UInt(32) wu_addk(UInt(32) a, Int k) { return wrapping_uadd(a, wrapping_u32(k)); }
+UInt(32) wu_xork(UInt(32) a, Int k) { return a ^ wrapping_u32(k); }
+UInt(32) wu_andk(UInt(32) a, Int k) { return a & wrapping_u32(k); }
+UInt(32) wu_rotr(UInt(32) x, Int n) { return (x >> wrapping_u32(n)) | (x << wrapping_u32(32 - n)); }
+UInt(32) wu_shr(UInt(32) x, Int n) { return x >> wrapping_u32(n); }
+UInt(32) wu_shl(UInt(32) x, Int n) { return x << wrapping_u32(n); }
+UInt(32) wu_not(UInt(32) x) { return x ^ wrapping_u32(4294967295); }
+UInt(32) wu_lift(Int k) { return wrapping_u32(k); }
+UInt(32) wu_from_byte(UInt(8) b) { return wrapping_u32(b); }
+UInt(8) wu_byte(UInt(32) w, Int sh) { return wrapping_u8(w >> wrapping_u32(sh)); }
+UInt(8) bu_xork(UInt(8) b, Int k) { return b ^ wrapping_u8(k); }
+UInt(8) bu_xor(UInt(8) a, UInt(8) b) { return a ^ b; }
+UInt(8) bu_lift(Int k) { return wrapping_u8(k); }
+
+Word(UInt(32), UInt(8)) = { .w_xor = wu_xor, .w_and = wu_and, .w_or = wu_or, .w_add = wu_add, .w_addk = wu_addk, .w_xork = wu_xork, .w_andk = wu_andk, .w_rotr = wu_rotr, .w_shr = wu_shr, .w_shl = wu_shl, .w_not = wu_not, .w_lift = wu_lift, .w_from_byte = wu_from_byte, .w_byte = wu_byte, .b_xork = bu_xork, .b_xor = bu_xor, .b_lift = bu_lift };
 
 // Secret words are UInt(32) and secret bytes UInt(8): small enough that a
 // list never boxes one by its value (E0258).

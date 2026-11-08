@@ -773,6 +773,10 @@ Int recv_exact(Int fd, Int buf, Int got, Int n) {
 // List(Int) of its real length: empty after EOF, an error or the socket's
 // receive timeout. A server reads a request with this, since it cannot know
 // how many bytes are coming before it has parsed them.
+// The same as packed bytes (a List(UInt(8)) caller's name for it).
+@export("resid_tcp_recv_some_u8", "ptr(i64,i64)")
+pub Int rt_tcp_recv_some_u8(Int fd, Int max0) { return rt_tcp_recv_some(fd, max0); }
+
 @export("resid_tcp_recv_some", "ptr(i64,i64)")
 pub Int rt_tcp_recv_some(Int fd, Int max0) {
     Int max = if (sock_ok(fd)) { clamp(max0, 0, 1048576) } else { 0 };
