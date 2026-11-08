@@ -358,10 +358,8 @@ pub Int rt_disp_recv(Int fd, Int max0) {
     Int cl0 = ld64(msg_buf() + 56);
     Int cl = if (cl0 > 64) { 64 } else { cl0 };
     _ = disp_take_fds(ctl, cl, 0);
-    Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
-    _ = disp_byte_boxes(buf, slots, 0, n);
-    Int out = c_list_new(n, slots, resid_raw_addr("List"));
-    _ = c_free(buf) + c_free(ctl) + c_free(slots);
+    Int out = bl_from_bytes(n, buf);
+    _ = c_free(buf) + c_free(ctl);
     return out;
 }
 
@@ -381,12 +379,6 @@ Int disp_take_each(Int p, Int n, Int i) {
     return disp_take_each(p, n, i + 1);
 }
 
-// Small Ints are immediate boxes (value + IMM_OFF).
-Int disp_byte_boxes(Int buf, Int slots, Int i, Int n) {
-    if (i >= n) { return 0; }
-    _ = st64(slots + i * 8, ld8(buf + i) + 18295873486192640);
-    return disp_byte_boxes(buf, slots, i + 1, n);
-}
 
 // Readiness for display sockets, or for any mix of display and TCP
 // descriptors: the same answer `resid_tcp_poll` gives -- 1 readable, 2
@@ -447,10 +439,7 @@ Int pread_all(Int fd, Int buf, Int at, Int max) {
 
 // The first `n` bytes at `buf` as a List(Int).
 Int disp_bytes_list(Int buf, Int n) {
-    Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
-    _ = disp_byte_boxes(buf, slots, 0, n);
-    Int out = c_list_new(n, slots, resid_raw_addr("List"));
-    _ = c_free(slots);
+    Int out = bl_from_bytes(n, buf);
     return out;
 }
 
@@ -690,7 +679,7 @@ pub Int rt_disp_shm_put32(Int h, Int off, Int l, Int first, Int n) {
 }
 
 Int put32_into(Int dst, Int l, Int first, Int n) {
-    return if (lflat(l) && lraw(l)) { put32_slots(dst, lroot(l) + 24 + first * 8, 0, n) } else { put32_list(dst, l, first, 0, n) };
+    return if (lflat(l) && lraw(l) && !lbytes(l)) { put32_slots(dst, lroot(l) + 24 + first * 8, 0, n) } else { put32_list(dst, l, first, 0, n) };
 }
 
 Int put32_slots(Int dst, Int src, Int i, Int n) {

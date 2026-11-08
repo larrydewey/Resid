@@ -545,6 +545,17 @@ pub Int rt_list_const_i64r(Int cache, Int n, Int data) { return const_list(cache
 @export("resid_list_const_boolr", "ptr(ptr,i64,ptr)")
 pub Int rt_list_const_boolr(Int cache, Int n, Int data) { return const_list(cache, n, data, 3, 4); }
 
+// A byte list literal (bytelist.resid): data is its n bytes.
+@export("resid_list_const_u8", "ptr(ptr,i64,ptr)")
+pub Int rt_list_const_u8(Int cache, Int n, Int data) {
+    Int hit = ld64(cache);
+    if (hit != 0) { return hit; }
+    _ = heap_use();
+    Int list = bl_from_bytes(n, data);
+    _ = region_done();
+    return st64(cache, list) * 0 + list;
+}
+
 // Elements are pointers to static data (string literals).
 @export("resid_list_const_ptr", "ptr(ptr,i64,ptr,ptr)")
 pub Int rt_list_const_ptr(Int cache, Int n, Int data, Int ty) { return const_list(cache, n, data, ty, 2); }

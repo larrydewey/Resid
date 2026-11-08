@@ -119,7 +119,10 @@ pub Int slot_int(Int l, Int w) { return if (lraw(l)) { w } else { unbox_word(w) 
 // it to a list the runtime made with tagged words (bytes read, map keys).
 @export("resid_list_rawify", "ptr(ptr,i64)")
 pub Int rt_list_rawify(Int l, Int k) {
-    if (l == 0 || lraw(l)) { return l; }
+    if (l == 0) { return l; }
+    if (k == 4) { return bl_pack(l); }
+    if (lbytes(l)) { return bl_widen(l, k); }
+    if (lraw(l)) { return l; }
     Int n = lcount(l);
     if (n == 0) { return set_list(list_hdr(), 0, 0, 0, k); }
     Int items = rt_list_to_array(l);
@@ -203,6 +206,7 @@ Int node_new(Int cap) {
 }
 
 @export("resid_rt_flatbuf_new", "ptr(i64)")
+@inline
 pub Int flat_new(Int cap) {
     // The largest cap whose 24 + cap * 8 bytes does not wrap.
     if (cap < 0 || cap > 1152921504606846972) { return rt_abort("list too large to allocate"); }
@@ -257,6 +261,7 @@ pub Int pvec_append_into(Int into, Int v, Int elems, Int m) {
 }
 
 Int append_core(Int into, Int v, Int elems, Int m) {
+    if (lbytes(v)) { return bl_append_core(into, v, elems, m, true); }
     if (lflat(v) || lroot(v) == 0) {
         Int f = lroot(v);
         Int n = lcount(v);
@@ -427,6 +432,7 @@ pub Int rt_list_type(Int l) { return ltype(l); }
 pub Int rt_list_to_array(Int l) {
     Int n = lcount(l);
     if (n == 0) { return 0; }
+    if (lbytes(l)) { return bl_to_array(l); }
     Int out = xmalloc(n * 8);
     _ = if (lflat(l)) { mcopy(out, lroot(l) + 24, n * 8) } else { array_from_trie(l, out, 0, n) };
     return out;
@@ -441,6 +447,7 @@ Int array_from_trie(Int l, Int out, Int i, Int n) {
 // Concatenate: push every element of b onto a.
 @export("resid_list_concat", "ptr(ptr,ptr)")
 pub Int rt_list_concat(Int a, Int b0) {
+    if (lbytes(a) || lbytes(b0)) { return bl_concat(a, b0); }
     Int b = cat_like(a, b0);
     Int m = lcount(b);
     if (m == 0) { return a; }
@@ -462,6 +469,7 @@ pub Int rt_list_push(Int a, Int elem) { return pvec_push(a, elem); }
 // The same for raw slots of kind k: an empty list takes the kind.
 @export("resid_list_push_k", "ptr(ptr,ptr,i64)")
 pub Int rt_list_push_k(Int a, Int elem, Int k) {
+    if (k == 4 || lbytes(a)) { return rt_bl_push(a, elem); }
     Int out = pvec_push(a, elem);
     return if (lcount(a) == 0) { sync_elems(st64(out + 24, k) * 0 + out) } else { out };
 }
@@ -555,6 +563,9 @@ Int lb_grow(Int l, Int f, Int n) {
 
 @export("resid_listbuf_finish", "ptr(ptr,ptr)")
 pub Int rt_listbuf_finish(Int l, Int ty) {
+    if (lbytes(l)) { return l; }
+    // A byte list's builder of another kind (its words raw) is packed.
+    if (ty == 4) { return bl_pack(st64(l + 24, 1) * 0 + l); }
     _ = st64(l + 24, ty);
     _ = if (lroot(l) == 0) { st32(l + 8, 0) } else { 0 };
     return sync_elems(l);
@@ -590,6 +601,10 @@ Int b16_be8_raw(Int s) {
 @export("resid_bytes_be16", "i128(ptr,i64)")
 pub UInt(128) rt_bytes_be16(Int l, Int p) {
     _ = b16_check(l, p);
+    if (lbytes(l)) {
+        Int q = lroot(l) + 24 + p;
+        return ((UInt(128)) wrapping_u64(bl_be8(q)) << (UInt(128)) 64) | (UInt(128)) wrapping_u64(bl_be8(q + 8));
+    }
     Bool raw = b16_raw(l);
     Int s = lroot(l) + 24 + p * 8;
     UInt(128) hi = (UInt(128)) wrapping_u64(if (raw) { b16_be8_raw(s) } else { b16_be8(l, p, 0, 0) });
@@ -603,6 +618,7 @@ pub UInt(128) rt_bytes_be16(Int l, Int p) {
 @export("resid_bytes_xor16", "ptr(ptr,ptr,i64,i128)")
 pub Int rt_bytes_xor16(Int b, Int l, Int p, UInt(128) ks) {
     _ = b16_check(l, p);
+    if (lbytes(b)) { return bl_xor16(b, l, p, wrapping_i64(ks), wrapping_i64(ks >> (UInt(128)) 64)); }
     Int n = lcount(b);
     Int f0 = lroot(b);
     Int f = if (f0 == 0 || n + 16 > ld64(f0 + 8)) { lb_grow_to(b, f0, n, n + 16) } else { f0 };
@@ -639,6 +655,7 @@ pub Int rt_list_slice(Int l, Int lo0, Int hi0) {
     Int lo = max(lo0, 0);
     Int hi = min(hi0, lcount(l));
     Int n = if (hi > lo) { hi - lo } else { 0 };   // hi - lo may wrap for hi near Int.min
+    if (lbytes(l)) { return bl_slice(l, lo, n); }
     if (n > 0 && lflat(l)) { return rt_list_new(n, lroot(l) + 24 + lo * 8, ltype(l)); }
     Int flat = xmalloc(max(n, 1) * 8);
     _ = slice_fill(l, flat, lo, 0, n);

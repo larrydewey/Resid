@@ -32,6 +32,7 @@ import "transcript.resid";
 import "ctl.resid";
 import "dec.resid";
 import "list.resid";
+import "bytelist.resid";
 import "map.resid";
 import "alloc.resid";
 import "region.resid";

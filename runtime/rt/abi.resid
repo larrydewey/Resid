@@ -28,7 +28,8 @@ pub Int c_list_len(Int l) { return 0; }
 @import("resid_list_to_array", "ptr(ptr)")
 pub Int c_list_to_array(Int l) { return 0; }
 
-@import("resid_list_get", "ptr(ptr,i64)")
+// Kind-aware: a byte list's element too (bytelist.resid).
+@import("resid_list_get_k", "ptr(ptr,i64)")
 pub Int c_list_get(Int l, Int i) { return 0; }
 
 @import("resid_box_i64", "ptr(i64)")

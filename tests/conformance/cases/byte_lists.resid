@@ -1,0 +1,125 @@
+// List(UInt(8)) is stored one byte per element (runtime/rt/bytelist.resid):
+// every list operation on it, at run time (k defeats compile-time
+// reduction), against the values a list of words gives.
+@requires(args)
+Int count_args() { return args.count(); }
+
+ListBuf(UInt(8)) build(Int i, Int n, ListBuf(UInt(8)) b) {
+    if (i >= n) { return b; }
+    return build(i + 1, n, b.push((UInt(8)) ((i * 37 + 11) % 256)));
+}
+
+List(UInt(8)) mk(Int n) { return build(0, n, ListBuf()).finish(); }
+
+Int sum(List(UInt(8)) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return sum(xs, i + 1, acc + (Int) xs[i]);
+}
+
+Int sum_for(List(UInt(8)) xs) { return sum_for_at(xs, 0, 0); }
+
+Int sum_for_at(List(UInt(8)) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return sum_for_at(xs, i + 1, acc * 31 % 1000003 + (Int) xs[i]);
+}
+
+Void each(List(UInt(8)) xs) {
+    for (UInt(8) x in xs) { print(f"{x} "); }
+    println("");
+}
+
+// Owned updates in place, then a persistent one on a shared list.
+List(UInt(8)) flip(List(UInt(8)) xs, Int i) {
+    if (i >= xs.len()) { return xs; }
+    return flip(xs.with(i, xs[i] ^ 255), i + 1);
+}
+
+// Owned appends past the buffer's capacity, many times over.
+List(UInt(8)) push_n(List(UInt(8)) xs, Int i, Int n) {
+    if (i >= n) { return xs; }
+    return push_n(xs.concat([(UInt(8)) (i % 256)]), i + 1, n);
+}
+
+List(UInt(8)) cat_n(List(UInt(8)) xs, List(UInt(8)) ys, Int i, Int n) {
+    if (i >= n) { return xs; }
+    return cat_n(xs.concat(ys), ys, i + 1, n);
+}
+
+T at(List(T) xs, Int i) { return xs[i]; }
+
+List(T) twice(List(T) xs) { return xs.concat(xs); }
+
+List(T) swap01(List(T) xs) { return xs.with(0, xs[1]).with(1, xs[0]); }
+
+Str hex(List(UInt(8)) xs) {
+    StrBuf b = StrBuf();
+    return hex_at(xs, 0, b);
+}
+
+Str hex_at(List(UInt(8)) xs, Int i, StrBuf b) {
+    if (i >= xs.len()) { return b.finish(); }
+    Int v = (Int) xs[i];
+    return hex_at(xs, i + 1, b.push(f"{v / 16}.{v % 16} "));
+}
+
+List(List(UInt(8))) chunks(List(UInt(8)) xs, Int w, Int i, List(List(UInt(8))) acc) {
+    if (i >= xs.len()) { return acc; }
+    Int e = if (i + w < xs.len()) { i + w } else { xs.len() };
+    return chunks(xs, w, e, acc.concat([xs[i..e]]));
+}
+
+Map(Int, List(UInt(8))) bucket(Map(Int, List(UInt(8))) m, List(UInt(8)) xs, Int i) {
+    if (i >= xs.len()) { return m; }
+    List(UInt(8)) nil = [];
+    Int k = (Int) xs[i] % 4;
+    List(UInt(8)) cur = m.get(k) else { nil };
+    return bucket(m.insert(k, cur.concat([xs[i]])), xs, i + 1);
+}
+
+List(Secret(UInt(8))) hide(List(UInt(8)) xs, Int i, ListBuf(Secret(UInt(8))) b) {
+    if (i >= xs.len()) { return b.finish(); }
+    return hide(xs, i + 1, b.push(secret(xs[i])));
+}
+
+@requires(declassify)
+@robust_exempt(reason = "a test reads back what it hid")
+Int open_sum(List(Secret(UInt(8))) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return open_sum(xs, i + 1, acc + (Int) ct_public(declassify(xs[i], "test: byte list round trip")));
+}
+
+@requires(args, declassify)
+Int main() {
+    Int k = count_args();
+    List(UInt(8)) a = mk(39 + k);
+    List(UInt(8)) lit = [1, 2, 3, (UInt(8)) (254 + k)];
+    List(UInt(8)) clit = [0, 127, 128, 255];
+    println(f"{a.len()} {a[0]} {a[39]} {sum(a, 0, 0)} {sum_for(a)} {lit} {clit}");
+    each(clit);
+    // A persistent update leaves the original as it was.
+    List(UInt(8)) b = a.with(2, 9);
+    println(f"{b[2]} {a[2]} {sum(a, 0, 0)} {sum(b, 0, 0)}");
+    List(UInt(8)) c = flip(a, 0);
+    println(f"{c[0]} {a[0]} {sum(c, 0, 0)}");
+    // Two appends to one prefix: each sees its own last byte.
+    List(UInt(8)) p1 = a.concat([7]);
+    List(UInt(8)) p2 = a.concat([8]);
+    println(f"{p1.len()} {p1[40]} {p2[40]} {a.len()}");
+    List(UInt(8)) big = push_n(lit, 0, 5000 + k);
+    println(f"{big.len()} {big[4]} {big[5003]} {sum(big, 0, 0)} {lit.len()}");
+    List(UInt(8)) cat = cat_n(lit, a, 0, 100 + k);
+    println(f"{cat.len()} {sum(cat, 0, 0)}");
+    println(f"{at(a, 5)} {twice(lit)} {swap01(lit)} {lit}");
+    println(f"{a[k..4]} {a[37 + k..]} {a[60..70]} {a[0..0].len()}");
+    println(f"{lit.fill(k, 2, 0)} {lit.grow(2 + k, 9)} {lit}");
+    println(f"{lit.contains((UInt(8)) (254 + k))} {lit.contains(4)} {lit.reverse()} {sort(a[0..6])}");
+    println(hex(a[0..8]));
+    List(List(UInt(8))) cs = chunks(a, 7, 0, []);
+    println(f"{cs.len()} {cs[5]} {sum(cs[2], 0, 0)}");
+    Map(Int, List(UInt(8))) m = bucket({}, a, 0);
+    List(UInt(8)) nil = [];
+    println(f"{(m.get(0) else { nil }).len()} {(m.get(3) else { nil })}");
+    List(Secret(UInt(8))) s = hide(a, 0, ListBuf());
+    println(f"{s.len()} {open_sum(s, 0, 0)}");
+    return 0;
+}

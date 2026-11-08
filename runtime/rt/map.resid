@@ -1180,7 +1180,7 @@ pub Int rt_map_list_push(Int m, Int owned, Int kk, Int kb, Int elem, Int dflt) {
     // The looked-up header only seeds the new one: it does not leave.
     Int at = map_vref_raw(m, kk, kb);
     Int base = if (at != 0) { word_out(map_vk(m), 0, ld64(at)) } else { dflt };
-    Int nv = if (lcount(base) == 0) { fresh_list(base, elem) } else { pvec_push(base, elem) };
+    Int nv = if (lbytes(base)) { rt_bl_push(base, elem) } else { if (lcount(base) == 0) { fresh_list(base, elem) } else { pvec_push(base, elem) } };
     Int r = rt_map_put(m, owned, kk, kb, 5, nv);
     if (owned != 0 && mtrans(r) && mown(r) != 0) {
         Int slot = map_vref_raw(r, kk, kb);
@@ -1646,6 +1646,7 @@ Int move_items(Int n, Int c, Int i, Int cap, Int level, Int ek, Int ctx) {
 // stores into it need no move (bar_keep). Other moves leave it in place.
 Int list_move(Int l, Int ek0, Int ctx) {
     if (l == 0) { return l; }
+    if (lbytes(l)) { return bl_move(l, ctx); }
     Int ek = if (lraw(l)) { 1 } else { ek0 };
     Int root = lroot(l);
     Int n = lcount(l);
@@ -2152,6 +2153,7 @@ Int list_set_rec_slow(Int l, Int owned, Int i, Int r, Int w) {
 
 @noinline
 Int list_set_slow(Int l, Int owned, Int i, Int w) {
+    if (lbytes(l)) { return bl_set_slow(l, owned, i, w); }
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
     if (owned != 0 && no_thaw(l)) { return mark_frozen(with_shared(l, i, w)); }
@@ -2165,6 +2167,7 @@ Int list_set_slow(Int l, Int owned, Int i, Int w) {
 // otherwise the list is copied once into a fresh transient and filled.
 @export("resid_list_fill_w", "ptr(ptr,i8,i64,i64,i64)")
 pub Int rt_list_fill_w(Int l, Int owned, Int from, Int n, Int w) {
+    if (lbytes(l)) { return bl_fill(l, owned, from, n, w); }
     Int t = fill_target(l, owned, from, n);
     return words_fill(lroot(t) + 24 + from * 8, n, w) * 0 + t;
 }
@@ -2194,7 +2197,7 @@ Int fill_target(Int l, Int owned, Int from, Int n) {
 // w. k is the raw slot kind of the element type (0 for tagged words); an
 // empty list may not know its kind yet (`[]`), so it takes k.
 @export("resid_list_grow_w", "ptr(ptr,i64,i64,i64)")
-pub Int rt_list_grow_w(Int l, Int n, Int w, Int k) { return list_grow(l, n, w, k); }
+pub Int rt_list_grow_w(Int l, Int n, Int w, Int k) { return if (k == 4 || lbytes(l)) { bl_grow_list(l, n, w) } else { list_grow(l, n, w, k) }; }
 
 @export("resid_list_grow", "ptr(ptr,i64,ptr,i64)")
 pub Int rt_list_grow(Int l, Int n, Int v, Int k) { return list_grow(l, n, v, k); }
@@ -2292,9 +2295,9 @@ pub Int rt_list_with_fb(Int l, Int owned, Int i, Int v, Int ek) {
 // that result stays marked. A fresh list (a builder's, a literal) thaws.
 Int fresh_max() { return 256; }
 
-Bool no_thaw(Int l) { return !ltransient(l) && lcount(l) > fresh_max() && (ld32(l + 12) & 2147483648) != 0; }
+pub Bool no_thaw(Int l) { return !ltransient(l) && lcount(l) > fresh_max() && (ld32(l + 12) & 2147483648) != 0; }
 
-Int mark_frozen(Int l) { return st32(l + 12, ld32(l + 12) | 2147483648) * 0 + l; }
+pub Int mark_frozen(Int l) { return st32(l + 12, ld32(l + 12) | 2147483648) * 0 + l; }
 
 @noinline
 Int list_with_f_slow(Int l, Int owned, Int i, Int v, Int ek) {
@@ -2326,6 +2329,7 @@ Int bar_move_f(Int ro, Int v, Int ek) { return mv_done(resid_raw_call2(ek, v, mv
 // doubling its buffer when full.
 @export("resid_list_concat_own", "ptr(ptr,i8,ptr)")
 pub Int rt_list_concat_own(Int a, Int owned, Int b0) {
+    if (lbytes(a) || lbytes(b0)) { return bl_concat_own(a, owned, b0); }
     Int b = cat_like(a, b0);
     Int m = lcount(b);
     if (owned != 0 && no_thaw(a)) { return mark_frozen(rt_list_concat(a, b)); }
@@ -2360,6 +2364,7 @@ pub Int rt_list_push_own(Int a, Int w, Int k) {
 
 @noinline
 Int list_push_own_slow(Int a, Int w, Int k) {
+    if (k == 4 || lbytes(a)) { return rt_bl_push_own(a, w); }
     if (no_thaw(a)) { return mark_frozen(rt_list_push_k(a, w, k)); }
     Int n = lcount(a);
     Int t = if (ltransient(a)) { a } else { with_fresh(a, max(4, n)) };

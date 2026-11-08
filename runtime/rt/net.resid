@@ -38,11 +38,9 @@ Int rnd_os_fill(Int buf, Int got, Int n) {
 
 // The first m bytes of buf as a List(Int); buf (n bytes) is wiped and freed.
 pub Int rnd_list(Int buf, Int n, Int m) {
-    Int slots = xmalloc(if (m > 0) { m * 8 } else { 8 });
-    _ = byte_boxes(buf, slots, 0, m);
-    Int out = c_list_new(m, slots, resid_raw_addr("List"));
+    Int out = bl_from_bytes(m, buf);
     _ = resid_raw_fill(buf, 0, n);
-    _ = c_free(buf) + c_free(slots);
+    _ = c_free(buf);
     return out;
 }
 
@@ -733,6 +731,7 @@ pub Int bytes_of(Int l, Int buf, Int i, Int n) { return bytes_range(l, i, buf + 
 pub Int bytes_range(Int l, Int from, Int buf, Int n) {
     if (n <= 0) { return 0; }
     Bool inside = from >= 0 && from <= lcount(l) && n <= lcount(l) - from;
+    if (inside && lbytes(l)) { return mcopy(buf, lroot(l) + 24 + from, n); }
     if (inside && lflat(l) && lroot(l) != 0 && rec_words(ltype(l)) == 0) { return flat_bytes(lroot(l) + 24 + from * 8, lraw(l), buf, 0, n); }
     return bytes_at(l, from, buf, 0, n);
 }
@@ -758,10 +757,8 @@ pub Int rt_tcp_recv_bin(Int fd, Int n0) {
     Int buf = xmalloc(n);
     _ = resid_raw_fill(buf, 0, n);
     _ = recv_exact(fd, buf, 0, n);
-    Int slots = xmalloc(n * 8);
-    _ = byte_boxes(buf, slots, 0, n);
-    Int out = c_list_new(n, slots, resid_raw_addr("List"));
-    _ = c_free(buf) + c_free(slots);
+    Int out = bl_from_bytes(n, buf);
+    _ = c_free(buf);
     return out;
 }
 
@@ -782,19 +779,11 @@ pub Int rt_tcp_recv_some(Int fd, Int max0) {
     Int buf = xmalloc(if (max > 0) { max } else { 1 });
     Int r = if (max > 0 && dl_arm(fd)) { resid_raw_syscall(45, fd, buf, max, 0, 0, 0) } else { 0 };
     Int n = if (r > 0) { r } else { 0 };
-    Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
-    _ = byte_boxes(buf, slots, 0, n);
-    Int out = c_list_new(n, slots, resid_raw_addr("List"));
-    _ = c_free(buf) + c_free(slots);
+    Int out = bl_from_bytes(n, buf);
+    _ = c_free(buf);
     return out;
 }
 
-// Small Ints are immediate boxes (value + IMM_OFF).
-Int byte_boxes(Int buf, Int slots, Int i, Int n) {
-    if (i >= n) { return 0; }
-    _ = st64(slots + i * 8, ld8(buf + i) + 18295873486192640);
-    return byte_boxes(buf, slots, i + 1, n);
-}
 
 // ─── Unix-domain stream sockets ────────────────────────────────────────
 // Local IPC for an agent and its clients (an SSH agent, a password
@@ -1005,10 +994,8 @@ pub Int rt_unix_recv_some(Int fd, Int max0) {
     Int buf = xmalloc(if (max > 0) { max } else { 1 });
     Int r = if (max > 0 && dl_arm(fd)) { resid_raw_syscall(45, fd, buf, max, 0, 0, 0) } else { 0 };
     Int n = if (r > 0) { r } else { 0 };
-    Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
-    _ = byte_boxes(buf, slots, 0, n);
-    Int out = c_list_new(n, slots, resid_raw_addr("List"));
-    _ = c_free(buf) + c_free(slots);
+    Int out = bl_from_bytes(n, buf);
+    _ = c_free(buf);
     return out;
 }
 

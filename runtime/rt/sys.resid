@@ -131,15 +131,8 @@ pub Int rt_fs_write_all(Int path, Int contents) { return b8(put_file(path, o_wri
 // The low bytes of a List(Int) as a heap buffer (its length is the list's).
 Int list_bytes(Int l) {
     Int n = c_list_len(l);
-    Int buf = xmalloc(n);
-    _ = list_bytes_at(l, buf, 0, n);
-    return buf;
-}
-
-Int list_bytes_at(Int l, Int buf, Int i, Int n) {
-    if (i >= n) { return 0; }
-    _ = st8(buf + i, slot_int(l, c_list_get(l, i)));
-    return list_bytes_at(l, buf, i + 1, n);
+    Int buf = xmalloc(max(n, 1));
+    return bytes_range(l, 0, buf, n) * 0 + buf;
 }
 
 Bool put_list(Int path, Int flags, Int mode, Int l) {
@@ -201,21 +194,11 @@ pub Int rt_fs_write_hex(Int path, Int hex) { return put_hex(path, hex, o_write()
 @export("resid_fs_append_hex", "i8(ptr,ptr)")
 pub Int rt_fs_append_hex(Int path, Int hex) { return put_hex(path, hex, o_append()); }
 
-// A List(Int) of bytes.
-pub Int bytes_list(Int p, Int n) {
-    Int slots = xmalloc(n * 8);
-    _ = box_bytes(p, slots, 0, n);
-    Int out = c_list_new(n, slots, resid_raw_addr("List(Int(64))"));
-    return c_free(slots) * 0 + out;
-}
+// n bytes at p as a byte list (bytelist.resid; a List(Int) caller's
+// compiled code widens it, lw_rawify).
+pub Int bytes_list(Int p, Int n) { return bl_from_bytes(n, p); }
 
-Int box_bytes(Int p, Int slots, Int i, Int n) {
-    if (i >= n) { return 0; }
-    _ = st64(slots + i * 8, c_box_i64(ld8(p + i)));
-    return box_bytes(p, slots, i + 1, n);
-}
-
-Int empty_bytes() { return c_list_new(0, 0, resid_raw_addr("List(Int(64))")); }
+Int empty_bytes() { return bl_from_bytes(0, 0); }
 
 @export("resid_fs_read_bytes", "ptr(ptr)")
 pub Int rt_fs_read_bytes(Int path) {

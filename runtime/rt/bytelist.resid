@@ -1,0 +1,395 @@
+// Byte lists (PLAN-packed-bytes.md): a List(UInt(8)), or a
+// List(Secret(UInt(8))), which erases to it, stored one byte per element.
+// The header is an ordinary list header whose type word is 4; its root is
+// a flat buffer {used, cap, kept, bytes[cap]} counted in bytes (0 while
+// the list is empty). A byte list is never a trie. Shift -1 / -2 mean
+// frozen / transient as for other flat lists, and a shared tip takes an
+// append in place, claiming bytes by CAS on `used` (append_core's rule).
+//
+// The compiler routes index, owned update, append and builder pushes to
+// the resid_bl_* entries. Every other list entry of the runtime checks the
+// type word (lbytes) and comes here, so generic code (show, sort, concat,
+// moves) handles byte lists without the compiler's help. Each resid_bl_*
+// entry also takes a list of another kind (a list of raw words or tagged
+// words the runtime made for a byte type): it reads it as it is, and an
+// update packs it first.
+
+pub Bool lbytes(Int l) { return ltype(l) == 4; }
+
+// The data of byte list l (its root's bytes).
+pub Int bl_data(Int l) { return lroot(l) + 24; }
+
+// A byte buffer with room for cap bytes, cap rounded up to a word.
+pub Int bl_flat_new(Int cap0) {
+    if (cap0 < 0 || cap0 > 4611686018427387904) { return rt_abort("list too large to allocate"); }
+    Int cap = (cap0 + 7) & (0 - 8);
+    Int f = ralloc(24 + cap);
+    _ = st64(f, 0);
+    _ = st64(f + 8, cap);
+    return st64(f + 16, 0) * 0 + f;
+}
+
+// A header for n bytes at buffer f.
+pub Int bl_hdr(Int n, Int shift, Int f) { return set_list(list_hdr(), n, shift, f, 4); }
+
+// Element i of any list as an integer: a byte of a byte list, else the
+// slot read by its kind (a trie or tagged words included).
+pub Int list_at_k(Int l, Int i) { return if (lbytes(l)) { ld8(bl_data(l) + i) } else { slot_int(l, list_at(l, i)) }; }
+
+// Element i as the slot word the runtime's generic readers expect (the
+// abi's c_list_get): a byte list's element is its value, a raw slot.
+@export("resid_list_get_k", "ptr(ptr,i64)")
+pub Int rt_list_get_k(Int l, Int i) {
+    if (!ult(i, lcount(l))) { return rt_index_abort(i, lcount(l), 0); }
+    return if (lbytes(l)) { ld8(bl_data(l) + i) } else { list_at(l, i) };
+}
+
+// ─── Conversions ───────────────────────────────────────────────────────
+
+// n raw words at src as a byte list (each word's low byte).
+@noinline
+pub Int bl_from_words(Int n, Int src) {
+    if (n <= 0) { return bl_hdr(0, 0 - 1, 0); }
+    Int f = bl_flat_new(n);
+    _ = bl_put_words(f + 24, src, 0, n);
+    _ = st64(f, n) + st64(f + 16, n);
+    return bl_hdr(n, 0 - 1, f);
+}
+
+pub Int bl_put_words(Int d, Int src, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st8(d + i, ld64(src + i * 8) & 255);
+    return bl_put_words(d, src, i + 1, n);
+}
+
+// n bytes at src as a byte list.
+@noinline
+pub Int bl_from_bytes(Int n, Int src) {
+    if (n <= 0) { return bl_hdr(0, 0 - 1, 0); }
+    Int f = bl_flat_new(n);
+    _ = mcopy(f + 24, src, n);
+    _ = st64(f, n) + st64(f + 16, n);
+    return bl_hdr(n, 0 - 1, f);
+}
+
+// Any list as a byte list: l itself when it is one, else a copy whose
+// bytes are its elements' low bytes.
+@noinline
+pub Int bl_pack(Int l) {
+    if (l == 0 || lbytes(l)) { return l; }
+    Int n = lcount(l);
+    if (n == 0) { return bl_hdr(0, 0 - 1, 0); }
+    Int f = bl_flat_new(n);
+    _ = bl_pack_fill(l, f + 24, 0, n);
+    _ = st64(f, n) + st64(f + 16, n);
+    return bl_hdr(n, 0 - 1, f);
+}
+
+pub Int bl_pack_fill(Int l, Int d, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st8(d + i, list_at_k(l, i) & 255);
+    return bl_pack_fill(l, d, i + 1, n);
+}
+
+// A list that is a byte list or empty, for the update paths.
+pub Int bl_norm(Int l) { return if (lbytes(l) || lcount(l) == 0) { l } else { bl_pack(l) }; }
+
+// The bytes as raw words in a fresh malloc'd array (caller frees).
+@noinline
+pub Int bl_to_array(Int l) {
+    Int n = lcount(l);
+    if (n == 0) { return 0; }
+    Int out = xmalloc(n * 8);
+    return bl_widen_fill(bl_data(l), out, 0, n) * 0 + out;
+}
+
+pub Int bl_widen_fill(Int s, Int out, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st64(out + i * 8, ld8(s + i));
+    return bl_widen_fill(s, out, i + 1, n);
+}
+
+// A byte list as a list of raw slots of kind k.
+@noinline
+pub Int bl_widen(Int l, Int k) {
+    Int n = lcount(l);
+    if (n == 0) { return set_list(list_hdr(), 0, 0, 0, k); }
+    Int items = bl_to_array(l);
+    Int out = rt_list_new(n, items, k);
+    return c_free(items) * 0 + out;
+}
+
+// ─── Appends ───────────────────────────────────────────────────────────
+
+// v (a byte list or empty) with m bytes from src appended, written into
+// `into` (0 for a new header, v itself for an in-place append). wide:
+// src holds raw words, else bytes. The shared tip takes them in place; any
+// other append copies into a buffer twice the size (exact for a fresh
+// list).
+@noinline
+pub Int bl_append_core(Int into, Int v, Int src, Int m, Bool wide) {
+    Int f = lroot(v);
+    Int n = lcount(v);
+    Bool tip = f != 0 && !ltransient(v) && n + m <= ld64(f + 8) && resid_raw_cas(f, n, n + m);
+    Int dst = if (tip) { f } else { bl_flat_new(if (f != 0) { (n + m) * 2 } else { n + m }) };
+    _ = if (!tip && n > 0) { mcopy(dst + 24, f + 24, n) } else { 0 };
+    _ = if (wide) { bl_put_words(dst + 24 + n, src, 0, m) } else { mcopy(dst + 24 + n, src, m) };
+    _ = if (!tip) { st64(dst, n + m) } else { 0 };
+    Int out = if (into != 0) { into } else { list_hdr() };
+    return set_list(out, n + m, 0 - 1, dst, 4);
+}
+
+// xs.concat([w]) on a byte list, persistent.
+@export("resid_bl_push", "ptr(ptr,ptr)")
+@noinline
+pub Int rt_bl_push(Int a, Int w) {
+    Int one = resid_raw_tls("bl_one", 8);
+    _ = st64(one, w);
+    return bl_append_core(0, bl_norm(a), one, 1, true);
+}
+
+// a.concat(b) where either is a byte list.
+@noinline
+pub Int bl_concat(Int a0, Int b0) {
+    Int a = bl_norm(a0);
+    Int b = bl_norm(b0);
+    Int m = lcount(b);
+    if (m == 0) { return if (lcount(a) == 0 && lbytes(b)) { b } else { a }; }
+    return bl_append_core(0, a, bl_data(b), m, false);
+}
+
+// xs[lo..hi] of a byte list, bounds as rt_list_slice clamps them.
+@noinline
+pub Int bl_slice(Int l, Int lo, Int n) {
+    if (n <= 0) { return bl_hdr(0, 0 - 1, 0); }
+    Int f = bl_flat_new(n);
+    _ = mcopy(f + 24, bl_data(l) + lo, n);
+    _ = st64(f, n) + st64(f + 16, n);
+    return bl_hdr(n, 0 - 1, f);
+}
+
+// ─── Owned updates (map.resid's with paths, in bytes) ──────────────────
+
+// A fresh transient copy of l (a byte list or empty) with room for
+// `extra` more bytes.
+@noinline
+pub Int bl_fresh(Int l0, Int extra) {
+    Int l = bl_norm(l0);
+    Int n = lcount(l);
+    Int f = bl_flat_new(n + extra);
+    _ = if (n > 0) { mcopy(f + 24, bl_data(l), n) } else { 0 };
+    _ = st64(f, n) + st64(f + 16, n);
+    return bl_hdr(n, 0 - 2, f);
+}
+
+// A larger buffer for transient t, in t's region.
+pub Int bl_grow(Int t, Int f0, Int n, Int need) {
+    _ = region_use(t);
+    Int f = bl_flat_new(max(need, n * 2));
+    _ = region_done();
+    _ = if (n > 0 && f0 != 0) { mcopy(f + 24, f0 + 24, n) } else { 0 };
+    return st64(t + 16, f) * 0 + f;
+}
+
+// Element i of l replaced on a persistent copy (a byte list is copied
+// whole).
+pub Int bl_with_copy(Int l, Int i, Int w) {
+    Int t = bl_fresh(l, 0);
+    _ = st8(bl_data(t) + i, w);
+    return st32(t + 8, 0 - 1) * 0 + t;
+}
+
+// Element i of a byte list, bounds-checked (resid_list_get's twin).
+@export("resid_bl_get", "ptr(ptr,i64)")
+@inline
+pub Int rt_bl_get(Int l, Int i) {
+    if (!ult(i, lcount(l))) { return rt_index_abort(i, lcount(l), 0); }
+    return if (lbytes(l)) { ld8(lroot(l) + 24 + i) } else { slot_int(l, list_at(l, i)) };
+}
+
+// An element the compiler proved in bounds.
+@export("resid_bl_get_nc", "ptr(ptr,i64)")
+@inline
+pub Int rt_bl_get_nc(Int l, Int i) { return if (lbytes(l)) { ld8(lroot(l) + 24 + i) } else { slot_int(l, list_at(l, i)) }; }
+
+// xs.with(i, w) (resid_list_set_w's twin).
+@export("resid_bl_set", "ptr(ptr,i8,i64,i64)")
+@inline
+pub Int rt_bl_set(Int l, Int owned, Int i, Int w) {
+    if (owned != 0 && ltransient(l) && ult(i, lcount(l)) && lbytes(l)) { return st8(lroot(l) + 24 + i, w) * 0 + l; }
+    return bl_set_slow(l, owned, i, w);
+}
+
+@noinline
+pub Int bl_set_slow(Int l0, Int owned, Int i, Int w) {
+    Int n = lcount(l0);
+    if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
+    Int l = bl_norm(l0);
+    if (owned != 0 && no_thaw(l)) { return mark_frozen(bl_with_copy(l, i, w)); }
+    if (owned == 0) { return bl_with_copy(l, i, w); }
+    Int t = if (ltransient(l)) { l } else { bl_fresh(l, 0) };
+    return st8(bl_data(t) + i, w) * 0 + t;
+}
+
+// xs.concat([w]) on an owned byte list (resid_list_push_own's twin).
+@export("resid_bl_push_own", "ptr(ptr,ptr)")
+@inline
+pub Int rt_bl_push_own(Int a, Int w) {
+    if (ltransient(a) && lbytes(a)) {
+        Int f = lroot(a);
+        Int n = lcount(a);
+        if (n > 0 && n < ld64(f + 8)) {
+            _ = st8(f + 24 + n, w) + st64(f, n + 1) + st64(f + 16, n + 1);
+            return st64(a, n + 1) * 0 + a;
+        }
+    }
+    return bl_push_own_slow(a, w);
+}
+
+@noinline
+pub Int bl_push_own_slow(Int a0, Int w) {
+    Int a = bl_norm(a0);
+    if (no_thaw(a)) { return mark_frozen(rt_bl_push(a, w)); }
+    Int n = lcount(a);
+    Int t = if (ltransient(a) && lroot(a) != 0) { a } else { bl_fresh(a, max(8, n)) };
+    Int f0 = lroot(t);
+    Int f = if (n + 1 <= ld64(f0 + 8)) { f0 } else { bl_grow(t, f0, n, n + 1) };
+    _ = st8(f + 24 + n, w) + st64(f, n + 1) + st64(f + 16, n + 1);
+    return st64(t, n + 1) * 0 + t;
+}
+
+// xs.concat(ys) on an owned list, either a byte list.
+@noinline
+pub Int bl_concat_own(Int a0, Int owned, Int b0) {
+    Int a = bl_norm(a0);
+    Int b = bl_norm(b0);
+    Int m = lcount(b);
+    if (owned != 0 && no_thaw(a)) { return mark_frozen(bl_concat(a, b)); }
+    if (owned == 0) { return bl_concat(a, b); }
+    if (m == 0) { return a; }
+    Int n = lcount(a);
+    Int t = if (ltransient(a) && lroot(a) != 0) { a } else { bl_fresh(a, max(m, n)) };
+    Int f0 = lroot(t);
+    Int f = if (n + m <= ld64(f0 + 8)) { f0 } else { bl_grow(t, f0, n, n + m) };
+    // b may be t itself (xs.concat(xs)): its root is read after the grow.
+    _ = mcopy(f + 24 + n, bl_data(b), m);
+    _ = st64(f, n + m) + st64(f + 16, n + m);
+    return st64(t, n + m) * 0 + t;
+}
+
+// xs.fill(from, n, w) on a byte list: range checked as fill_target.
+@noinline
+pub Int bl_fill(Int l0, Int owned, Int from, Int n, Int w) {
+    Int c = lcount(l0);
+    if (from < 0 || from > c) { return rt_index_abort(from, c, 0); }
+    if (n < 0 || n > c - from) { return rt_index_abort(from + n, c, 0); }
+    Int l = bl_norm(l0);
+    if (n == 0) { return l; }
+    Int t = if (owned != 0 && ltransient(l)) { l } else { bl_fresh(l, 0) };
+    return resid_raw_fill(bl_data(t) + from, w & 255, n) * 0 + t;
+}
+
+// xs.grow(n, w) on a byte list: a new transient list.
+@noinline
+pub Int bl_grow_list(Int l0, Int n, Int w) {
+    Int c = lcount(l0);
+    if (n < 0) { return rt_index_abort(n, c, 0); }
+    if (n > 4611686018427387904 - c) { return rt_index_abort(n, c, 0); }
+    Int l = bl_norm(l0);
+    if (n == 0) { return l; }
+    Int t = bl_fresh(l, n);
+    Int f = lroot(t);
+    _ = resid_raw_fill(f + 24 + c, w & 255, n);
+    _ = st64(f, c + n) + st64(f + 16, c + n);
+    return st64(t, c + n) * 0 + t;
+}
+
+// ─── Builders ──────────────────────────────────────────────────────────
+
+// ListBuf(UInt(8)).push(w): a builder of kind 4 (resid_listbuf_new_k(4)).
+@export("resid_bl_buf_push", "ptr(ptr,ptr)")
+@inline
+pub Int rt_bl_buf_push(Int l, Int w) {
+    Int n = lcount(l);
+    Int f0 = lroot(l);
+    if (f0 != 0 && n < ld64(f0 + 8) && lbytes(l)) {
+        _ = st8(f0 + 24 + n, w);
+        _ = st64(l, n + 1);
+        return st64(f0, n + 1) * 0 + l;
+    }
+    return bl_buf_push_slow(l, w);
+}
+
+@noinline
+pub Int bl_buf_push_slow(Int l, Int w) {
+    Int n = lcount(l);
+    // A builder of another kind with elements keeps its words.
+    if (!lbytes(l) && n > 0) { return rt_listbuf_push(l, w); }
+    _ = st64(l + 24, 4);
+    Int f0 = lroot(l);
+    Int f = if (f0 == 0 || n >= ld64(f0 + 8)) { bl_buf_grow(l, f0, n, n + 1) } else { f0 };
+    _ = st8(f + 24 + n, w);
+    _ = st64(l, n + 1);
+    return st64(f, n + 1) * 0 + l;
+}
+
+@cold
+pub Int bl_buf_grow(Int l, Int f, Int n, Int need) {
+    Int nf = bl_flat_new(max(need, if (n < 32) { 64 } else { n * 2 }));
+    _ = if (n > 0 && f != 0) { mcopy(nf + 24, f + 24, n) } else { 0 };
+    return st64(l + 16, nf) * 0 + nf;
+}
+
+// ─── Moves out of a region ─────────────────────────────────────────────
+
+// list_move for a byte list: the bytes are values, so only the buffer and
+// header move (a transient adopted by a loop's compaction too).
+@noinline
+pub Int bl_move(Int l, Int ctx) {
+    Int root = lroot(l);
+    Int n = lcount(l);
+    Bool adopt = root != 0 && ltransient(l) && ld64(resid_raw_tls("rg_compact", 8)) != 0 && !mv_src(ctx, root);
+    Int nroot = if (root != 0 && (adopt || mv_src(ctx, root))) { bl_copy_to(root, n, ctx) } else { root };
+    if (nroot == root && !mv_src(ctx, l)) { return l; }
+    Int out = mv_alloc(ctx, 32);
+    _ = mcopy(out, l, 32);
+    return st64(out + 16, nroot) * 0 + out;
+}
+
+// A copy of byte buffer f in the move's destination, same capacity.
+pub Int bl_copy_to(Int f, Int n, Int ctx) {
+    Int cap = if (ld64(f + 8) > n) { ld64(f + 8) } else { (max(n, 1) + 7) & (0 - 8) };
+    Int g = mv_alloc(ctx, 24 + cap);
+    _ = st64(g, n) + st64(g + 8, cap) + st64(g + 16, n);
+    return mcopy(g + 24, f + 24, n) * 0 + g;
+}
+
+// ─── Sixteen bytes at a time (list.resid's resid_bytes_*) ─────────────
+
+// Eight bytes at q, big-endian.
+pub Int bl_be8(Int q) {
+    return (ld8(q) << 56) | (ld8(q + 1) << 48) | (ld8(q + 2) << 40) | (ld8(q + 3) << 32)
+         | (ld8(q + 4) << 24) | (ld8(q + 5) << 16) | (ld8(q + 6) << 8) | ld8(q + 7);
+}
+
+// Eight bytes from p of l as a little-endian word (byte i at bits 8i).
+pub Int bl_le8(Int l, Int p) {
+    if (lbytes(l)) { return ld64(lroot(l) + 24 + p); }
+    return bl_le8_at(l, p, 7, 0);
+}
+
+pub Int bl_le8_at(Int l, Int p, Int i, Int acc) {
+    if (i < 0) { return acc; }
+    return bl_le8_at(l, p, i - 1, (acc << 8) | (list_at_k(l, p + i) & 255));
+}
+
+// Byte builder b with bytes p..p + 16 of l pushed, XORed with lo and hi.
+@noinline
+pub Int bl_xor16(Int b, Int l, Int p, Int lo, Int hi) {
+    Int n = lcount(b);
+    Int f0 = lroot(b);
+    Int f = if (f0 == 0 || n + 16 > ld64(f0 + 8)) { bl_buf_grow(b, f0, n, n + 16) } else { f0 };
+    _ = st64(f + 24 + n, bl_le8(l, p) ^ lo) + st64(f + 32 + n, bl_le8(l, p + 8) ^ hi);
+    _ = st64(b, n + 16);
+    return st64(f, n + 16) * 0 + b;
+}

@@ -1479,7 +1479,8 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
         if (osingle) {
             Str orest = str_slice(oarg.lines[onl - 1], str_len(oone), str_len(oarg.lines[onl - 1]));
             Str osla = str_slice(orest, 0, str_find(orest, ", ptr "));
-            List(Str) ol = oarg.lines[0..onl - 1].concat([oreg + "e = load ptr, ptr " + osla, oreg + " = call ptr @resid_list_push_own(ptr " + base.val + ", ptr " + oreg + f"e, i64 {opk})"]);
+            Str opc = if (lst_bytes(elem_type(strip_owned_cg(base.ty)))) { "@resid_bl_push_own(ptr " + base.val + ", ptr " + oreg + "e)" } else { "@resid_list_push_own(ptr " + base.val + ", ptr " + oreg + f"e, i64 {opk})" };
+            List(Str) ol = oarg.lines[0..onl - 1].concat([oreg + "e = load ptr, ptr " + osla, oreg + " = call ptr " + opc]);
             return lw_step(oarg, oreg, base.ty, ol, ot);
         }
         return lw_step(oarg, oreg, base.ty, oarg.lines.concat([oreg + " = call ptr @resid_list_concat_own(ptr " + base.val + ", i8 1, ptr " + oarg.val + ")"]), ot);
@@ -1510,7 +1511,7 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
         Str sla = if (single) { str_slice(rest1, 0, str_find(rest1, ", ptr ")) } else { "" };
         List(Str) l30 = if (single) { arg.lines[0..nl - 1] } else { arg.lines };
         // Raw slots (W1): the push gives an empty list its kind.
-        Int pk = lst_raw(elem_type(strip_owned_cg(base.ty)));
+        Int pk = lst_kind(elem_type(strip_owned_cg(base.ty)));
         Str push = if (pk > 0) { reg2 + " = call ptr @resid_list_push_k(ptr " + base.val + ", ptr " + reg2 + f"e, i64 {pk})" } else { reg2 + " = call ptr @resid_list_push(ptr " + base.val + ", ptr " + reg2 + "e)" };
         List(Str) l3 = if (single) { l30.concat([reg2 + "e = load ptr, ptr " + sla, push]) } else { l30.concat([line2]) };
         return GT {.pos = 0, .val = reg2, .ty = base.ty, .cnt = 0, .err = "", .glines = arg.glines, .lines = l3, .tmp = t2, .lbl = arg.lbl, .tail = false};
@@ -1647,7 +1648,7 @@ GT lw_list_push(LW w, Int id, GT base, GT ka, Int cv, Int sid, Str kt, Str vt, B
     Str r = f"%t{t}";
     Str own = if (owned) { "1" } else { "0" };
     // A default `[]` of unknown kind takes the raw kind of the elements.
-    Int dk = lst_raw(et);
+    Int dk = lst_kind(et);
     List(Str) dl = if (dk > 0) { [r + "d = call ptr @resid_list_rawify(ptr " + d.val + f", i64 {dk})"] } else { [] };
     Str dv = if (dk > 0) { r + "d" } else { d.val };
     return lw_step(d, r, base.ty, d.lines.concat(dl).concat([r + " = call ptr @resid_map_list_push(ptr " + base.val + ", i8 " + own + f", i8 {kk}, i64 " + kw.val + ", ptr " + bx + ", ptr " + dv + ")"]), t);
@@ -2288,7 +2289,7 @@ GT lw_fixed_builder(LW w, Int id, GT base, Str m, List(Str) env) {
 // A list the runtime made with tagged words, as raw slots when its element
 // type has them (W1).
 GT lw_rawify(GT v, Str ety) {
-    Int k = lst_raw(ety);
+    Int k = lst_kind(ety);
     if (k == 0) { return v; }
     Int t = v.tmp + 1;
     Str r = f"%t{t}";
@@ -2345,7 +2346,8 @@ GT lw_builder(LW w, Int id, GT base, Str m, List(Str) env) {
     List(Str) l1 = a.lines.concat(lst_box_lines(et, a.val, t1));
     Int t2 = t1 + 3;
     Str reg = f"%t{t2}";
-    return lw_step(a, reg, base.ty, l1.concat([reg + " = call ptr @resid_listbuf_push(ptr " + base.val + ", ptr " + bx + ")"]), t2);
+    Str pf = if (lst_bytes(et)) { "@resid_bl_buf_push" } else { "@resid_listbuf_push" };
+    return lw_step(a, reg, base.ty, l1.concat([reg + " = call ptr " + pf + "(ptr " + base.val + ", ptr " + bx + ")"]), t2);
 }
 
 // Int and Str keys cross as words of their kind (1 / 4); others boxed.
@@ -2541,7 +2543,7 @@ GT lw_index(LW w, Int id, List(Str) env, GT c) {
     Bool inb = w.facts && lr_has_seg(w.rf.get(0 - id - 1) else { "" }, "inb");
     // A header record read shares itself, unless the read is a borrow
     // written back at the same index (lo_borrows).
-    Str get = if (lw_hdr_elem(w, ety) && !lo_is(w, id, 8)) { if (lo_is(w, id, 2)) { "@resid_list_get_own" } else { "@resid_list_get_sh" } } else { if (inb) { "@resid_list_get_nc" } else { "@resid_list_get" } };
+    Str get = if (lw_hdr_elem(w, ety) && !lo_is(w, id, 8)) { if (lo_is(w, id, 2)) { "@resid_list_get_own" } else { "@resid_list_get_sh" } } else { if (lst_bytes(ety)) { if (inb) { "@resid_bl_get_nc" } else { "@resid_bl_get" } } else { if (inb) { "@resid_list_get_nc" } else { "@resid_list_get" } } };
     List(Str) l1 = ixx.lines.concat([slot + " = call ptr " + get + "(ptr " + base.val + ", i64 " + ixx.val + ")"]).concat(lw_check_note(w, id, "bounds", inb));
     List(Str) l2 = lst_read_lines(ety, slot, t2, l1);
     return GT {.pos = 0, .val = ldr, .ty = ety, .cnt = 0, .err = "", .glines = ix.glines, .lines = l2, .tmp = t2 + 1, .lbl = ix.lbl, .tail = false};
@@ -3297,7 +3299,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
     }
     // A builder of raw slots (W1) carries its kind from the start.
     Str lbe = lw_want_arg(w.want, "ListBuf", 0);
-    Int lbk = if (lst_rec(w.fs, lbe) > 0) { 17 + lst_rec(w.fs, lbe) } else { lst_raw(lbe) };
+    Int lbk = if (lst_rec(w.fs, lbe) > 0) { 17 + lst_rec(w.fs, lbe) } else { lst_kind(lbe) };
     if (mk_lb && lbk > 0 && w.g.ns[id].nk == 0) {
         Int tk = c.tmp + 1;
         Str rk = f"%t{tk}";
@@ -4354,7 +4356,7 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
         Str rmk = if (w.lo.hdr.contains(strip_owned_cg(vty))) { gs2 + f" = call ptr @resid_rec_new(i64 {frw * 8}, i8 0)" } else { gs2 + f" = call ptr @resid_gmalloc(i64 {frw * 8})" };
         List(Str) fcnt = if (frw > 0) { [cnt + " = call i64 @resid_list_elems(ptr " + a.val + f", i64 {frw + 1})"] } else { [cnt + " = call i64 @resid_list_len(ptr " + a.val + ")"] };
         List(Str) fmk = if (lo_is(w, id, 16)) { ne_frame(gs2, frw, false) } else { [rmk] };
-        List(Str) fget = if (frw > 0) { [gs2 + "p = call ptr @resid_list_rec_at(ptr " + a.val + ", i64 " + iv + f", i64 {frw + 1})"].concat(fmk).concat(["call void @llvm.memmove.p0.p0.i64(ptr " + gs2 + ", ptr " + gs2 + f"p, i64 {frw * 8}, i1 false)"]) } else { [gs2 + " = call ptr " + (if (lw_hdr_elem(w, vty)) { "@resid_list_get_sh" } else { "@resid_list_get" }) + "(ptr " + a.val + ", i64 " + iv + ")"] };
+        List(Str) fget = if (frw > 0) { [gs2 + "p = call ptr @resid_list_rec_at(ptr " + a.val + ", i64 " + iv + f", i64 {frw + 1})"].concat(fmk).concat(["call void @llvm.memmove.p0.p0.i64(ptr " + gs2 + ", ptr " + gs2 + f"p, i64 {frw * 8}, i1 false)"]) } else { [gs2 + " = call ptr " + (if (lw_hdr_elem(w, vty)) { "@resid_list_get_sh" } else { if (lst_bytes(vty)) { "@resid_bl_get" } else { "@resid_list_get" } }) + "(ptr " + a.val + ", i64 " + iv + ")"] };
         List(Str) f10 = a.lines.concat([ixa + " = alloca i64", "store i64 0, ptr " + ixa, "br label %" + lbl_b2, lbl_b2 + ":", iv + " = load i64, ptr " + ixa]).concat(fcnt).concat([cc2 + " = icmp slt i64 " + iv + ", " + cnt, "br i1 " + cc2 + ", label %" + lbl_body2 + ", label %" + lbl_d2, lbl_body2 + ":"]).concat(fget);
         List(Str) f11 = lst_read_lines(vty, gs2, tloop, f10);
         ST gb2 = ST {.pos = 0, .dead = false, .err = "", .env = envl, .glines = a.glines, .hlines = g.hlines, .lines = f11, .tmp = tloop, .lbl = nlbl2, .rety = g.rety};
@@ -4672,7 +4674,8 @@ GT lw_list_with(LW w, Int id, GT base, List(Str) env) {
         List(Str) wl = lst_word_lines(ety, xv.val, tb);
         Str wv = if (lst_raw(ety) == 1 && ll_width_of(ety) == 64) { xv.val } else { f"%t{tb}w" };
         List(Str) wl2 = if (lst_raw(ety) == 1 && ll_width_of(ety) == 64) { [] } else { wl };
-        List(Str) ls3 = xv.lines.concat(wl2).concat([reg + " = call ptr @resid_list_set_w(ptr " + base.val + ", i8 " + own + ", i64 " + ix.val + ", i64 " + wv + ")"]);
+        Str swf = if (lst_bytes(ety)) { "@resid_bl_set" } else { "@resid_list_set_w" };
+        List(Str) ls3 = xv.lines.concat(wl2).concat([reg + " = call ptr " + swf + "(ptr " + base.val + ", i8 " + own + ", i64 " + ix.val + ", i64 " + wv + ")"]);
         return GT {.pos = 0, .val = reg, .ty = base.ty, .cnt = 0, .err = "", .glines = xv.glines, .lines = ls3, .tmp = t2, .lbl = xv.lbl, .tail = false};
     }
     if (sk != "" && ek == "") {
@@ -4725,7 +4728,7 @@ GT lw_list_run(LW w, Int id, GT base, Str m, List(Str) env) {
     Str sfx = if (rk > 0) { "_w" } else { "" };
     Str own = if (lo_is(w, id, 1) && lw_list_keepable(ety)) { "1" } else { "0" };
     Str fc = "@resid_list_fill" + sfx + "(ptr " + base.val + ", i8 " + own + ", i64 " + a.val + ", i64 " + b.val + ", " + wv + ")";
-    Str gc = "@resid_list_grow" + sfx + "(ptr " + base.val + ", i64 " + a.val + ", " + wv + f", i64 {rk})";
+    Str gc = "@resid_list_grow" + sfx + "(ptr " + base.val + ", i64 " + a.val + ", " + wv + f", i64 {lst_kind(ety)})";
     Str call = if (fill) { fc } else { gc };
     List(Str) ls = xv.lines.concat(vl).concat([reg + " = call ptr " + call]);
     return GT {.pos = 0, .val = reg, .ty = base.ty, .cnt = 0, .err = "", .glines = xv.glines, .lines = ls, .tmp = t2, .lbl = xv.lbl, .tail = false};
@@ -5483,12 +5486,12 @@ Bool lr_call_allocs(LW w, Str f, Str l) {
     // An owned list update writes in place (its first copy is moved out of
     // the region at the back edge like any carried list); a freeze writes
     // nothing.
-    if (f == "resid_list_with" || f == "resid_list_with_f" || f == "resid_list_with_fh" || f == "resid_list_with_fb" || f == "resid_list_with_i64" || f == "resid_list_with_bool" || f == "resid_list_with_f64" || f == "resid_list_set_w" || f == "resid_list_fill" || f == "resid_list_fill_w" || f == "resid_list_concat_own" || f == "resid_list_concat_own_f" || f == "resid_list_concat_own_fh") { return !str_contains(l, ", i8 1,"); }
+    if (f == "resid_list_with" || f == "resid_list_with_f" || f == "resid_list_with_fh" || f == "resid_list_with_fb" || f == "resid_list_with_i64" || f == "resid_list_with_bool" || f == "resid_list_with_f64" || f == "resid_list_set_w" || f == "resid_bl_set" || f == "resid_list_fill" || f == "resid_list_fill_w" || f == "resid_list_concat_own" || f == "resid_list_concat_own_f" || f == "resid_list_concat_own_fh") { return !str_contains(l, ", i8 1,"); }
     if (f == "resid_list_freeze") { return false; }
     // Appending a scalar to a list builds what the loop carries on (moved
     // out at the back edge anyway), not garbage.
-    if (f == "resid_list_push" || f == "resid_list_push_k" || f == "resid_list_push_own" || f == "resid_box_i64" || f == "resid_box_f64" || f == "resid_box_bool") { return false; }
-    return !lo_has_str(["llvm.sqrt.f64", "resid_bytes_be16", "resid_char_at_n", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_elems", "resid_list_get", "resid_list_get_nc", "resid_list_get_sh", "resid_list_get_own", "resid_list_share_f", "resid_list_get_v", "resid_list_vdata", "resid_list_vlen", "resid_list_rec_at", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
+    if (f == "resid_list_push" || f == "resid_list_push_k" || f == "resid_list_push_own" || f == "resid_bl_push_own" || f == "resid_box_i64" || f == "resid_box_f64" || f == "resid_box_bool") { return false; }
+    return !lo_has_str(["llvm.sqrt.f64", "resid_bytes_be16", "resid_char_at_n", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_elems", "resid_list_get", "resid_list_get_nc", "resid_bl_get", "resid_bl_get_nc", "resid_list_get_sh", "resid_list_get_own", "resid_list_share_f", "resid_list_get_v", "resid_list_vdata", "resid_list_vlen", "resid_list_rec_at", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
 }
 
 // Every exit returns a scalar, a loop parameter (an older value, or a
@@ -6144,7 +6147,7 @@ Bool ls_reads_only(Str l, List(Str) ls) {
         return ol_frame(ls, lw_sd_first(str_slice(l, k, str_len(l))));
     }
     if (str_contains(l, "@llvm.") && !str_contains(l, "@llvm.mem")) { return true; }
-    return lo_has_str(["@resid_list_rec_at(", "@resid_list_len(", "@resid_list_elems(", "@resid_list_get(", "@resid_list_get_nc(", "@resid_list_get_sh(", "@resid_overflow_check(", "@resid_assert(", "@resid_ol_check("], ls_callee(l), 0);
+    return lo_has_str(["@resid_list_rec_at(", "@resid_list_len(", "@resid_list_elems(", "@resid_list_get(", "@resid_list_get_nc(", "@resid_list_get_sh(", "@resid_bl_get(", "@resid_bl_get_nc(", "@resid_overflow_check(", "@resid_assert(", "@resid_ol_check("], ls_callee(l), 0);
 }
 
 // "@name(" of a call line.
