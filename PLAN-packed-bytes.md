@@ -84,10 +84,10 @@ verb inside a copy resolves through them (`compiler/mono.resid`).
 
 Done so far:
 
-- `lib/wire.resid`: `Wire` and `Session` carry `List(UInt(8))`
-  (plumbing behaviors; their only users were in this repository).
-  `lib/tlswire.resid` and `lib/tlsclient.resid` convert at that boundary;
-  their record layers are still `List(Int)`.
+- `lib/wire.resid`: `Session` (the event loop's transport, used only by
+  httpserv) carries `List(UInt(8))`; `lib/tlswire.resid` converts at that
+  boundary, its record layer still `List(Int)`. `Wire` stays `List(Int)`:
+  symbolon uses it generically, and changing it would break it.
 - `lib/httpserv.resid`: the loop's buffers, framing and parser are packed;
   `HttpRequest.body`, `HttpReply.body` and `HttpStep.out` stay `List(Int)`
   and are converted once. `http_text` is generic.

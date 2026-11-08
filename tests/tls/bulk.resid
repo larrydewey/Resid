@@ -14,7 +14,6 @@
 // connection has to be sealed under the next sequence number, not the
 // first one again.
 import "tlsclient.resid";
-import "word.resid";
 import "tlswire.resid";
 import "tlskey.resid";
 import "chain.resid";
@@ -41,7 +40,7 @@ HttpReply serve_reply(HttpRequest r) {
 }
 
 @requires(network, declassify)
-Str read_reply(TlsClient c, List(UInt(8)) acc, Int rounds) {
+Str read_reply(TlsClient c, List(Int) acc, Int rounds) {
     Str text = http_text(acc, 0, acc.len());
     if (str_index_of(text, "answer to /two", 0) >= 0 || rounds <= 0) { return text; }
     WireIn(TlsClient) in = wire_fill(c, acc, acc.len() + 1, 1048576);
@@ -96,7 +95,7 @@ Int main() {
         TlsDial d = tls_client_connect("localhost", port, tls_client_cfg("localhost", store, ["http/1.1"]));
         if (d.err != "") { println("DIAL-FAIL " + d.err); return 1; }
         List(Int) reqs = http_bytes("GET /one HTTP/1.1\r\nHost: localhost\r\n\r\nGET /two HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-        WireOut(TlsClient) sent = wire_send(d.conn, bytes_u8(reqs));
+        WireOut(TlsClient) sent = wire_send(d.conn, reqs);
         Str text = read_reply(sent.conn, [], 32);
         Int w = worker else { -1 };
         Bool one = str_index_of(text, "answer to /one", 0) >= 0;

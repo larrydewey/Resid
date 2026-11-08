@@ -182,8 +182,12 @@ type HsBuf(T) = { T conn; List(UInt(8)) data; Bool eof; };
 @needs(Wire(T))
 HsBuf(T) hs_fill(HsBuf(T) b, Int want, Int cap) {
     if (b.eof || b.data.len() >= want || b.data.len() > cap) { return b; }
-    WireIn(T) in = wire_fill(b.conn, b.data, want, cap);
-    HsBuf(T) out = HsBuf { .conn = in.conn, .data = in.data, .eof = in.eof };
+    // The transport fills a List(Int): only the new bytes are asked for,
+    // and packed onto the buffer.
+    Int have = b.data.len();
+    List(Int) none = [];
+    WireIn(T) in = wire_fill(b.conn, none, want - have, cap - have);
+    HsBuf(T) out = HsBuf { .conn = in.conn, .data = b.data.concat(bytes_u8(in.data)), .eof = in.eof };
     if (out.eof || out.data.len() >= want || out.data.len() > cap) { return out; }
     return hs_fill(out, want, cap);
 }
@@ -608,7 +612,7 @@ List(UInt(8)) hs_wire(HttpReply reply, Bool keep_alive, Bool head_only) {
 @requires(network(readonly))
 @needs(Wire(T))
 pub WireOut(T) http_send(T conn, List(Int) b) {
-    return wire_send(conn, bytes_u8(b));
+    return wire_send(conn, b);
 }
 
 // ─── Serving ────────────────────────────────────────────────────────────
@@ -641,14 +645,14 @@ Int hs_serve_at(T conn, HttpReply closure(HttpRequest) handler, HttpLimits lim, 
     HttpRequest r = rq.req;
     if (!r.ok) {
         if (r.status == 0) { return served; }
-        List(UInt(8)) body = hs_wire(http_reply_status(r.status), false, false);
+        List(Int) body = http_reply_wire(http_reply_status(r.status), false, false);
         _ = wire_deadline(rq.rest.conn, lim.reply_ms);
         _ = wire_send(rq.rest.conn, body);
         return served + 1;
     }
     HttpReply reply = handler(r);
     Bool keep = r.keep_alive && served + 1 < lim.requests_max;
-    List(UInt(8)) wire = hs_wire(reply, keep, r.method == "HEAD");
+    List(Int) wire = http_reply_wire(reply, keep, r.method == "HEAD");
     _ = wire_deadline(rq.rest.conn, lim.reply_ms);
     WireOut(T) sent = wire_send(rq.rest.conn, wire);
     if (!sent.ok || !keep) { return served + 1; }
@@ -767,10 +771,10 @@ HsFrame hs_chunks(List(UInt(8)) b, HsFrame f, HttpLimits lim) {
 /// above should make impossible.
 type HsMem = { Bool starved; };
 
-WireIn(HsMem) hs_mem_fill(HsMem m, List(UInt(8)) have, Int want, Int cap) {
+WireIn(HsMem) hs_mem_fill(HsMem m, List(Int) have, Int want, Int cap) {
     return WireIn { .conn = HsMem { .starved = true }, .data = have, .eof = true };
 }
-WireOut(HsMem) hs_mem_send(HsMem m, List(UInt(8)) b) { return WireOut { .conn = m, .ok = false }; }
+WireOut(HsMem) hs_mem_send(HsMem m, List(Int) b) { return WireOut { .conn = m, .ok = false }; }
 Bool hs_mem_close(HsMem m) { return true; }
 Bool hs_mem_deadline(HsMem m, Int ms) { return true; }
 

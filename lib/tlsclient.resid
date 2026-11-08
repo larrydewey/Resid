@@ -484,12 +484,12 @@ pub Int tc_at(List(Int) b, Int i) {
 // response bytes.
 
 @requires(network(readonly), declassify)
-WireIn(TlsClient) tls_fill(TlsClient c, List(UInt(8)) have, Int want, Int cap) {
+WireIn(TlsClient) tls_fill(TlsClient c, List(Int) have, Int want, Int cap) {
     return tls_fill_at(c, have, want, cap, 8);
 }
 
 @requires(network(readonly), declassify)
-WireIn(TlsClient) tls_fill_at(TlsClient c, List(UInt(8)) have, Int want, Int cap, Int rounds) {
+WireIn(TlsClient) tls_fill_at(TlsClient c, List(Int) have, Int want, Int cap, Int rounds) {
     Int n = have.len();
     if (n >= want || c.eof || rounds <= 0 || n > cap) {
         WireIn(TlsClient) out = WireIn { .conn = c, .data = have, .eof = c.eof };
@@ -506,7 +506,7 @@ WireIn(TlsClient) tls_fill_at(TlsClient c, List(UInt(8)) have, Int want, Int cap
 }
 
 @requires(network(readonly), declassify)
-WireIn(TlsClient) tls_fill_rec(TlsClient c, TsRec r, List(UInt(8)) have, Int want, Int cap, Int rounds) {
+WireIn(TlsClient) tls_fill_rec(TlsClient c, TsRec r, List(Int) have, Int want, Int cap, Int rounds) {
     TlsKeys k2 = tls_keys_rseq(c.keys, c.keys.rseq + 1);
     if (r.ctype != 23) {
         TlsClient next = TlsClient { .fd = c.fd, .keys = c.keys, .eof = c.eof, .buf = r.in.buf };
@@ -523,7 +523,7 @@ WireIn(TlsClient) tls_fill_rec(TlsClient c, TsRec r, List(UInt(8)) have, Int wan
     Int clen = pt.len() - 1;
     List(Int) content = pt[0..clen];
     if (inner == 23) {
-        List(UInt(8)) both = have.concat(bytes_u8(content));
+        List(Int) both = have.concat(content);
         WireIn(TlsClient) out = WireIn { .conn = stepped, .data = both, .eof = false };
         return out;
     }
@@ -536,12 +536,12 @@ WireIn(TlsClient) tls_fill_rec(TlsClient c, TsRec r, List(UInt(8)) have, Int wan
 }
 
 @requires(network(readonly), declassify)
-WireOut(TlsClient) tls_c_send(TlsClient c, List(UInt(8)) b) {
+WireOut(TlsClient) tls_c_send(TlsClient c, List(Int) b) {
     return tls_c_send_at(c, b, 0, true);
 }
 
 @requires(network(readonly), declassify)
-WireOut(TlsClient) tls_c_send_at(TlsClient c, List(UInt(8)) b, Int at, Bool ok) {
+WireOut(TlsClient) tls_c_send_at(TlsClient c, List(Int) b, Int at, Bool ok) {
     Int n = b.len();
     if (at >= n) {
         WireOut(TlsClient) out = WireOut { .conn = c, .ok = ok };
@@ -549,7 +549,7 @@ WireOut(TlsClient) tls_c_send_at(TlsClient c, List(UInt(8)) b, Int at, Bool ok) 
     }
     Int left = n - at;
     Int take = if (left > 16384) { 16384 } else { left };
-    List(Int) chunk = bytes_int(b[at..(at + take)]);
+    List(Int) chunk = b[at..(at + take)];
     List(Int) rec = tls_keys_protect(c.keys, chunk, 23);
     Bool wrote = resid_tcp_send_bin(c.fd, rec);
     TlsKeys k2 = tls_keys_wseq(c.keys, c.keys.wseq + 1);
@@ -634,7 +634,7 @@ pub HttpsGet tls_https_request(Str url, Str name, TrustStore store, List(Str) al
     if (d.err != "") { return https_failed(url + ": " + d.err); }
     Str clen = if (method == "GET" && body.len() == 0) { "" } else { f"Content-Length: {body.len()}\r\n" };
     List(Int) req = str_to_bytes(method + " " + path + " HTTP/1.1\r\nHost: " + hostport + "\r\nUser-Agent: resid\r\nAccept: */*\r\n" + headers + clen + "Connection: close\r\n\r\n").concat(body);
-    WireOut(TlsClient) sent = wire_send(d.conn, bytes_u8(req));
+    WireOut(TlsClient) sent = wire_send(d.conn, req);
     if (!sent.ok) {
         _ = wire_close(sent.conn);
         return https_failed("cannot send the request for " + url);
@@ -673,7 +673,7 @@ pub HttpsGet tls_https_request(Str url, Str name, TrustStore store, List(Str) al
     if (!hb.ok) {
         return https_failed(url + " declared " + f"{want}" + " bytes and sent " + f"{hb.body.len()}" + f" (the connection closed, or passed its {ms} ms deadline)");
     }
-    return HttpsGet { .status = status, .bytes = bytes_int(hb.body), .err = "", .head = head };
+    return HttpsGet { .status = status, .bytes = hb.body, .err = "", .head = head };
 }
 
 Str https_after_scheme(Str url) {
@@ -685,10 +685,10 @@ Str https_after_scheme(Str url) {
 /// A response head being scanned: its lines and the bytes after them.
 /// `done` is set at the blank line. `conn` is the connection after the
 /// records the scan read, so the body has to be read from it.
-type HeadScan = { TlsClient conn; List(Str) lines; List(UInt(8)) rest; Bool done; Bool overflow; };
+type HeadScan = { TlsClient conn; List(Str) lines; List(Int) rest; Bool done; Bool overflow; };
 
 @requires(network, declassify)
-HeadScan https_scan(TlsClient c, List(UInt(8)) acc, List(Str) lines, Bool done, Int rounds) {
+HeadScan https_scan(TlsClient c, List(Int) acc, List(Str) lines, Bool done, Int rounds) {
     HeadScan stop = HeadScan { .conn = c, .lines = lines, .rest = acc, .done = done, .overflow = false };
     if (done) { return stop; }
     if (rounds <= 0) { return HeadScan { .conn = c, .lines = lines, .rest = acc, .done = false, .overflow = true }; }
@@ -700,7 +700,7 @@ HeadScan https_scan(TlsClient c, List(UInt(8)) acc, List(Str) lines, Bool done, 
         return https_scan(in.conn, in.data, lines, done, rounds - 1);
     }
     Str line = https_text(acc, 0, nl);
-    List(UInt(8)) rest = acc[(nl + 2)..acc.len()];
+    List(Int) rest = acc[(nl + 2)..acc.len()];
     if (str_trim(line) == "") {
         return HeadScan { .conn = c, .lines = lines, .rest = rest, .done = true, .overflow = false };
     }
@@ -709,13 +709,13 @@ HeadScan https_scan(TlsClient c, List(UInt(8)) acc, List(Str) lines, Bool done, 
 
 /// A response body read by its declared length.
 /// `ok` is false when the connection ended before the whole body arrived.
-type HeadBytes = { List(UInt(8)) body; Bool ok; };
+type HeadBytes = { List(Int) body; Bool ok; };
 
 // The body, by the length the head declared. A response that ends first is
 // a failure, not a short archive: the caller checks a hash either way, but
 // saying "arrived short" names what happened.
 @requires(network, declassify)
-HeadBytes https_body(TlsClient c, List(UInt(8)) acc, Int want) {
+HeadBytes https_body(TlsClient c, List(Int) acc, Int want) {
     if (want <= 0) {
         HeadBytes empty_body = HeadBytes { .body = [], .ok = true };
         return empty_body;
@@ -732,7 +732,7 @@ HeadBytes https_body(TlsClient c, List(UInt(8)) acc, Int want) {
     return https_body(in.conn, in.data, want);
 }
 
-Int https_crlf(List(UInt(8)) b, Int at) {
+Int https_crlf(List(Int) b, Int at) {
     if (at + 1 >= b.len()) { return -1; }
     if (b[at] == 13 && b[at + 1] == 10) { return at; }
     return https_crlf(b, at + 1);
@@ -740,13 +740,13 @@ Int https_crlf(List(UInt(8)) b, Int at) {
 
 // Bytes [i, e) as text; a malformed sequence decodes to U+FFFD, because a
 // broken header line is a failed parse, not a crash.
-Str https_text(List(UInt(8)) b, Int i, Int e) {
+Str https_text(List(Int) b, Int i, Int e) {
     return https_dec_at(b, i, e, StrBuf());
 }
 
-Str https_dec_at(List(UInt(8)) b, Int i, Int e, StrBuf acc) {
+Str https_dec_at(List(Int) b, Int i, Int e, StrBuf acc) {
     if (i >= e) { return acc.finish(); }
-    Int c = (Int) b[i];
+    Int c = b[i];
     if (c < 128) { return https_dec_at(b, i + 1, e, acc.push_char(c)); }
     if (c < 194) { return https_dec_at(b, i + 1, e, acc.push_char(65533)); }
     Int n = if (c < 224) { 2 } else { if (c < 240) { 3 } else { 4 } };
@@ -758,10 +758,10 @@ Str https_dec_at(List(UInt(8)) b, Int i, Int e, StrBuf acc) {
 
 // The continuation bytes of one sequence, packed as codepoint * 8 +
 // bytes consumed, or -1 if any byte is missing or malformed.
-Int https_tail(List(UInt(8)) b, Int i, Int e, Int n, Int cp) {
+Int https_tail(List(Int) b, Int i, Int e, Int n, Int cp) {
     if (n <= 0) { return cp * 8 + 1; }
     if (i >= e) { return -1; }
-    Int d = (Int) b[i];
+    Int d = b[i];
     if (d < 128 || d > 191) { return -1; }
     Int rest = https_tail(b, i + 1, e, n - 1, (cp << 6) | (d & 63));
     if (rest < 0) { return -1; }

@@ -20,8 +20,9 @@
 // a record counter on every read and every write, and there is no interior
 // mutability to put it in.
 //
-// Bytes on a connection are packed, List(UInt(8)) (one byte per element):
-// a request or reply crosses the loop without being widened to words.
+// A Session's bytes are packed, List(UInt(8)) (one byte per element), so
+// a request or reply crosses the event loop without being widened to
+// words; Wire keeps List(Int).
 
 import "crypto.resid";
 
@@ -29,7 +30,7 @@ import "crypto.resid";
 /// transport. The transport is advanced past whatever it consumed; on TLS
 /// that is records, answered with decrypted application data. `eof` is set
 /// when the peer is done.
-type WireIn(T) = { T conn; List(UInt(8)) data; Bool eof; };
+type WireIn(T) = { T conn; List(Int) data; Bool eof; };
 
 /// What a send produced: the transport with its write side advanced, and
 /// whether every byte went out.
@@ -41,9 +42,9 @@ type WireOut(T) = { T conn; Bool ok; };
 behavior Wire(T) {
     // Add plaintext until `have` holds at least `want` bytes, the peer
     // is done, or the total would pass `cap`.
-    WireIn(T) wire_fill(T w, List(UInt(8)) have, Int want, Int cap);
+    WireIn(T) wire_fill(T w, List(Int) have, Int want, Int cap);
     // Write every byte of `b`, in whatever pieces the transport needs.
-    WireOut(T) wire_send(T w, List(UInt(8)) b);
+    WireOut(T) wire_send(T w, List(Int) b);
     // End the connection, leaving nothing unsent.
     Bool wire_close(T w);
     // Make every read end `ms` from now (0 clears); see resid_tcp_deadline.
@@ -106,7 +107,7 @@ pub PlainCfg plain_cfg() {
 }
 
 @requires(network(readonly))
-WireIn(Int) plain_fill(Int fd, List(UInt(8)) have, Int want, Int cap) {
+WireIn(Int) plain_fill(Int fd, List(Int) have, Int want, Int cap) {
     Int room = if (cap > have.len()) { cap - have.len() } else { 0 };
     Int ask = if (room > 16384) { 16384 } else { room };
     if (ask <= 0) {
@@ -117,15 +118,15 @@ WireIn(Int) plain_fill(Int fd, List(UInt(8)) have, Int want, Int cap) {
     // *exactly* n bytes and zero-pads the rest, which is right when the
     // length is already known and wrong here, where the bytes arriving are
     // whatever the peer chose to send.
-    List(UInt(8)) more = resid_tcp_recv_some_u8(fd, ask);
-    List(UInt(8)) both = have.concat(more);
+    List(Int) more = resid_tcp_recv_some(fd, ask);
+    List(Int) both = have.concat(more);
     Bool done = more.len() == 0;
     WireIn(Int) out = WireIn { .conn = fd, .data = both, .eof = done };
     return out;
 }
 
 @requires(network(readonly))
-WireOut(Int) plain_send(Int fd, List(UInt(8)) b) {
+WireOut(Int) plain_send(Int fd, List(Int) b) {
     Bool ok = plain_send_at(fd, b, 0);
     WireOut(Int) out = WireOut { .conn = fd, .ok = ok };
     return out;
@@ -134,7 +135,7 @@ WireOut(Int) plain_send(Int fd, List(UInt(8)) b) {
 // Write in pieces the runtime accepts (1 MiB), so a large artifact is not
 // one call the socket will refuse.
 @requires(network(readonly))
-Bool plain_send_at(Int fd, List(UInt(8)) b, Int at) {
+Bool plain_send_at(Int fd, List(Int) b, Int at) {
     Int n = b.len() - at;
     if (n <= 0) { return true; }
     Int take = if (n > 1048576) { 1048576 } else { n };
@@ -157,7 +158,7 @@ Bool plain_close(Int fd) {
 @requires(network(readonly))
 Int plain_drain(Int fd, Int rounds) {
     if (rounds <= 0) { return 0; }
-    List(UInt(8)) got = resid_tcp_recv_some_u8(fd, 16384);
+    List(Int) got = resid_tcp_recv_some(fd, 16384);
     if (got.len() == 0) { return 0; }
     Int nr = rounds - 1;
     return plain_drain(fd, nr);

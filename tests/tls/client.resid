@@ -9,7 +9,6 @@
 // reads with the server's application traffic secret and writes with its
 // own, and getting that backwards still completes the handshake.
 import "tlsclient.resid";
-import "word.resid";
 import "tlswire.resid";
 import "tlskey.resid";
 import "chain.resid";
@@ -68,7 +67,7 @@ Int main() {
     }
     println("DIAL-OK alpn=" + d.conn.keys.alpn);
     List(Int) req = http_bytes("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-    WireOut(TlsClient) sent = wire_send(d.conn, bytes_u8(req));
+    WireOut(TlsClient) sent = wire_send(d.conn, req);
     if (!sent.ok) { println("SEND-FAIL"); return 1; }
     WireIn(TlsClient) in = wire_fill(sent.conn, [], 64, 65536);
     if (in.eof && in.data.len() == 0) { println("READ-FAIL"); return 1; }

@@ -54,12 +54,12 @@ pub TlsCfg tls_cfg(ServerKey key, List(List(Int)) chain, List(Str) alpn) {
 // arrived without being asked for. A record that fails its tag ends the
 // connection -- it is not a request, and it is not an empty one either.
 @requires(network(readonly), declassify)
-WireIn(TlsConn) tls_fill(TlsConn c, List(UInt(8)) have, Int want, Int cap) {
+WireIn(TlsConn) tls_fill(TlsConn c, List(Int) have, Int want, Int cap) {
     return tls_fill_at(c, have, want, cap, 8);
 }
 
 @requires(network(readonly), declassify)
-WireIn(TlsConn) tls_fill_at(TlsConn c, List(UInt(8)) have, Int want, Int cap, Int rounds) {
+WireIn(TlsConn) tls_fill_at(TlsConn c, List(Int) have, Int want, Int cap, Int rounds) {
     Int n = have.len();
     if (n >= want || c.eof || rounds <= 0 || n > cap) {
         return WireIn { .conn = c, .data = have, .eof = c.eof };
@@ -74,7 +74,7 @@ WireIn(TlsConn) tls_fill_at(TlsConn c, List(UInt(8)) have, Int want, Int cap, In
 }
 
 @requires(network(readonly), declassify)
-WireIn(TlsConn) tls_fill_rec(TlsConn c, TsRec r, List(UInt(8)) have, Int want, Int cap, Int rounds) {
+WireIn(TlsConn) tls_fill_rec(TlsConn c, TsRec r, List(Int) have, Int want, Int cap, Int rounds) {
     TlsKeys k2 = tls_keys_rseq(c.keys, c.keys.rseq + 1);
     if (r.ctype != 23) {
         TlsConn next = TlsConn { .fd = c.fd, .keys = c.keys, .eof = c.eof, .buf = r.in.buf };
@@ -90,7 +90,7 @@ WireIn(TlsConn) tls_fill_rec(TlsConn c, TsRec r, List(UInt(8)) have, Int want, I
     Int clen = pt.len() - 1;
     List(Int) content = pt[0..clen];
     if (inner == 23) {
-        List(UInt(8)) both = have.concat(bytes_u8(content));
+        List(Int) both = have.concat(content);
         return WireIn { .conn = stepped, .data = both, .eof = false };
     }
     if (inner == 21) {
@@ -106,19 +106,19 @@ WireIn(TlsConn) tls_fill_rec(TlsConn c, TsRec r, List(UInt(8)) have, Int want, I
 // its own sequence number (RFC 8446 §5.1): a reply larger than a record
 // is ordinary -- a static file is -- so this splits rather than refusing.
 @requires(network(readonly), declassify)
-WireOut(TlsConn) tls_send(TlsConn c, List(UInt(8)) b) {
+WireOut(TlsConn) tls_send(TlsConn c, List(Int) b) {
     return tls_send_at(c, b, 0, true);
 }
 
 @requires(network(readonly), declassify)
-WireOut(TlsConn) tls_send_at(TlsConn c, List(UInt(8)) b, Int at, Bool ok) {
+WireOut(TlsConn) tls_send_at(TlsConn c, List(Int) b, Int at, Bool ok) {
     Int n = b.len();
     if (at >= n) {
         return WireOut { .conn = c, .ok = ok };
     }
     Int left = n - at;
     Int take = if (left > 16384) { 16384 } else { left };
-    List(Int) chunk = bytes_int(b[at..(at + take)]);
+    List(Int) chunk = b[at..(at + take)];
     List(Int) rec = tls_keys_protect(c.keys, chunk, 23);
     Bool wrote = resid_tcp_send_bin(c.fd, rec);
     TlsKeys k2 = tls_keys_wseq(c.keys, c.keys.wseq + 1);
