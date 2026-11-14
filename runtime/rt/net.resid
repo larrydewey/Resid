@@ -708,9 +708,22 @@ pub Int rt_tcp_send_bin(Int fd, Int l) {
 }
 
 pub Int bytes_of(Int l, Int buf, Int i, Int n) {
+    // A flat list of raw slots (what a builder or a receive makes) is read
+    // straight from its words; n never passes its length.
+    if (i < n && lraw(l) && lflat(l) && n <= lcount(l)) { return low_bytes(lroot(l) + 24, buf, i, n); }
+    return bytes_of_at(l, buf, i, n);
+}
+
+Int low_bytes(Int w, Int buf, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st8(buf + i, ld64(w + i * 8) & 255);
+    return low_bytes(w, buf, i + 1, n);
+}
+
+Int bytes_of_at(Int l, Int buf, Int i, Int n) {
     if (i >= n) { return 0; }
     _ = st8(buf + i, slot_int(l, c_list_get(l, i)) & 255);
-    return bytes_of(l, buf, i + 1, n);
+    return bytes_of_at(l, buf, i + 1, n);
 }
 
 // Exactly n bytes (at most 1 MB) as a List(Int); bytes after EOF or an
