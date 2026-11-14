@@ -161,3 +161,40 @@ cd bench/suite
 ```
 
 `./bench.py run --size small` takes a few minutes.
+
+## Are We Fast Yet
+
+The Benchmarks Game programs are mostly numeric loops. The fourteen
+[Are We Fast Yet](https://github.com/smarr/are-we-fast-yet) programs
+(Marr et al., DLS 2016) instead exercise objects, collections, recursion
+and allocation: DeltaBlue, Richards, Json, CD, Havlak and nine smaller
+ones. Every port follows the AWFY guidelines; the C++, Java, JavaScript
+and Python ports are upstream's, unchanged. The generated report is
+[`docs/BENCHMARKS-v2.md`](https://github.com/larrydewey/Resid/blob/master/docs/BENCHMARKS-v2.md);
+the rules are in [`bench/v2/CONTRACT.md`](https://github.com/larrydewey/Resid/blob/master/bench/v2/CONTRACT.md).
+
+**In one line:** here Resid is not ahead. In runtime mode (inputs hidden
+from every compiler) its geometric mean is 1.58× C++, sixth of eight,
+ahead of JavaScript (2.02×) and Python (44.9×) and behind Rust (1.03×),
+Java (1.16×), C (1.26×) and Go (1.31×).
+
+- **Fastest or level:** Storage (0.50× C++; only Java is faster),
+  Mandelbrot (0.94×), NBody (0.99×), Json (1.01×), List (1.06×).
+- **Slowest of the compiled languages:** Queens (3.6×), Sieve (2.8×),
+  Bounce (2.8×), DeltaBlue (2.8×), CD (2.4×), Permute (2.2×) and
+  Richards (1.9×). These are the programs that rewrite lists and records
+  in place; Resid's values are immutable, and the gap is the copies and
+  checks that ownership has not yet removed (`PLAN-awfy-close.md`).
+
+Read these with more care than the numbers above: they were measured on
+a shared 4-vCPU cloud machine (Intel Xeon, 2.10 GHz), not the machine
+above, so two runs of the same binary differ by 10-30% on some programs;
+Zig and C# had no toolchain there and are missing.
+
+```sh
+cd bench/v2
+./bench2.py build && ./bench2.py env
+./bench2.py run --mode runtime && ./bench2.py run --lang resid --mode as-written
+./bench2.py guard                  # time per iteration follows the work
+./bench2.py report                 # docs/BENCHMARKS-v2.md
+```

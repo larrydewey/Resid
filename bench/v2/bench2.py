@@ -172,9 +172,17 @@ def cmd_report(args):
     W.append(f"Machine: {env.get('cpu_model', '?')}, governor {env.get('governor', '?')}, "
              f"Resid {env.get('resid_commit', '?')[:12]}. Steady state = median of the last half "
              "of the outer iterations, in milliseconds; ratio = language / C++ (lower is faster).\n")
+    W.append(f"Cores / threads: {env.get('cpu_cores', '?')} / {env.get('cpu_threads', '?')}; "
+             f"runs pinned to one core. Measured {env.get('date', '?')}.\n")
+    unbuilt = [LANG_NAMES[l] for l in LANGS
+               if not any(k[0] == l for k in lt) and builds.get(f"{l}/portable", {}).get("ok") is False]
+    if unbuilt:
+        W.append(f"Not measured (the build failed on this machine, usually a missing toolchain): "
+                 f"{', '.join(unbuilt)}.\n")
     for mode in ("runtime", "as-written"):
         rows = []
         ratios = {l: [] for l in langs}
+        folded = {l: 0 for l in langs}
         for bench, _ in BENCHES:
             ref = lt.get((REF, bench, "runtime"))
             refv = steady(ref) if ref else None
@@ -185,9 +193,15 @@ def cmd_report(args):
                 if v is None:
                     row.append("—")
                     continue
+                if v == 0:
+                    # Evaluated whole at build time (as-written): no run-time
+                    # cost to compare, so no ratio and not in the mean.
+                    row.append("folded")
+                    folded[l] += 1
+                    continue
                 row.append(f"{v / 1000:.1f}" + (f" ({v / refv:.2f}×)" if refv else ""))
                 if refv:
-                    ratios[l].append(v / refv)
+                    ratios[l].append((bench, v / refv))
             rows.append(row)
         if not any(ratios.values()):
             continue
@@ -199,9 +213,14 @@ def cmd_report(args):
         for row in rows:
             W.append("| " + " | ".join(row) + " |")
         W.append("| **geomean ratio** | " + " | ".join(
-            (f"**{b1.geomean(ratios[l]):.2f}×**" if ratios[l] else "—") for l in langs) + " |")
+            (f"**{b1.geomean([x for _, x in ratios[l]]):.2f}×**" if ratios[l] else "—") for l in langs) + " |")
+        if any(folded.values()):
+            W.append("\n" + "; ".join(f"{LANG_NAMES[l]} folds {folded[l]} of {folded[l] + len(ratios[l])} "
+                                      f"benchmarks at build time, and its mean is over the other {len(ratios[l])}"
+                                      for l in langs if folded[l]) + ": not comparable with the "
+                     "runtime-mode means, nor with languages whose mean covers every benchmark.\n")
         if mode == "runtime" and ratios.get("resid"):
-            losses = [b for (b, _), x in zip(BENCHES, ratios["resid"]) if x > 1.0]
+            losses = [b for b, x in ratios["resid"] if x > 1.0]
             W.append(f"\nResid is slower than C++ on {len(losses)} of {len(ratios['resid'])} "
                      f"benchmarks: {', '.join(losses)}.\n")
     if builds:
