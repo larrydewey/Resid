@@ -1,0 +1,112 @@
+// A ListBuf whose buffer is the newest block of its region grows in place
+// (lb_extend); any other grows by copying. Both must keep every element,
+// and nothing allocated after a buffer may be overwritten by its growth.
+
+type Pair = { Int a; Int b; };
+
+// The buffer stays the newest block: grows in place each time.
+ListBuf(Int) ints(Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc; }
+    return ints(i + 1, n, acc.push(i * 3));
+}
+
+// A string is made between pushes: the buffer is no longer the newest
+// block, so it grows by copying; the strings must survive.
+ListBuf(Str) strs(Int i, Int n, ListBuf(Str) acc) {
+    if (i >= n) { return acc; }
+    Str s = f"s{i}";
+    return strs(i + 1, n, acc.push(s));
+}
+
+// Two builders growing in turn: neither stays the newest block for long.
+type Two = { List(Int) x; List(Int) y; };
+
+Two two(Int i, Int n, ListBuf(Int) x, ListBuf(Int) y) {
+    if (i >= n) { return Two {.x = x.finish(), .y = y.finish()}; }
+    return two(i + 1, n, x.push(i), y.push(0 - i));
+}
+
+// Inline records: push_rec grows by whole records.
+ListBuf(Pair) recs(Int i, Int n, ListBuf(Pair) acc) {
+    if (i >= n) { return acc; }
+    return recs(i + 1, n, acc.push(Pair {.a = i, .b = i * i}));
+}
+
+Int sum(List(Int) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return sum(xs, i + 1, acc + xs[i]);
+}
+
+Int sum_p(List(Pair) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return sum_p(xs, i + 1, acc + xs[i].a + xs[i].b);
+}
+
+Int strs_ok(List(Str) xs, Int i) {
+    if (i >= xs.len()) { return 1; }
+    if (xs[i] != f"s{i}") { return 0; }
+    return strs_ok(xs, i + 1);
+}
+
+// A list built, then an owned update loop over it, many times over: each
+// round's builder starts where the last round's memory was.
+Int rounds(Int r, Int acc) {
+    if (r >= 30) { return acc; }
+    List(Int) xs = ints(0, 700 + r, ListBuf()).finish();
+    List(Bool) fl = flags(0, 500, ListBuf()).finish();
+    return rounds(r + 1, acc + sum(xs, 0, 0) + count(clear(fl, 2), 0, 0));
+}
+
+ListBuf(Bool) flags(Int i, Int n, ListBuf(Bool) acc) {
+    if (i >= n) { return acc; }
+    return flags(i + 1, n, acc.push(true));
+}
+
+List(Bool) clear(List(Bool) fl, Int k) {
+    if (k >= fl.len()) { return fl; }
+    return clear(fl.with(k, false), k + 2);
+}
+
+Int count(List(Bool) fl, Int i, Int acc) {
+    if (i >= fl.len()) { return acc; }
+    return count(fl, i + 1, if (fl[i]) { acc + 1 } else { acc });
+}
+
+// The same work as a checksum, pure: run inside a for loop's body, as
+// AWFY's harness does, each iteration has a scope region, where buffers
+// grow in place. Outside any region (main) they are heap memory and copy.
+Int check() {
+    List(Int) a = ints(0, 100000, ListBuf()).finish();
+    Str after = f"after {a.len()}";
+    List(Int) b = ints(0, 5000, ListBuf()).finish();
+    List(Str) s = strs(0, 3000, ListBuf()).finish();
+    Two t = two(0, 4000, ListBuf(), ListBuf());
+    List(Pair) p = recs(0, 2500, ListBuf()).finish();
+    return sum(a, 0, 0) + str_len(after) + sum(b, 0, 0) + a[12345] + s.len() * strs_ok(s, 0)
+        + sum(t.x, 0, 0) - sum(t.y, 0, 0) + sum_p(p, 0, 0) + rounds(0, 0);
+}
+
+pub Bool in_regions(Int reps, Int want) {
+    for (Int i in 0..reps) {
+        if (check() != want) { return false; }
+    }
+    return true;
+}
+
+Int main() {
+    List(Int) a = ints(0, 100000, ListBuf()).finish();
+    Str after = f"after {a.len()}";
+    List(Int) b = ints(0, 5000, ListBuf()).finish();
+    println(f"{a.len()} {a[0]} {a[99999]} {sum(a, 0, 0)} {after}");
+    println(f"{b.len()} {b[4999]} {sum(b, 0, 0)} {a[12345]}");
+    List(Str) s = strs(0, 3000, ListBuf()).finish();
+    println(f"{s.len()} {s[0]} {s[2999]} {strs_ok(s, 0)}");
+    Two t = two(0, 4000, ListBuf(), ListBuf());
+    println(f"{t.x.len()} {sum(t.x, 0, 0)} {t.y.len()} {sum(t.y, 0, 0)}");
+    List(Pair) p = recs(0, 2500, ListBuf()).finish();
+    println(f"{p.len()} {p[2499].a} {p[2499].b} {sum_p(p, 0, 0)}");
+    println(f"{rounds(0, 0)}");
+    Int c = check();
+    println(f"{c} {in_regions(3, c)}");
+    return 0;
+}

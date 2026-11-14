@@ -339,6 +339,19 @@ pub Int rt_gfree(Int p) {
     return c_free(p);
 }
 
+// A block of `old` bytes at p grown by `add` bytes where it lies: only
+// when it is the last block of the innermost region's current page run
+// (it ends at the bump pointer), so the bytes it takes were never handed
+// out. Both sizes are multiples of 16, as scope_alloc rounds them.
+// Returns whether it grew; the caller copies otherwise.
+pub Bool scope_extend(Int p, Int old, Int add) {
+    Int top = ag(6);
+    if (ag(4) == 0 || top == 0 || add < 0 || p + old != top) { return false; }
+    if (!ult(p - ag(5), ag(7) - ag(5)) || ag(7) - top < add) { return false; }
+    _ = as_(6, top + add) + as_(2, ag(2) + add);
+    return true;
+}
+
 // resid_alloc: scope, then arena, then heap.
 @export("resid_rt_alloc", "ptr(i64)")
 pub Int rt_alloc_x(Int size) {

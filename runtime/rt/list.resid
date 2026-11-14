@@ -550,7 +550,9 @@ pub Int rt_listbuf_push_rec(Int l, Int r, Int w) {
 @cold
 @slowpath
 Int lb_grow_to(Int l, Int f, Int n, Int need) {
-    Int nf = flat_new(max(need, n * 2));
+    Int cap = max(need, n * 2);
+    if (lb_extend(f, cap)) { return f; }
+    Int nf = flat_new(cap);
     _ = if (n > 0) { mcopy(nf + 24, f + 24, n * 8) } else { 0 };
     return st64(l + 16, nf) * 0 + nf;
 }
@@ -558,9 +560,23 @@ Int lb_grow_to(Int l, Int f, Int n, Int need) {
 @cold
 @slowpath
 Int lb_grow(Int l, Int f, Int n) {
-    Int nf = flat_new(if (n < 4) { 8 } else { n * 2 });
+    Int cap = if (n < 4) { 8 } else { n * 2 };
+    if (lb_extend(f, cap)) { return f; }
+    Int nf = flat_new(cap);
     _ = if (n > 0) { mcopy(nf + 24, f + 24, n * 8) } else { 0 };
     return st64(l + 16, nf) * 0 + nf;
+}
+
+// A builder's buffer that is the newest block of its region grows in
+// place to cap slots: nothing else holds it (a builder is used once), and
+// the bytes past it were never handed out (scope_extend). A grown builder
+// otherwise moves to a new buffer, copying what it holds.
+Bool lb_extend(Int f, Int cap) {
+    if (f == 0 || cap > 1152921504606846972) { return false; }
+    Int old = (24 + ld64(f + 8) * 8 + 15) & (0 - 16);
+    Int nw = (24 + cap * 8 + 15) & (0 - 16);
+    if (!scope_extend(f, old, nw - old)) { return false; }
+    return st64(f + 8, cap) * 0 == 0;
 }
 
 @export("resid_listbuf_finish", "ptr(ptr,ptr)")
