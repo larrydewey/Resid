@@ -95,19 +95,20 @@ pub Int rt_fmt_group(Int s) {
     Int nd = grp_int_digits(s, st, n, 0);
     if (nd < 4) { return s; }
     Int buf = xmalloc(n + nd / 3 + 2);
-    return grp_copy(s, st, n, nd, buf, buf);
+    return grp_copy(s, 0, n, nd, buf, buf);
 }
 
-// `left`: digits of the integer part still to write, this one included.
-// A separator follows this digit when some whole number of groups of
-// three would still be left, which is what makes the count right without
-// having measured the text twice.
+// Every byte is copied (the sign, the fraction, an exponent); `left`
+// counts the integer part's digits still to write, this one included. A
+// separator follows such a digit when some whole number of groups of three
+// would still be left, which makes the count right without measuring the
+// text twice.
 Int grp_copy(Int s, Int i, Int n, Int left, Int buf, Int out) {
     if (i >= n) { return st8(out, 0) * 0 + buf; }
     Int c = ld8(s + i);
     Int d = c - 48;
     Bool digit = (d >= 0 && d <= 9) && left > 0;
-    Int o1 = if (digit) { st8(out, c) * 0 + out + 1 } else { out };
+    Int o1 = st8(out, c) * 0 + out + 1;
     Int l1 = if (digit) { left - 1 } else { left };
     Bool more = digit && l1 > 0 && l1 % 3 == 0;
     Int o2 = if (more) { st8(o1, 44) * 0 + o1 + 1 } else { o1 };

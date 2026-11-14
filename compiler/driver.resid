@@ -10097,7 +10097,7 @@ List(Str) own_names_more_n(Kg lgi, Int unit, Funcs fs, List(Str) omw, List(Str) 
 
 /// The release this compiler is, as `residc --version` prints it. Bumped
 /// in the commit that a release tag (vX.Y.Z) points at.
-Str resid_version() { return "0.8.1"; }
+Str resid_version() { return "0.8.2"; }
 
 @requires(args)
 Str pick_opt(Int i, Str flag, Str acc) {

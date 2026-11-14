@@ -1,0 +1,16 @@
+// `group` keeps the sign and the fraction (spec §14): the runtime's
+// resid_fmt_group once copied only the integer digits, so -1234 read
+// "1,234" and 1234567.25 read "1,234,567". The first line folds at compile
+// time; the second has values only known at run time.
+@requires(filesystem(readonly))
+Int main() {
+    println(f"[{-1234:group}] [{-1234:group, plus}] [{1234567:group}] [{-1234567:group, zero, width 12}] [{-999:group}] [{1234567.25:group}] [{-1234.5:group}]");
+    Int k = str_len(filesystem.read_all("@TMP@/in.txt"));
+    Int one = k / k;
+    Int a = 0 - 1234 * one;
+    Int b = 1234567 * one;
+    Float f = 1234567.25 * (Float)one;
+    Float g = 0.0 - 1234.5 * (Float)one;
+    println(f"[{a:group}] [{a:group, plus}] [{b:group}] [{(0 - b):group, zero, width 12}] [{(0 - 999 * one):group}] [{f:group}] [{g:group}] [{b:group, plus}] [{(0 - b):group, space}]");
+    return 0;
+}
