@@ -66,8 +66,16 @@ Bool next_cased(Int nx) {
     return next_cased(nx + nl);
 }
 
+// ASCII maps by itself in both directions (no table entry or special
+// casing starts below U+0080): a run of it is copied with A-Z / a-z
+// shifted, without decoding.
 Int lower_at(Int s, Int p, Int w) {
-    if (ld8(p) == 0) { return w; }
+    Int b = ld8(p);
+    if (b == 0) { return w; }
+    if (b < 128) {
+        _ = st8(w, if (b >= 65 && b <= 90) { b + 32 } else { b });
+        return lower_at(s, p + 1, w + 1);
+    }
     Int len = utf8_len_at(p);
     Int cp = utf8_decode(p, len);
     Int m = if (cp == 931) { if (prev_cased(s, p) && !next_cased(p + len)) { 962 } else { 963 } } else { case_simple(cp, true) };
@@ -83,7 +91,12 @@ pub Int rt_str_to_lower(Int s) {
 }
 
 Int upper_at(Int p, Int w) {
-    if (ld8(p) == 0) { return w; }
+    Int b = ld8(p);
+    if (b == 0) { return w; }
+    if (b < 128) {
+        _ = st8(w, if (b >= 97 && b <= 122) { b - 32 } else { b });
+        return upper_at(p + 1, w + 1);
+    }
     Int len = utf8_len_at(p);
     Int cp = utf8_decode(p, len);
     Int sp = special_upper(cp);

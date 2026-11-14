@@ -269,11 +269,19 @@ ListBuf(B) tlsg_xor_seq(List(B) iv, Int seq, Int i, ListBuf(B) acc) {
 /// goes on the wire; the outer type is 23 for every protected record.
 @needs(Word(W, B), Block128(X, W, B), TlsPublish(B))
 pub List(Int) tlsg_protect(Int seq, List(B) key, List(B) iv, List(Int) content, Int inner_type) {
-    List(Int) pt = content.concat([inner_type]);
-    List(Int) hdr = tls_record_header2(23, pt.len() + 16);
+    List(Int) hdr = tls_record_header2(23, content.len() + 17);
     ListBuf(B) pb = ListBuf();
-    List(B) sealed = aes_gcmg_seal_ivb(key, tlsg_record_nonce(iv, seq), w_lift_bytes(pt, 0, pb), hdr);
+    List(B) sealed = aes_gcmg_seal_ivb(key, tlsg_record_nonce(iv, seq), tlsg_inner(content, inner_type, 0, pb), hdr);
     return hdr.concat(tlsp_record(sealed));
+}
+
+// TLSInnerPlaintext: the public `content` lifted to B, then the type byte,
+// built in one pass.
+@needs(Word(W, B))
+List(B) tlsg_inner(List(Int) content, Int inner_type, Int i, ListBuf(B) acc) {
+    if (i >= content.len()) { return acc.push(b_lift(inner_type)).finish(); }
+    B b = b_lift(content[i]);
+    return tlsg_inner(content, inner_type, i + 1, acc.push(b));
 }
 
 /// The inner plaintext of one protected record (content-type byte still

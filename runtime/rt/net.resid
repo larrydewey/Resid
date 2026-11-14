@@ -708,9 +708,22 @@ pub Int rt_tcp_send_bin(Int fd, Int l) {
 }
 
 pub Int bytes_of(Int l, Int buf, Int i, Int n) {
+    // A flat list of raw slots (what a builder or a receive makes) is read
+    // straight from its words; n never passes its length.
+    if (i < n && lraw(l) && lflat(l) && n <= lcount(l)) { return low_bytes(lroot(l) + 24, buf, i, n); }
+    return bytes_of_at(l, buf, i, n);
+}
+
+Int low_bytes(Int w, Int buf, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st8(buf + i, ld64(w + i * 8) & 255);
+    return low_bytes(w, buf, i + 1, n);
+}
+
+Int bytes_of_at(Int l, Int buf, Int i, Int n) {
     if (i >= n) { return 0; }
     _ = st8(buf + i, slot_int(l, c_list_get(l, i)) & 255);
-    return bytes_of(l, buf, i + 1, n);
+    return bytes_of_at(l, buf, i + 1, n);
 }
 
 // Exactly n bytes (at most 1 MB) as a List(Int); bytes after EOF or an
@@ -721,10 +734,8 @@ pub Int rt_tcp_recv_bin(Int fd, Int n0) {
     Int buf = xmalloc(n);
     _ = resid_raw_fill(buf, 0, n);
     _ = recv_exact(fd, buf, 0, n);
-    Int slots = xmalloc(n * 8);
-    _ = byte_boxes(buf, slots, 0, n);
-    Int out = c_list_new(n, slots, resid_raw_addr("List"));
-    _ = c_free(buf) + c_free(slots);
+    Int out = raw_byte_list(buf, n);
+    _ = c_free(buf);
     return out;
 }
 
@@ -745,10 +756,8 @@ pub Int rt_tcp_recv_some(Int fd, Int max0) {
     Int buf = xmalloc(if (max > 0) { max } else { 1 });
     Int r = if (max > 0 && dl_arm(fd)) { resid_raw_syscall(45, fd, buf, max, 0, 0, 0) } else { 0 };
     Int n = if (r > 0) { r } else { 0 };
-    Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
-    _ = byte_boxes(buf, slots, 0, n);
-    Int out = c_list_new(n, slots, resid_raw_addr("List"));
-    _ = c_free(buf) + c_free(slots);
+    Int out = raw_byte_list(buf, n);
+    _ = c_free_prefix(buf, n);
     return out;
 }
 
@@ -968,10 +977,8 @@ pub Int rt_unix_recv_some(Int fd, Int max0) {
     Int buf = xmalloc(if (max > 0) { max } else { 1 });
     Int r = if (max > 0 && dl_arm(fd)) { resid_raw_syscall(45, fd, buf, max, 0, 0, 0) } else { 0 };
     Int n = if (r > 0) { r } else { 0 };
-    Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
-    _ = byte_boxes(buf, slots, 0, n);
-    Int out = c_list_new(n, slots, resid_raw_addr("List"));
-    _ = c_free(buf) + c_free(slots);
+    Int out = raw_byte_list(buf, n);
+    _ = c_free_prefix(buf, n);
     return out;
 }
 

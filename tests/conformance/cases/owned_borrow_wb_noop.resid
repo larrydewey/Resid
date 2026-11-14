@@ -1,0 +1,46 @@
+// The write-back of a borrowed element skips its store when the value is
+// the element itself (resid_list_set_rec_wbf): on a transient list the
+// borrow is the element; on a shared one it is a frame copy, which must
+// still be written into a copy of the list, leaving the shared one as is.
+
+type Ball = { Int x; Int v; };
+
+Ball step(Ball b) { return Ball {.x = b.x + b.v, .v = b.v}; }
+
+List(Ball) mk(Int n, Int i, ListBuf(Ball) acc) {
+    if (i >= n) { return acc.finish(); }
+    return mk(n, i + 1, acc.push(Ball {.x = i, .v = i + 1}));
+}
+
+// Rebuilt in place through a helper and written back at its index.
+List(Ball) sweep(List(Ball) bs, Int i) {
+    if (i >= bs.len()) { return bs; }
+    Ball b = bs[i];
+    return sweep(bs.with(i, step(b)), i + 1);
+}
+
+// Written back with a record that is not the borrowed one.
+List(Ball) swap_in(List(Ball) bs, Int i, Ball other) {
+    Ball b = bs[i];
+    Int keep = b.x;
+    return bs.with(i, Ball {.x = other.x + keep * 0, .v = other.v});
+}
+
+Str fmt(List(Ball) bs, Int i, Str acc) {
+    if (i >= bs.len()) { return acc; }
+    return fmt(bs, i + 1, acc + f"{bs[i].x}:{bs[i].v} ");
+}
+
+Int main() {
+    List(Ball) a = mk(rt 4, 0, ListBuf());
+    List(Ball) a2 = sweep(sweep(a, 0), 0);
+    println(fmt(a2, 0, ""));
+    List(Ball) s = mk(rt 3, 0, ListBuf());
+    List(Ball) s2 = sweep(s, 0);
+    println(fmt(s, 0, ""));
+    println(fmt(s2, 0, ""));
+    List(Ball) w = swap_in(s2, 1, Ball {.x = 77, .v = 88});
+    println(fmt(s2, 0, ""));
+    println(fmt(w, 0, ""));
+    return 0;
+}
