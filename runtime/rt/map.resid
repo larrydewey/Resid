@@ -2007,6 +2007,18 @@ pub Int rt_list_set_rec_wb(Int l, Int i, Int r, Int w) {
     return list_set_rec_slow(l, 1, i, r, w);
 }
 
+// The same write-back told the borrow's result rb and its frame fr
+// (resid_list_rec_borrow(l, i, w, fr) returned rb). rb != fr means rb is
+// element i itself (the list was transient at the borrow and, by
+// lo_borrows, is unchanged since), so writing r == rb back is a no-op:
+// no header reload, transient test or self-copy test on that path.
+@export("resid_list_set_rec_wbf", "ptr(ptr,i64,ptr,i64,ptr,ptr)")
+@inline
+pub Int rt_list_set_rec_wbf(Int l, Int i, Int r, Int w, Int rb, Int fr) {
+    if (r == rb && rb != fr) { return l; }
+    return rt_list_set_rec_wb(l, i, r, w);
+}
+
 // A versioned loop (W3, ol_apply in lower.resid) reads a transient
 // list's root and count once at its head: an element index is checked
 // against that count, and a record store skips the copy onto itself.
