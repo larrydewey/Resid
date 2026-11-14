@@ -16,11 +16,13 @@
 //
 // Field and scalar elements are in Montgomery form (R = 2^384). 832 bits
 // leave room for t + q*m, so nothing wraps. Selects are masks (through
-// ct_hide), reductions subtract with a borrow bit, the scalar ladder runs
-// all 384 steps, and arithmetic wraps, so no overflow check branches on a
-// value either. What becomes public goes through p384w_open: a signature,
-// a public key, and the verdicts "this scalar is usable" and "this point
-// is not infinity". At secret types that is a declassification, so the
+// ct_hide), reductions subtract with a borrow bit, scalar multiplication
+// runs every 4-bit window and reads all of its table with masks, and
+// arithmetic wraps, so no overflow check branches on a value either.
+// Verification alone, whose inputs are all public, takes a faster path
+// that depends on them. What becomes public goes through p384w_open: a
+// signature, a public key, and the verdicts "this scalar is usable" and
+// "this point is not infinity". At secret types that is a declassification, so the
 // secret copies of signing, key derivation and ECDH need
 // @requires(declassify); the ECDH result itself stays secret.
 //
@@ -77,6 +79,8 @@ behavior P384Word(F, B) {
     F p384w_add(F a, F b);
     F p384w_sub(F a, F b);
     F p384w_mul(F a, F b);
+    F p384w_mulf(F a, F b);           // a * b for a, b < 2^384, on 768-bit words
+    F p384w_mullo(F a, F b);          // a * b mod 2^384, on 384-bit words
     F p384w_and(F a, F b);
     F p384w_or(F a, F b);
     F p384w_xor(F a, F b);
@@ -92,6 +96,8 @@ behavior P384Word(F, B) {
 UInt(832) p384i_add(UInt(832) a, UInt(832) b) { return wrapping_uadd(a, b); }
 UInt(832) p384i_sub(UInt(832) a, UInt(832) b) { return wrapping_usub(a, b); }
 UInt(832) p384i_mul(UInt(832) a, UInt(832) b) { return wrapping_umul(a, b); }
+UInt(832) p384i_mulf(UInt(832) a, UInt(832) b) { return wrapping_umul(a & (UInt(832)) 39402006196394479212279040100143613805079739270465446667948293404245721771497210611414266254884915640806627990306815, b & (UInt(832)) 39402006196394479212279040100143613805079739270465446667948293404245721771497210611414266254884915640806627990306815); }
+UInt(832) p384i_mullo(UInt(832) a, UInt(832) b) { return wrapping_umul(a & (UInt(832)) 39402006196394479212279040100143613805079739270465446667948293404245721771497210611414266254884915640806627990306815, b & (UInt(832)) 39402006196394479212279040100143613805079739270465446667948293404245721771497210611414266254884915640806627990306815) & (UInt(832)) 39402006196394479212279040100143613805079739270465446667948293404245721771497210611414266254884915640806627990306815; }
 UInt(832) p384i_and(UInt(832) a, UInt(832) b) { return a & b; }
 UInt(832) p384i_or(UInt(832) a, UInt(832) b) { return a | b; }
 UInt(832) p384i_xor(UInt(832) a, UInt(832) b) { return a ^ b; }
@@ -110,11 +116,13 @@ Int p384i_byte(UInt(832) x, Int sh) { return wrapping_i64((x >> (UInt(832)) sh) 
 // from here on.
 UInt(832) p384i_open(UInt(832) x) { return ct_public(x); }
 
-P384Word(UInt(832), Int) = { .p384w_add = p384i_add, .p384w_sub = p384i_sub, .p384w_mul = p384i_mul, .p384w_and = p384i_and, .p384w_or = p384i_or, .p384w_xor = p384i_xor, .p384w_shr = p384i_shr, .p384w_shl = p384i_shl, .p384w_mask = p384i_mask, .p384w_lift = p384i_lift, .p384w_from_byte = p384i_from_byte, .p384w_byte = p384i_byte, .p384w_open = p384i_open };
+P384Word(UInt(832), Int) = { .p384w_add = p384i_add, .p384w_sub = p384i_sub, .p384w_mul = p384i_mul, .p384w_mulf = p384i_mulf, .p384w_mullo = p384i_mullo, .p384w_and = p384i_and, .p384w_or = p384i_or, .p384w_xor = p384i_xor, .p384w_shr = p384i_shr, .p384w_shl = p384i_shl, .p384w_mask = p384i_mask, .p384w_lift = p384i_lift, .p384w_from_byte = p384i_from_byte, .p384w_byte = p384i_byte, .p384w_open = p384i_open };
 
 Secret(UInt(832)) p384s_add(Secret(UInt(832)) a, Secret(UInt(832)) b) { return wrapping_uadd(a, b); }
 Secret(UInt(832)) p384s_sub(Secret(UInt(832)) a, Secret(UInt(832)) b) { return wrapping_usub(a, b); }
 Secret(UInt(832)) p384s_mul(Secret(UInt(832)) a, Secret(UInt(832)) b) { return wrapping_umul(a, b); }
+Secret(UInt(832)) p384s_mulf(Secret(UInt(832)) a, Secret(UInt(832)) b) { return wrapping_umul(a & (UInt(832)) 39402006196394479212279040100143613805079739270465446667948293404245721771497210611414266254884915640806627990306815, b & (UInt(832)) 39402006196394479212279040100143613805079739270465446667948293404245721771497210611414266254884915640806627990306815); }
+Secret(UInt(832)) p384s_mullo(Secret(UInt(832)) a, Secret(UInt(832)) b) { return wrapping_umul(a & (UInt(832)) 39402006196394479212279040100143613805079739270465446667948293404245721771497210611414266254884915640806627990306815, b & (UInt(832)) 39402006196394479212279040100143613805079739270465446667948293404245721771497210611414266254884915640806627990306815) & (UInt(832)) 39402006196394479212279040100143613805079739270465446667948293404245721771497210611414266254884915640806627990306815; }
 Secret(UInt(832)) p384s_and(Secret(UInt(832)) a, Secret(UInt(832)) b) { return a & b; }
 Secret(UInt(832)) p384s_or(Secret(UInt(832)) a, Secret(UInt(832)) b) { return a | b; }
 Secret(UInt(832)) p384s_xor(Secret(UInt(832)) a, Secret(UInt(832)) b) { return a ^ b; }
@@ -130,7 +138,7 @@ Secret(UInt(8)) p384s_byte(Secret(UInt(832)) x, Int sh) { return wrapping_u8(x >
 @requires(declassify)
 UInt(832) p384s_open(Secret(UInt(832)) x) { return ct_public(declassify(x, "NIST P-384 (secp384r1) signature, public key or validity verdict")); }
 
-P384Word(Secret(UInt(832)), Secret(UInt(8))) = { .p384w_add = p384s_add, .p384w_sub = p384s_sub, .p384w_mul = p384s_mul, .p384w_and = p384s_and, .p384w_or = p384s_or, .p384w_xor = p384s_xor, .p384w_shr = p384s_shr, .p384w_shl = p384s_shl, .p384w_mask = p384s_mask, .p384w_lift = p384s_lift, .p384w_from_byte = p384s_from_byte, .p384w_byte = p384s_byte, .p384w_open = p384s_open };
+P384Word(Secret(UInt(832)), Secret(UInt(8))) = { .p384w_add = p384s_add, .p384w_sub = p384s_sub, .p384w_mul = p384s_mul, .p384w_mulf = p384s_mulf, .p384w_mullo = p384s_mullo, .p384w_and = p384s_and, .p384w_or = p384s_or, .p384w_xor = p384s_xor, .p384w_shr = p384s_shr, .p384w_shl = p384s_shl, .p384w_mask = p384s_mask, .p384w_lift = p384s_lift, .p384w_from_byte = p384s_from_byte, .p384w_byte = p384s_byte, .p384w_open = p384s_open };
 
 // ─── Branch-free helpers ─────────────────────────────────────────────
 
@@ -155,15 +163,17 @@ F p384_csub(F u, UInt(832) m) {
     return p384w_or(p384w_and(p384w_and(d, gmask), keep), p384w_and(u, p384w_xor(keep, ones)));
 }
 
-// a * b / R mod m (Montgomery), a, b < m.
+// a * b / R mod m (Montgomery), a, b < 2^384 (so the result is below m:
+// t + q*m < 2^384 * 2m). The products run on words only as wide as their
+// operands (p384w_mulf, p384w_mullo), not on all 832 bits.
 @needs(P384Word(F, B))
 F p384_mont(F a, F b, UInt(832) m, UInt(832) minv) {
     F rm = p384w_lift(p384_rmask());
     F mi = p384w_lift(minv);
     F mm = p384w_lift(m);
-    F t = p384w_mul(a, b);
-    F q = p384w_and(p384w_mul(p384w_and(t, rm), mi), rm);
-    return p384_csub(p384w_shr(p384w_add(t, p384w_mul(q, mm)), 384), m);
+    F t = p384w_mulf(a, b);
+    F q = p384w_and(p384w_mullo(p384w_and(t, rm), mi), rm);
+    return p384_csub(p384w_shr(p384w_add(t, p384w_mulf(q, mm)), 384), m);
 }
 
 // ─── Field (mod p), Montgomery form ──────────────────────────────────
@@ -373,18 +383,56 @@ P384Pt(F) p384_sel(F mask, P384Pt(F) a, P384Pt(F) b) {
     return P384Pt {.x = p384w_or(p384w_and(a.x, mask), p384w_and(b.x, nm)), .y = p384w_or(p384w_and(a.y, mask), p384w_and(b.y, nm)), .z = p384w_or(p384w_and(a.z, mask), p384w_and(b.z, nm))};
 }
 
+// [inf, p, 2p, ..., 15p]: index j holds j * p. Which steps run depends on
+// j only.
 @needs(P384Word(F, B))
-P384Pt(F) p384_ladder(F k, Int i, P384Pt(F) r, P384Pt(F) p) {
-    if (i < 0) { return r; }
-    P384Pt(F) d = p384_dbl(r);
-    return p384_ladder(k, i - 1, p384_sel(p384w_mask(p384w_shr(k, i)), p384_add(d, p), d), p);
+List(P384Pt(F)) p384_ctab(P384Pt(F) p, P384Pt(F) last, Int j, ListBuf(P384Pt(F)) acc) {
+    if (j >= 16) { return acc.finish(); }
+    P384Pt(F) next = if (j == 0) { p384_inf() } else if (j == 1) { p } else if (j == 2) { p384_dbl(p) } else { p384_add(last, p) };
+    return p384_ctab(p, next, j + 1, acc.push(next));
 }
 
-/// k * p for k < 2^384: every bit costs one doubling and one addition.
+// t[w] for a window w (0..15) that may be secret: every entry is read and
+// kept or dropped with a mask, so neither an address nor a branch depends
+// on w.
+@needs(P384Word(F, B))
+P384Pt(F) p384_tsel(List(P384Pt(F)) t, F w, Int j, P384Pt(F) acc) {
+    if (j >= 16) { return acc; }
+    F one = p384w_lift(1);
+    F jj = p384w_lift((UInt(832)) j);
+    F m = p384w_mask(p384w_xor(p384_nonzero(p384w_xor(w, jj)), one));
+    return p384_tsel(t, w, j + 1, p384_sel(m, t[j], acc));
+}
+
+// Bits 4i..4i+3 of k.
+@needs(P384Word(F, B))
+F p384_cwin(F k, Int i) {
+    F f = p384w_lift(15);
+    return p384w_and(p384w_shr(k, 4 * i), f);
+}
+
+// Windows i..0 of k into acc: four doublings, then the window's multiple
+// of p added, a masked table read even when the window is 0 (adding
+// infinity, which the complete formulas cover).
+@needs(P384Word(F, B))
+P384Pt(F) p384_wmul(F k, List(P384Pt(F)) t, Int i, P384Pt(F) acc) {
+    if (i < 0) { return acc; }
+    P384Pt(F) d = p384_dbl(p384_dbl(p384_dbl(p384_dbl(acc))));
+    P384Pt(F) z = p384_inf();
+    return p384_wmul(k, t, i - 1, p384_add(d, p384_tsel(t, p384_cwin(k, i), 0, z)));
+}
+
+/// k * p for k < 2^384 (bits from 384 up are ignored), in constant time:
+/// fixed 4-bit windows, each costing four doublings, one addition and a
+/// masked read of all sixteen table entries, whatever its value.
 @needs(P384Word(F, B))
 pub P384Pt(F) p384_mul(F k, P384Pt(F) p) {
+    ListBuf(P384Pt(F)) b = ListBuf();
+    List(P384Pt(F)) t = p384_ctab(p, p, 0, b);
+    F rm = p384w_lift(p384_rmask());
+    F kk = p384w_and(k, rm);
     P384Pt(F) z = p384_inf();
-    return p384_ladder(k, 383, z, p);
+    return p384_wmul(kk, t, 383 / 4 - 1, p384_tsel(t, p384_cwin(kk, 383 / 4), 0, z));
 }
 
 /// Back to affine coordinates (no longer Montgomery form). Whether the
@@ -539,9 +587,50 @@ pub Bool p384_verify_digest(List(Int) digest, UInt(832) r, UInt(832) s, P384Aff 
     UInt(832) u2 = p384_sfrom(p384_smul(p384_sto(r), w));
     P384Pt(UInt(832)) g = p384_gen();
     P384Pt(UInt(832)) qp = p384_from_aff(q);
-    P384Xy(UInt(832)) pt = p384_affine(p384_add(p384_mul(u1, g), p384_mul(u2, qp)));
+    P384Xy(UInt(832)) pt = p384_affine(p384_mul2_pub(u1, g, u2, qp));
     if (!pt.ok) { return false; }
     return p384_reduce_n(pt.x) == r;
+}
+
+// ─── u1 * G + u2 * Q on public data (verification) ──────────────────
+// Verification has no secret: the key, the signature and the digest are
+// public, and so are u1 and u2. So its scalar multiplication may take a
+// path that depends on them -- Straus's interleaving with 4-bit windows:
+// one shared doubling chain, and an addition of a table point only for a
+// nonzero window. The formulas are the same complete ones, so the result
+// is the same point as u1 * G + u2 * Q by the ladder. Never use this for
+// a private scalar: p384_mul is the constant-time one.
+
+// [P, 2P, ..., 15P] (index j holds (j + 1) * P).
+List(P384Pt(UInt(832))) p384_wtab(P384Pt(UInt(832)) p, P384Pt(UInt(832)) last, Int j, ListBuf(P384Pt(UInt(832))) acc) {
+    if (j >= 15) { return acc.finish(); }
+    P384Pt(UInt(832)) next = if (j == 0) { p } else if (j == 1) { p384_dbl(p) } else { p384_add(last, p) };
+    return p384_wtab(p, next, j + 1, acc.push(next));
+}
+
+// The 4-bit window i (bits 4i..4i+3) of the public scalar u.
+Int p384_win(UInt(832) u, Int i) { return wrapping_i64((u >> (UInt(832)) (4 * i)) & (UInt(832)) 15); }
+
+// acc plus t[d - 1], or acc for d = 0.
+P384Pt(UInt(832)) p384_wadd(P384Pt(UInt(832)) acc, List(P384Pt(UInt(832))) t, Int d) {
+    if (d == 0) { return acc; }
+    return p384_add(acc, t[d - 1]);
+}
+
+P384Pt(UInt(832)) p384_straus(UInt(832) u1, List(P384Pt(UInt(832))) t1, UInt(832) u2, List(P384Pt(UInt(832))) t2, Int i, P384Pt(UInt(832)) acc) {
+    if (i < 0) { return acc; }
+    P384Pt(UInt(832)) d = p384_dbl(p384_dbl(p384_dbl(p384_dbl(acc))));
+    return p384_straus(u1, t1, u2, t2, i - 1, p384_wadd(p384_wadd(d, t1, p384_win(u1, i)), t2, p384_win(u2, i)));
+}
+
+/// u1 * g + u2 * q for public scalars below 2^384 and public points, in
+/// time that depends on them (Straus, 4-bit windows): for verification
+/// only, never for a private scalar.
+pub P384Pt(UInt(832)) p384_mul2_pub(UInt(832) u1, P384Pt(UInt(832)) g, UInt(832) u2, P384Pt(UInt(832)) q) {
+    ListBuf(P384Pt(UInt(832))) b1 = ListBuf();
+    ListBuf(P384Pt(UInt(832))) b2 = ListBuf();
+    P384Pt(UInt(832)) z = p384_inf();
+    return p384_straus(u1, p384_wtab(g, g, 0, b1), u2, p384_wtab(q, q, 0, b2), 383 / 4, z);
 }
 
 /// The refused signature: `ok` is false and r and s are zero.
