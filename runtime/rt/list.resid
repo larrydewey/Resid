@@ -540,6 +540,7 @@ pub Int rt_listbuf_push_rec(Int l, Int r, Int w) {
 }
 
 @cold
+@slowpath
 Int lb_grow_to(Int l, Int f, Int n, Int need) {
     Int nf = flat_new(max(need, n * 2));
     _ = if (n > 0) { mcopy(nf + 24, f + 24, n * 8) } else { 0 };
@@ -547,6 +548,7 @@ Int lb_grow_to(Int l, Int f, Int n, Int need) {
 }
 
 @cold
+@slowpath
 Int lb_grow(Int l, Int f, Int n) {
     Int nf = flat_new(if (n < 4) { 8 } else { n * 2 });
     _ = if (n > 0) { mcopy(nf + 24, f + 24, n * 8) } else { 0 };

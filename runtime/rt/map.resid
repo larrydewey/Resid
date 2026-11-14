@@ -1107,6 +1107,7 @@ Int trie_put_at(Int m, Int k, Int v) {
 }
 
 @noinline
+@slowpath
 Int map_put_slow(Int m0, Int owned, Int kk0, Int kb, Int vk0, Int vb) {
     Int ks = if (kk0 == 4) { 1 } else { 0 };
     Int kk = kk0;
@@ -1228,6 +1229,7 @@ pub Int rt_set_put(Int s, Int owned, Int kk, Int kb) { return rt_map_put(s, owne
 // Typed lookup: found << 64 | value word of kind vk. No allocation on the
 // table path, so `m.get(k) else { d }` on an Int-keyed map is a probe.
 @noinline
+@slowpath
 Int(128) map_find_slow(Int m, Int kk, Int kb, Int vk) {
     Int at = map_vref(m, kk, kb);
     if (at == 0) { return (Int(128))0; }
