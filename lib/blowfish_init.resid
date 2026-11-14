@@ -2,6 +2,7 @@
 // Blowfish's initial state: P[0..17] then S0..S3 (256 words each), the
 // hexadecimal digits of pi's fractional part.
 
+/// Blowfish's initial state, P[0..17] then S0..S3, as 1042 words.
 pub List(Int) blowfish_init() {
     return [
         608135816, 2242054355, 320440878, 57701188, 2752067618, 698298832, 137296536, 3964562569,

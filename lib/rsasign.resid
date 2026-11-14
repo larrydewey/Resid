@@ -75,6 +75,7 @@ Secret(UInt(2112)) r1024_pow2(Secret(UInt(2112)) r, Secret(UInt(2112)) p, Int n)
     return r1024_pow2(r1024_csub(r << (UInt(2112)) 1, p), p, n - 1);
 }
 
+/// The ladder's pair of running powers (b^k, b^(k+1)) mod one prime.
 type R1024Pair = { Secret(UInt(2112)) a; Secret(UInt(2112)) b; };
 
 // The ladder from bit i of d down to bit 0: (r0, r1) = (b^k, b^(k+1)).
@@ -179,6 +180,7 @@ Secret(UInt(3136)) r1536_pow2(Secret(UInt(3136)) r, Secret(UInt(3136)) p, Int n)
     return r1536_pow2(r1536_csub(r << (UInt(3136)) 1, p), p, n - 1);
 }
 
+/// The ladder's pair of running powers (b^k, b^(k+1)) mod one prime.
 type R1536Pair = { Secret(UInt(3136)) a; Secret(UInt(3136)) b; };
 
 // The ladder from bit i of d down to bit 0: (r0, r1) = (b^k, b^(k+1)).
@@ -283,6 +285,7 @@ Secret(UInt(4160)) r2048_pow2(Secret(UInt(4160)) r, Secret(UInt(4160)) p, Int n)
     return r2048_pow2(r2048_csub(r << (UInt(4160)) 1, p), p, n - 1);
 }
 
+/// The ladder's pair of running powers (b^k, b^(k+1)) mod one prime.
 type R2048Pair = { Secret(UInt(4160)) a; Secret(UInt(4160)) b; };
 
 // The ladder from bit i of d down to bit 0: (r0, r1) = (b^k, b^(k+1)).

@@ -90,6 +90,7 @@ Secret(UInt({W})) r{K}_pow2(Secret(UInt({W})) r, Secret(UInt({W})) p, Int n) {{
     return r{K}_pow2(r{K}_csub(r << (UInt({W})) 1, p), p, n - 1);
 }}
 
+/// The ladder's pair of running powers (b^k, b^(k+1)) mod one prime.
 type R{K}Pair = {{ Secret(UInt({W})) a; Secret(UInt({W})) b; }};
 
 // The ladder from bit i of d down to bit 0: (r0, r1) = (b^k, b^(k+1)).

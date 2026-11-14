@@ -8,7 +8,10 @@
 
 import "cbor_head.resid";
 
+/// A CBOR value: an integer, a byte string, a text string, an array, a
+/// map (pairs in their encoded order), a boolean or null.
 pub type Cv = CvInt(Int) | CvBytes(List(Int)) | CvText(Str) | CvArr(List(Cv)) | CvMap(List(CvPair)) | CvBool(Bool) | CvNull;
+/// One map entry: its key and its value.
 pub type CvPair = { Cv key; Cv value; };
 
 // ─── Encoding ─────────────────────────────────────────────────────
@@ -46,18 +49,23 @@ ListBuf(Int) cv_pairs(List(CvPair) ps, Int i, ListBuf(Int) acc) {
     return cv_pairs(ps, i + 1, cv_push(cv_push(acc, cv_encode(ps[i].key), 0), cv_encode(ps[i].value), 0));
 }
 
-/// A pair with an integer key; with a text key.
+/// A map entry with an integer key.
 pub CvPair cv_ik(Int k, Cv v) { return CvPair {.key = CvInt(k), .value = v}; }
+/// A map entry with a text key.
 pub CvPair cv_tk(Str k, Cv v) { return CvPair {.key = CvText(k), .value = v}; }
 
 // ─── Decoding ─────────────────────────────────────────────────────
 
+/// A value decoded at a position: whether it decoded, the value, and the
+/// position just after it (-1 when it did not).
 pub type CvAt = { Bool ok; Cv v; Int next; };
 
 CvAt cv_bad() { return CvAt {.ok = false, .v = CvNull, .next = -1}; }
 
 // The argument of the head at `i`: its value and the position after it;
 // value -1 when malformed or beyond 2^62.
+/// A head's argument: its value (-1 when malformed or beyond 2^62) and the
+/// position just after the head.
 pub type CvArg = { Int v; Int next; };
 
 CvArg cv_arg(List(Int) b, Int i) {
@@ -143,26 +151,32 @@ Option(Cv) cv_find(List(CvPair) ps, Cv k, Int i) {
     return cv_find(ps, k, i + 1);
 }
 
-/// The value under integer key `k` of a map; under text key `k`.
+/// The value under integer key `k` of a map; None when absent or not a map.
 pub Option(Cv) cv_get(Cv m, Int k) { return match m { CvMap(ps) => cv_find(ps, CvInt(k), 0), _ => None }; }
+/// The value under text key `k` of a map; None when absent or not a map.
 pub Option(Cv) cv_get_t(Cv m, Str k) { return match m { CvMap(ps) => cv_find(ps, CvText(k), 0), _ => None }; }
 
+/// The bytes of a byte-string value; empty for anything else or None.
 pub List(Int) cv_bytes(Option(Cv) v) {
     Cv x = v else { CvNull };
     return match x { CvBytes(b) => b, _ => [] };
 }
+/// The integer of an integer value; `dflt` for anything else or None.
 pub Int cv_int(Option(Cv) v, Int dflt) {
     Cv x = v else { CvNull };
     return match x { CvInt(n) => n, _ => dflt };
 }
+/// The text of a text-string value; empty for anything else or None.
 pub Str cv_str(Option(Cv) v) {
     Cv x = v else { CvNull };
     return match x { CvText(s) => s, _ => "" };
 }
+/// The boolean of a boolean value; `dflt` for anything else or None.
 pub Bool cv_bool(Option(Cv) v, Bool dflt) {
     Cv x = v else { CvNull };
     return match x { CvBool(b) => b, _ => dflt };
 }
+/// The items of an array value; empty for anything else or None.
 pub List(Cv) cv_list(Option(Cv) v) {
     Cv x = v else { CvNull };
     return match x { CvArr(xs) => xs, _ => [] };

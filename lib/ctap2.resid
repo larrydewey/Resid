@@ -25,9 +25,13 @@ import "aesgcm.resid";
 
 // ─── Commands and status ──────────────────────────────────────────
 
+/// The authenticatorMakeCredential command byte (0x01).
 pub Int ctap_make_credential() { return 1; }
+/// The authenticatorGetAssertion command byte (0x02).
 pub Int ctap_get_assertion() { return 2; }
+/// The authenticatorGetInfo command byte (0x04).
 pub Int ctap_get_info() { return 4; }
+/// The authenticatorClientPIN command byte (0x06).
 pub Int ctap_client_pin() { return 6; }
 
 /// What a status byte means, for messages.
@@ -45,6 +49,8 @@ pub Str ctap_status_text(Int s) {
 
 // ─── PIN/UV auth protocol 2 (CTAP 2.1 §6.5.7) ─────────────────────
 
+/// A PIN/UV auth protocol 2 shared secret: its HMAC key, its AES key and
+/// the platform's ephemeral public point sent with it.
 pub type Pp2 = { List(Int) hmac_key; List(Int) aes_key; List(Int) platform_pub; };
 
 List(Int) zeros32() { return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; }
@@ -112,6 +118,7 @@ pub List(Int) cose_point(Cv k) {
 
 // ─── Requests ─────────────────────────────────────────────────────
 
+/// A getInfo request.
 pub List(Int) req_get_info() { return [ctap_get_info()]; }
 
 /// clientPIN getKeyAgreement under protocol 2.
@@ -153,6 +160,7 @@ pub List(Int) req_hmac_assertion(List(Int) client_data_hash, Str rp, List(Int) c
 /// or the body is not CBOR.
 pub type Resp = { Int status; Cv body; };
 
+/// A response split into its status byte and decoded CBOR body.
 pub Resp resp_of(List(Int) r) {
     if (r.len() == 0) { return Resp {.status = -1, .body = CvNull}; }
     if (r[0] != 0 || r.len() == 1) { return Resp {.status = r[0], .body = CvNull}; }
@@ -160,6 +168,9 @@ pub Resp resp_of(List(Int) r) {
     return match b { None => Resp {.status = -1, .body = CvNull}, Some(x) => Resp {.status = 0, .body = x} };
 }
 
+/// What getInfo reports: the CTAP versions, whether hmac-secret is
+/// supported, the AAGUID, whether a client PIN is set, and whether PIN/UV
+/// protocol 2 is offered.
 pub type Info = { List(Str) versions; Bool hmac_secret; List(Int) aaguid; Bool client_pin; Bool protocol2; };
 
 Bool has_text(List(Cv) xs, Str s, Int i) {
@@ -180,6 +191,7 @@ List(Str) texts(List(Cv) xs, Int i, List(Str) acc) {
     return texts(xs, i + 1, match x { CvText(t) => acc.concat([t]), _ => acc });
 }
 
+/// The getInfo fields of a response body.
 pub Info info_of(Cv b) {
     return Info {.versions = texts(cv_list(cv_get(b, 1)), 0, []), .hmac_secret = has_text(cv_list(cv_get(b, 2)), "hmac-secret", 0),
                  .aaguid = cv_bytes(cv_get(b, 3)), .client_pin = cv_bool(cv_get_t(cv_or(cv_get(b, 4)), "clientPin"), false),
@@ -192,10 +204,15 @@ pub List(Int) key_agreement_of(Cv b) { return cose_point(cv_or(cv_get(b, 1))); }
 
 // authData (WebAuthn §6.1): rpIdHash, flags, signCount, then the attested
 // credential (makeCredential) and the extensions (flag ED).
+/// Parsed authenticator data: whether it parsed, the relying party's hash,
+/// the flags, and the attested credential id, public point and extensions
+/// when present.
 pub type AuthData = { Bool ok; List(Int) rp_hash; Int flags; List(Int) cred_id; List(Int) cred_point; Cv ext; };
 
 AuthData ad_bad() { return AuthData {.ok = false, .rp_hash = [], .flags = 0, .cred_id = [], .cred_point = [], .ext = CvNull}; }
 
+/// Authenticator data parsed strictly: every length checked, nothing left
+/// over, an attested key that is a COSE ES256 point; `ok` false otherwise.
 pub AuthData auth_data_of(List(Int) a) {
     if (a.len() < 37) { return ad_bad(); }
     Int flags = a[32];
@@ -225,6 +242,7 @@ List(Int) cose_es256_point(Cv k) {
 /// hash, user presence, an attested ES256 key, hmac-secret granted.
 pub type Made = { Bool ok; Str why; List(Int) cred_id; List(Int) cred_point; };
 
+/// The credential a makeCredential response created for `rp`, checked.
 pub Made made_of(Resp r, Str rp) {
     if (r.status != 0) { return Made {.ok = false, .why = ctap_status_text(r.status), .cred_id = [], .cred_point = []}; }
     AuthData a = auth_data_of(cv_bytes(cv_get(r.body, 2)));
@@ -241,6 +259,7 @@ pub Made made_of(Resp r, Str rp) {
 /// empty with the reason otherwise.
 pub type Got = { Bool ok; Str why; List(Int) output; };
 
+/// The hmac-secret output of a getAssertion response, checked.
 pub Got hmac_output_of(Resp r, Str rp, List(Int) cred_id, List(Int) cred_point, List(Int) client_data_hash, Pp2 k) {
     if (r.status != 0) { return Got {.ok = false, .why = ctap_status_text(r.status), .output = []}; }
     List(Int) ad = cv_bytes(cv_get(r.body, 2));
@@ -261,10 +280,15 @@ pub Got hmac_output_of(Resp r, Str rp, List(Int) cred_id, List(Int) cred_point, 
 
 // ─── CTAPHID (CTAP 2.1 §11.2) ─────────────────────────────────────
 
+/// The CTAPHID_INIT command (0x86).
 pub Int hid_init() { return 134; }        // 0x86
+/// The CTAPHID_CBOR command (0x90).
 pub Int hid_cbor() { return 144; }        // 0x90
+/// The CTAPHID_KEEPALIVE command (0xbb).
 pub Int hid_keepalive() { return 187; }   // 0xbb
+/// The CTAPHID_ERROR command (0xbf).
 pub Int hid_error() { return 191; }       // 0xbf
+/// The broadcast channel id (0xffffffff), used for CTAPHID_INIT.
 pub Int hid_broadcast() { return 4294967295; }
 
 List(Int) cid_bytes(Int cid) { return [(cid >> 24) & 255, (cid >> 16) & 255, (cid >> 8) & 255, cid & 255]; }
