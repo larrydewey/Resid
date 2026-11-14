@@ -354,6 +354,24 @@ pub Int rt_list_new(Int count, Int src, Int ty) {
     return pvec_append_into(0, v, src, count);
 }
 
+// The n bytes at p as a List(Int) of raw slots (kind 1), the list
+// resid_list_rawify makes of their tagged words, built in one pass: a
+// receive or a file read does not box each byte, copy the boxes and unbox
+// them again.
+pub Int raw_byte_list(Int p, Int n) {
+    if (n <= 0) { return set_list(list_hdr(), 0, 0, 0, 1); }
+    Int f = flat_new(n);
+    _ = widen_bytes(p, f + 24, 0, n);
+    _ = st64(f, n);
+    return set_list(list_hdr(), n, 0 - 1, f, 1);
+}
+
+Int widen_bytes(Int p, Int w, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st64(w + i * 8, ld8(p + i));
+    return widen_bytes(p, w, i + 1, n);
+}
+
 @export("resid_list_len", "i64(ptr)")
 pub Int rt_list_len(Int l) { return lcount(l); }
 
