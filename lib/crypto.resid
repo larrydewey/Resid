@@ -340,17 +340,40 @@ pub UInt(512) sha_hw_block_str(Str m, Int base, Int i, UInt(512) acc) {
     return sha_hw_block_str(m, base, i + 1, acc | (((UInt(512)) word_at_str(m, base, i)) << ((UInt(512)) (32 * i))));
 }
 
+// Big-endian words 2k and 2k + 1 of the block at `base`, as bits [0, 32)
+// and [32, 64) of one 64-bit word.
+UInt(64) sha_hw_pair(List(Int) m, Int base, Int k) {
+    return wrapping_u64(word_at_list(m, base, 2 * k)) | (wrapping_u64(word_at_list(m, base, 2 * k + 1)) << (UInt(64)) 32);
+}
+
+/// `sha_hw_block` of a whole block at once: the 16 words packed with
+/// constant shifts, never a shift of the 512-bit value by a variable count.
+pub UInt(512) sha_hw_block16(List(Int) m, Int base) {
+    UInt(512) lo = (UInt(512)) sha_hw_pair(m, base, 0) | ((UInt(512)) sha_hw_pair(m, base, 1) << (UInt(512)) 64) | ((UInt(512)) sha_hw_pair(m, base, 2) << (UInt(512)) 128) | ((UInt(512)) sha_hw_pair(m, base, 3) << (UInt(512)) 192);
+    return lo | ((UInt(512)) sha_hw_pair(m, base, 4) << (UInt(512)) 256) | ((UInt(512)) sha_hw_pair(m, base, 5) << (UInt(512)) 320) | ((UInt(512)) sha_hw_pair(m, base, 6) << (UInt(512)) 384) | ((UInt(512)) sha_hw_pair(m, base, 7) << (UInt(512)) 448);
+}
+
 /// Compresses the 64-byte blocks of `m` in [`pos`, `total`) into the packed
 /// state `s` on the CPU's SHA instructions; returns the 8-word state.
 pub List(Int) sha_hw_blocks(List(Int) m, Int pos, Int total, UInt(256) s) {
     if (pos >= total) { return sha_hw_words(s, 0, ListBuf()); }
-    return sha_hw_blocks(m, pos + 64, total, sha256_compress_hw(s, sha_hw_block(m, pos, 0, (UInt(512)) 0)));
+    return sha_hw_blocks(m, pos + 64, total, sha256_compress_hw(s, sha_hw_block16(m, pos)));
+}
+
+UInt(64) sha_hw_pair_str(Str m, Int base, Int k) {
+    return wrapping_u64(word_at_str(m, base, 2 * k)) | (wrapping_u64(word_at_str(m, base, 2 * k + 1)) << (UInt(64)) 32);
+}
+
+/// `sha_hw_block16` reading the block from a `Str`.
+pub UInt(512) sha_hw_block16_str(Str m, Int base) {
+    UInt(512) lo = (UInt(512)) sha_hw_pair_str(m, base, 0) | ((UInt(512)) sha_hw_pair_str(m, base, 1) << (UInt(512)) 64) | ((UInt(512)) sha_hw_pair_str(m, base, 2) << (UInt(512)) 128) | ((UInt(512)) sha_hw_pair_str(m, base, 3) << (UInt(512)) 192);
+    return lo | ((UInt(512)) sha_hw_pair_str(m, base, 4) << (UInt(512)) 256) | ((UInt(512)) sha_hw_pair_str(m, base, 5) << (UInt(512)) 320) | ((UInt(512)) sha_hw_pair_str(m, base, 6) << (UInt(512)) 384) | ((UInt(512)) sha_hw_pair_str(m, base, 7) << (UInt(512)) 448);
 }
 
 /// `sha_hw_blocks` reading the blocks from a `Str`.
 pub List(Int) sha_hw_blocks_str(Str m, Int pos, Int total, UInt(256) s) {
     if (pos >= total) { return sha_hw_words(s, 0, ListBuf()); }
-    return sha_hw_blocks_str(m, pos + 64, total, sha256_compress_hw(s, sha_hw_block_str(m, pos, 0, (UInt(512)) 0)));
+    return sha_hw_blocks_str(m, pos + 64, total, sha256_compress_hw(s, sha_hw_block16_str(m, pos)));
 }
 
 // ─── Hex output ─────────────────────────────────────────────────
