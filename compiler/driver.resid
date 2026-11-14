@@ -9869,6 +9869,107 @@ List(Str) rt_clean_at(List(Str) ls, Int i, List(Str) defd, List(Str) seen, ListB
     return rt_clean_at(ls, i + 1, defd, if (dcl) { seen.concat([nm]) } else { seen }, acc.push(l));
 }
 
+// Runtime slow paths marked @slowpath (lower.resid tags the define
+// "resid-slowpath"), on x86-64: every call goes through a naked thunk
+// `name.pm` that pushes the caller-saved registers, calls the function
+// with the C convention and pops them, so the call is preserve_mostcc. A
+// user loop whose inlined fast path calls one then keeps its values in all
+// the registers instead of spilling them around the rare call (LLVM 18
+// miscompiles preserve_mostcc functions it compiles itself: its epilogue
+// may pop into a register the convention preserves, so the thunk is
+// written out). Only functions whose arguments all travel in registers
+// (at most six integer words, eight floats) and whose result is in rax
+// (or rax:rdx) qualify; any other keeps its plain calls.
+List(Str) rt_slowpaths(List(Str) ls) {
+    if (tgt_a64()) { return ls; }
+    List(Str) defs = rt_sp_defs(ls, 0, ListBuf());
+    if (defs.len() == 0) { return ls; }
+    List(Str) names = rt_sp_names(defs, 0, ListBuf());
+    List(Str) out = rt_sp_calls(ls, names, 0, ListBuf());
+    return out.concat(rt_sp_thunks(defs, 0, ListBuf()));
+}
+
+// The thunk-eligible @slowpath defines.
+List(Str) rt_sp_defs(List(Str) ls, Int i, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Str l = ls[i];
+    Bool ok = str_starts_with(l, "define internal ") && str_contains(l, "\"resid-slowpath\"") && rt_sp_ret(l) != "" && rt_sp_args_ok(rt_sp_types(l), 0, 0, 0);
+    return rt_sp_defs(ls, i + 1, if (ok) { acc.push(l) } else { acc });
+}
+
+// The return type of a define line, if a thunk can return it.
+Str rt_sp_ret(Str l) {
+    Str r = str_slice(l, 16, str_find_char(l, 32, 16));
+    return if (r == "i64" || r == "ptr" || r == "i128") { r } else { "" };
+}
+
+// The parameter types of a define line.
+List(Str) rt_sp_types(Str l) {
+    Int at = str_find_char(l, 64, 0);
+    Int lp = str_find_char(l, 40, at);
+    Int rp = str_find_char(l, 41, lp);
+    if (lp < 0 || rp <= lp + 1) { return []; }
+    return rt_sp_first_words(str_split(str_slice(l, lp + 1, rp), ", "), 0, ListBuf());
+}
+
+List(Str) rt_sp_first_words(List(Str) ps, Int i, ListBuf(Str) acc) {
+    if (i >= ps.len()) { return acc.finish(); }
+    Int sp = str_find_char(ps[i], 32, 0);
+    return rt_sp_first_words(ps, i + 1, acc.push(if (sp < 0) { ps[i] } else { str_slice(ps[i], 0, sp) }));
+}
+
+// Every argument in a register: integer words in rdi, rsi, rdx, rcx, r8,
+// r9 (an i128 takes two), floats in xmm0-7; no aggregate.
+Bool rt_sp_args_ok(List(Str) ts, Int i, Int ni, Int nf) {
+    if (i >= ts.len()) { return ni <= 6 && nf <= 8; }
+    Str t = ts[i];
+    if (t == "i64" || t == "ptr" || t == "i32" || t == "i8" || t == "i1") { return rt_sp_args_ok(ts, i + 1, ni + 1, nf); }
+    if (t == "i128") { return rt_sp_args_ok(ts, i + 1, ni + 2, nf); }
+    if (t == "double" || t == "float") { return rt_sp_args_ok(ts, i + 1, ni, nf + 1); }
+    return false;
+}
+
+List(Str) rt_sp_names(List(Str) defs, Int i, ListBuf(Str) acc) {
+    if (i >= defs.len()) { return acc.finish(); }
+    return rt_sp_names(defs, i + 1, acc.push(rt_sym(defs[i])));
+}
+
+// Calls of a slow path call its thunk, preserve_mostcc.
+List(Str) rt_sp_calls(List(Str) ls, List(Str) names, Int i, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Str l = ls[i];
+    Str l2 = if (!str_starts_with(l, "define ") && str_count(l, "call ") == 1) { rt_sp_call(l, names, 0) } else { l };
+    return rt_sp_calls(ls, names, i + 1, acc.push(l2));
+}
+
+Str rt_sp_call(Str l, List(Str) names, Int k) {
+    if (k >= names.len()) { return l; }
+    Str callee = "@" + names[k] + "(";
+    if (str_contains(l, callee)) { return str_replace(str_replace(l, callee, "@" + names[k] + ".pm("), "call ", "call preserve_mostcc "); }
+    return rt_sp_call(l, names, k + 1);
+}
+
+// name.pm: save rcx, rdx (not when it carries half the result), rsi, rdi,
+// r8, r9, r10 (rax is the result, r11 the convention's scratch), keep the
+// stack 16-byte aligned at the call, call name, restore.
+List(Str) rt_sp_thunks(List(Str) defs, Int i, ListBuf(Str) acc) {
+    if (i >= defs.len()) { return acc.finish(); }
+    Str l = defs[i];
+    Str name = rt_sym(l);
+    Str ret = rt_sp_ret(l);
+    List(Str) regs = if (ret == "i128") { ["rcx", "rsi", "rdi", "r8", "r9", "r10"] } else { ["rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10"] };
+    List(Str) back = if (ret == "i128") { ["r10", "r9", "r8", "rdi", "rsi", "rcx"] } else { ["r10", "r9", "r8", "rdi", "rsi", "rdx", "rcx"] };
+    Bool pad = regs.len() % 2 == 0;
+    Str body = rt_sp_regs(regs, 0, "push %", "") + (if (pad) { "sub $$8, %rsp\\0A" } else { "" }) + "call ${0:P}\\0A" + (if (pad) { "add $$8, %rsp\\0A" } else { "" }) + rt_sp_regs(back, 0, "pop %", "") + "ret";
+    List(Str) th = ["define internal preserve_mostcc " + ret + " @" + name + ".pm(" + str_join(rt_sp_types(l), ", ") + ") naked noinline nounwind {", "  call void asm sideeffect \"" + body + "\", \"X,~{memory}\"(ptr @" + name + ")", "  unreachable", "}"];
+    return rt_sp_thunks(defs, i + 1, acc.push(th[0]).push(th[1]).push(th[2]).push(th[3]));
+}
+
+Str rt_sp_regs(List(Str) regs, Int i, Str op, Str acc) {
+    if (i >= regs.len()) { return acc; }
+    return rt_sp_regs(regs, i + 1, op, acc + op + regs[i] + "\\0A");
+}
+
 // A runtime primitive's static storage (`@rtg.name`) is emitted by every
 // function that names it; the module keeps the first.
 List(Str) rtg_dedupe(List(Str) ls, Int i, List(Str) seen, ListBuf(Str) acc) {
@@ -10557,7 +10658,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     // reads it: main turns it on first.
     List(Str) all = if (rtmod) { all5 } else { tr_hook_main(all5) };
     List(Str) nkeep = resid_list_str_persist_copy([str_join(nb.links, " "), str_join(nb.prov, ";"), str_join(nb.asm, "\n")]);
-    Str doc0  =  str_join(if (rtmod) { rt_clean(all.concat(rt_asm_defs())) } else { all }, "\n") + "\n";
+    Str doc0  =  str_join(if (rtmod) { rt_slowpaths(rt_clean(all.concat(rt_asm_defs()))) } else { all }, "\n") + "\n";
     Str doc  =  probe_stack(if (rtmod) { doc0 } else { inline_small(doc0) });
     // Debug builds record each runtime check for the artifact's facts.
     List(Str) chk = resid_list_str_persist_copy([if (gdbg) { ga_check_lines(all, 0, StrBuf()) } else { "" }]);

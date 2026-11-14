@@ -599,7 +599,10 @@ Int short_cps(Int s, Int k, Int n) {
     return short_cps(s, k + 1, n + 1);
 }
 
+// @slowpath (as the StrBuf, list-builder and map slow paths): a loop whose
+// inlined str_char_at reaches this keeps its registers across the call.
 @noinline
+@slowpath
 Int char_at_slow(Int s, Int i) {
     Int sl = idx_slot(s);
     if (!ult(i, sl_len(sl))) { return 0 - 1; }
@@ -794,10 +797,12 @@ Int sbv_bytes(Int cur, Int lim, Int s, Int n) {
 
 @export("resid_sb2_push", "ptr(ptr,ptr,ptr)")
 @cold
+@slowpath
 pub Int rt_sbv_push(Int cur, Int lim, Int s) { return sbv_bytes(cur, lim, s, c_strlen(s)); }
 
 @export("resid_sb2_push_cp", "ptr(ptr,ptr,i64)")
 @cold
+@slowpath
 pub Int rt_sbv_push_cp(Int cur, Int lim, Int cp) {
     Int tmp = resid_raw_tls("sbv_cp", 8);
     Int n = utf8_encode(cp, tmp);

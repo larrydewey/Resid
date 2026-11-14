@@ -5212,8 +5212,13 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     // (@inline) goes into its callers, across the LTO link.
     // @cold: a rare path (growth, refill, abort), so callers keep their
     // registers for the common one.
-    Str fattr0 = if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@cold")) { " noinline cold" } else if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@noinline")) { " noinline" } else { "" };
-    Str fattr = if (resid_rtmod() && fattr0 == "" && str_contains(w0.g.ns[d].aux, "@inline")) { " alwaysinline" } else { fattr0 };
+    // @slowpath: a slow path called from inlined fast paths in user loops;
+    // the driver routes its calls through a thunk that keeps the caller's
+    // registers (rt_slowpaths), so the loop around the call need not spill.
+    Bool slowp = resid_rtmod() && str_contains(w0.g.ns[d].aux, "@slowpath");
+    Str fattr0 = if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@cold")) { " noinline cold" } else if (resid_rtmod() && (slowp || str_contains(w0.g.ns[d].aux, "@noinline"))) { " noinline" } else { "" };
+    Str fattr1 = if (resid_rtmod() && fattr0 == "" && str_contains(w0.g.ns[d].aux, "@inline")) { " alwaysinline" } else { fattr0 };
+    Str fattr = if (slowp) { fattr1 + " \"resid-slowpath\"" } else { fattr1 };
     Str defline = if (is_main) { "define i32 @resid_user_main() " + abi_attrs() + " {" } else { "define " + link + ll_ty(rbase) + " @" + name + "(" + pd + ")" + fattr + " " + abi_attrs() + " {" };
     List(Str) nl = lw_param_names(w1, d, 1, n - 1, ListBuf());
     // Ownership: the node flags and record reuses the body's lowering reads.
