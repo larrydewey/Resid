@@ -1004,8 +1004,49 @@ pub Str imp_hidden(List(Str) decls, Int i, Str vis, Str acc) {
     return imp_hidden(decls, i + 1, vis, acc2);
 }
 
+// A module path as a symbol: below the mangling base (mg_base_set) it is
+// spelled relative to it, so the seed does not depend on the checkout's path.
 pub Str imp_mangle(Str path) {
-    return imp_mangle_at(path, 0, "");
+    return imp_mangle_at(path, mg_strip(path), "");
+}
+
+// The mangling base: its length in codepoints, then the codepoints, one
+// word each (at most 1023; the driver sets it once, before resolving).
+pub Int mg_base() { return resid_raw_global("resid_mangle_base", 8192); }
+
+// The directory holding the standard library's directory (a checkout or an
+// install), from op_std_root's "/.../lib/"; "" when there is none.
+pub Str mg_base_of(Str stdroot) {
+    if (!str_starts_with(stdroot, "/") || !str_ends_with(stdroot, "/")) { return ""; }
+    Str up = imp_dir_of(stdroot, str_len(stdroot) - 1);
+    return if (str_len(up) < 2 || !str_starts_with(up, "/")) { "" } else { up + "/" };
+}
+
+pub Int mg_base_set(Str b) {
+    Int n = str_len(b);
+    if (n > 1023) { return resid_raw_store64(mg_base(), 0); }
+    Int _w = mg_base_put(b, 0, n);
+    return resid_raw_store64(mg_base(), n);
+}
+
+Int mg_base_put(Str b, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int _s = resid_raw_store64(mg_base() + 8 + i * 8, str_char_at(b, i));
+    return mg_base_put(b, i + 1, n);
+}
+
+// How many leading codepoints of `p` are the base: all of it when `p` lies
+// below it, else 0.
+Int mg_strip(Str p) {
+    Int n = resid_raw_load64(mg_base());
+    if (n == 0 || str_len(p) <= n) { return 0; }
+    return if (mg_prefix(p, 0, n)) { n } else { 0 };
+}
+
+Bool mg_prefix(Str p, Int i, Int n) {
+    if (i >= n) { return true; }
+    if (str_char_at(p, i) != resid_raw_load64(mg_base() + 8 + i * 8)) { return false; }
+    return mg_prefix(p, i + 1, n);
 }
 
 pub Str imp_mangle_at(Str p, Int i, Str acc) {

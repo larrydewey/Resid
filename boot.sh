@@ -165,6 +165,8 @@ link_clang "$SEED_LL" "${OUT}/stage1.bin"
 ok "stage1 linked"
 
 step "runtime: stage1 lowers runtime/rt/ (must byte-match build/boot/rt.ll)"
+# Lowering the runtime is a release build too: the key comes first.
+ensure_key "${OUT}/stage1.bin"
 build_rt "${OUT}/stage1.bin" "${OUT}/rt_check"
 cmp -s "${OUT}/rt_check.ll" "$RT_LL" || die "runtime IR differs from build/boot/rt.ll — runtime or compiler source changed; re-seed with --bootstrap-from-self"
 build_rt "${OUT}/stage1.bin" "${OUT}/rta_check" aarch64
