@@ -748,7 +748,7 @@ pub Int rt_tcp_recv_some(Int fd, Int max0) {
     Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
     _ = byte_boxes(buf, slots, 0, n);
     Int out = c_list_new(n, slots, resid_raw_addr("List"));
-    _ = c_free(buf) + c_free(slots);
+    _ = c_free_prefix(buf, n) + c_free(slots);
     return out;
 }
 
@@ -971,7 +971,7 @@ pub Int rt_unix_recv_some(Int fd, Int max0) {
     Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
     _ = byte_boxes(buf, slots, 0, n);
     Int out = c_list_new(n, slots, resid_raw_addr("List"));
-    _ = c_free(buf) + c_free(slots);
+    _ = c_free_prefix(buf, n) + c_free(slots);
     return out;
 }
 
