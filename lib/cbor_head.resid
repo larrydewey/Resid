@@ -16,7 +16,13 @@ import "serial_seq.resid";
 /// Every head's argument is read from these: the shortest run of them that
 /// is not a leading zero is the argument.
 /// Least significant first, then reversed: a builder can only append.
-pub List(Int) cb_be16(UInt(128) v) { return cb_rev(cb_be16_at(v, 16, []), 0, []); }
+pub List(Int) cb_be16(UInt(128) v) { return cb_be16_fill(v, 15, ListBuf()); }
+
+/// Bytes `k` down to 0 of `v` (byte 0 the least significant) pushed onto `b`.
+pub List(Int) cb_be16_fill(UInt(128) v, Int k, ListBuf(Int) b) {
+    if (k < 0) { return b.finish(); }
+    return cb_be16_fill(v, k - 1, b.push((Int)((v >> (UInt(128))(k * 8)) & u128(255))));
+}
 
 /// The low `n` bytes of `v` appended to `acc`, least significant first.
 pub List(Int) cb_be16_at(UInt(128) v, Int n, List(Int) acc) {
@@ -28,16 +34,23 @@ pub List(Int) cb_be16_at(UInt(128) v, Int n, List(Int) acc) {
 /// `xs` from index `i` on, reversed, in front of `acc`.
 pub List(Int) cb_rev(List(Int) xs, Int i, List(Int) acc) {
     if (i >= xs.len()) { return acc; }
-    return cb_rev(xs, i + 1, [xs[i]].concat(acc));
+    return xs[i..].reverse().concat(acc);
 }
 
 /// The head for `arg` under `major`, in its shortest form.
 /// Callers pass an argument that fits in 64 bits: a wider one is a CBOR
 /// bignum, not a longer head.
 pub List(Int) cb_head(Int major, UInt(64) arg) {
-    List(Int) full = cb_be16(u128(arg));
-    return cb_head_at(full, cb_first_set(full, 0), major);
+    Int mt = major << 5;
+    if (arg <= u64(23)) { return [mt | (Int)arg]; }
+    if (arg <= u64(255)) { return [mt | 24, (Int)arg]; }
+    if (arg <= u64(65535)) { return [mt | 25, cb_arg_byte(arg, 1), cb_arg_byte(arg, 0)]; }
+    if (arg <= u64(4294967295)) { return [mt | 26, cb_arg_byte(arg, 3), cb_arg_byte(arg, 2), cb_arg_byte(arg, 1), cb_arg_byte(arg, 0)]; }
+    return [mt | 27, cb_arg_byte(arg, 7), cb_arg_byte(arg, 6), cb_arg_byte(arg, 5), cb_arg_byte(arg, 4), cb_arg_byte(arg, 3), cb_arg_byte(arg, 2), cb_arg_byte(arg, 1), cb_arg_byte(arg, 0)];
 }
+
+/// Byte `k` of `arg` (0 the least significant).
+pub Int cb_arg_byte(UInt(64) arg, Int k) { return (Int)((arg >> (UInt(64))(k * 8)) & u64(255)); }
 
 /// The first byte from `i` that is not a leading zero, where the argument starts.
 /// Never past the last byte, so a zero argument keeps one byte.
@@ -105,7 +118,18 @@ pub List(Int) cb_str_bytes(Str s) { return cb_str_bytes_at(s, 0, []); }
 /// The UTF-8 bytes of the code points of `s` from `i` on, appended to `acc`.
 pub List(Int) cb_str_bytes_at(Str s, Int i, List(Int) acc) {
     if (i >= str_len(s)) { return acc; }
-    return cb_str_bytes_at(s, i + 1, acc.concat(cb_cp_bytes(str_char_at(s, i))));
+    return acc.concat(cb_str_push(s, i, str_len(s), ListBuf()));
+}
+
+/// The UTF-8 bytes of the code points of `s` in [`i`, `n`) pushed onto `b`,
+/// then the finished list.
+pub List(Int) cb_str_push(Str s, Int i, Int n, ListBuf(Int) b) {
+    if (i >= n) { return b.finish(); }
+    Int cp = str_char_at(s, i);
+    if (cp < 128) { return cb_str_push(s, i + 1, n, b.push(cp)); }
+    if (cp < 2048) { return cb_str_push(s, i + 1, n, b.push(192 + (cp >> 6)).push(128 + (cp & 63))); }
+    if (cp < 65536) { return cb_str_push(s, i + 1, n, b.push(224 + (cp >> 12)).push(128 + ((cp >> 6) & 63)).push(128 + (cp & 63))); }
+    return cb_str_push(s, i + 1, n, b.push(240 + (cp >> 18)).push(128 + ((cp >> 12) & 63)).push(128 + ((cp >> 6) & 63)).push(128 + (cp & 63)));
 }
 
 /// One code point read at `i`, and where the next one starts.

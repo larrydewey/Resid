@@ -784,7 +784,7 @@ pub Int rt_tcp_recv_some(Int fd, Int max0) {
     Int r = if (max > 0 && dl_arm(fd)) { resid_raw_syscall(45, fd, buf, max, 0, 0, 0) } else { 0 };
     Int n = if (r > 0) { r } else { 0 };
     Int out = bl_from_bytes(n, buf);
-    _ = c_free(buf);
+    _ = c_free_prefix(buf, n);
     return out;
 }
 
@@ -999,7 +999,7 @@ pub Int rt_unix_recv_some(Int fd, Int max0) {
     Int r = if (max > 0 && dl_arm(fd)) { resid_raw_syscall(45, fd, buf, max, 0, 0, 0) } else { 0 };
     Int n = if (r > 0) { r } else { 0 };
     Int out = bl_from_bytes(n, buf);
-    _ = c_free(buf);
+    _ = c_free_prefix(buf, n);
     return out;
 }
 

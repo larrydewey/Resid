@@ -18,7 +18,19 @@ Bool list_has(Int l, Int k, Int v, Int i, Int n) {
 }
 
 @export("list_contains_int", "i8(ptr,i64)")
-pub Int rt_list_contains_int(Int l, Int v) { return if (list_has(l, 0, v, 0, c_list_len(l))) { 1 } else { 0 }; }
+pub Int rt_list_contains_int(Int l, Int v) {
+    Int n = c_list_len(l);
+    // A flat list of raw integer slots: the slots themselves, in a row.
+    // (A byte list packs its elements one per byte: it takes the general path.)
+    if (!lbytes(l) && ult(ltype(l) - 1, 7) && lflat(l)) { return if (words_has(lroot(l) + 24, v, 0, n)) { 1 } else { 0 }; }
+    return if (list_has(l, 0, v, 0, n)) { 1 } else { 0 };
+}
+
+Bool words_has(Int a, Int v, Int i, Int n) {
+    if (i >= n) { return false; }
+    if (ld64(a + i * 8) == v) { return true; }
+    return words_has(a, v, i + 1, n);
+}
 
 @export("list_contains_float", "i8(ptr,double)")
 pub Int rt_list_contains_float(Int l, Float v) { return if (list_has(l, 1, resid_raw_f64_bits(v), 0, c_list_len(l))) { 1 } else { 0 }; }

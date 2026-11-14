@@ -2528,7 +2528,8 @@ GT lw_index(LW w, Int id, List(Str) env, GT c) {
         // A borrowed element only read until its write-back: in place.
         if (lo_is(w, id, 16) && lo_is(w, id, 2)) {
             Int tb = ixx.tmp + 1;
-            Str rb = f"%t{tb}";
+            // "%bw": a borrow's result, so its write-back can name it.
+            Str rb = f"%bw{tb}";
             List(Str) fr = [fixed_alloca(rb + "fs", rw * 8 + 8), rb + "f = getelementptr i8, ptr " + rb + "fs, i64 8"];
             return lw_step(ixx, rb, ety, ixx.lines.concat(fr).concat([rb + " = call ptr @resid_list_rec_borrow(ptr " + base.val + ", i64 " + ixx.val + f", i64 {rw + 1}, ptr " + rb + "f)"]), tb);
         }
@@ -4643,6 +4644,20 @@ Str lw_with_mover(Funcs fs, Str ety) {
     return lr_rec_fn(t);
 }
 
+// The register of the borrow that write-back `id` writes back (its name,
+// bound once in the function, holds a "%bw" borrow result), else "".
+Str lw_bw_reg(LW w, Int id, List(Str) env) {
+    Int sb = w.lof.get(0 - 2 - id) else { 0 - 1 };
+    if (sb < 0) { return ""; }
+    Str ent = env_lookup(env, w.g.ns[sb].text);
+    if (ent == "") { return ""; }
+    Int c1 = str_find_char(ent, 58, 0);
+    Int c2 = str_find_char(ent, 58, c1 + 1);
+    if (c1 < 0 || c2 < 0) { return ""; }
+    Str reg = str_slice(ent, c1 + 1, c2);
+    return if (str_starts_with(reg, "%bw")) { reg } else { "" };
+}
+
 // A heap list: resid_list_with, in place when the update is owned.
 GT lw_list_with(LW w, Int id, GT base, List(Str) env) {
     Str ety = elem_type(strip_owned_cg(base.ty));
@@ -4659,7 +4674,11 @@ GT lw_list_with(LW w, Int id, GT base, List(Str) env) {
     Int rw = lst_rec(w.fs, ety);
     if (rw > 0) {
         Str rown = if (lo_is(w, id, 1)) { "1" } else { "0" };
-        if (lo_is(w, id, 4)) { return lw_step(xv, reg, base.ty, xv.lines.concat([reg + " = call ptr @resid_list_set_rec_wb(ptr " + base.val + ", i64 " + ix.val + ", ptr " + xv.val + f", i64 {rw + 1})"]), t2); }
+        if (lo_is(w, id, 4)) {
+            Str rb = lw_bw_reg(w, id, env);
+            Str wbc = if (rb != "") { "call ptr @resid_list_set_rec_wbf(ptr " + base.val + ", i64 " + ix.val + ", ptr " + xv.val + f", i64 {rw + 1}, ptr " + rb + ", ptr " + rb + "f)" } else { "call ptr @resid_list_set_rec_wb(ptr " + base.val + ", i64 " + ix.val + ", ptr " + xv.val + f", i64 {rw + 1})" };
+            return lw_step(xv, reg, base.ty, xv.lines.concat([reg + " = " + wbc]), t2);
+        }
         return lw_step(xv, reg, base.ty, xv.lines.concat([reg + " = call ptr @resid_list_set_rec(ptr " + base.val + ", i8 " + rown + ", i64 " + ix.val + ", ptr " + xv.val + f", i64 {rw + 1})"]), t2);
     }
     // A list of records updates in place too: the runtime moves a younger
@@ -5298,8 +5317,13 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     // (@inline) goes into its callers, across the LTO link.
     // @cold: a rare path (growth, refill, abort), so callers keep their
     // registers for the common one.
-    Str fattr0 = if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@cold")) { " noinline cold" } else if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@noinline")) { " noinline" } else { "" };
-    Str fattr = if (resid_rtmod() && fattr0 == "" && str_contains(w0.g.ns[d].aux, "@inline")) { " alwaysinline" } else { fattr0 };
+    // @slowpath: a slow path called from inlined fast paths in user loops;
+    // the driver routes its calls through a thunk that keeps the caller's
+    // registers (rt_slowpaths), so the loop around the call need not spill.
+    Bool slowp = resid_rtmod() && str_contains(w0.g.ns[d].aux, "@slowpath");
+    Str fattr0 = if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@cold")) { " noinline cold" } else if (resid_rtmod() && (slowp || str_contains(w0.g.ns[d].aux, "@noinline"))) { " noinline" } else { "" };
+    Str fattr1 = if (resid_rtmod() && fattr0 == "" && str_contains(w0.g.ns[d].aux, "@inline")) { " alwaysinline" } else { fattr0 };
+    Str fattr = if (slowp) { fattr1 + " \"resid-slowpath\"" } else { fattr1 };
     Str defline = if (is_main) { "define i32 @resid_user_main() " + abi_attrs() + " {" } else { "define " + link + ll_ty(rbase) + " @" + name + "(" + pd + ")" + fattr + " " + abi_attrs() + " {" };
     List(Str) nl = lw_param_names(w1, d, 1, n - 1, ListBuf());
     // Ownership: the node flags and record reuses the body's lowering reads.
@@ -5645,7 +5669,7 @@ List(Str) ol_apply(List(Str) pre, List(Str) ls, List(Str) tyl) {
 Bool ol_writes(List(Str) f, Int i) {
     if (i >= f.len()) { return false; }
     Str l = f[i];
-    if (str_contains(l, "@resid_list_set_w(ptr %") || str_contains(l, "@resid_list_set_rec(ptr %") || str_contains(l, "@resid_list_set_rec_wb(ptr %")) { return true; }
+    if (str_contains(l, "@resid_list_set_w(ptr %") || str_contains(l, "@resid_list_set_rec(ptr %") || str_contains(l, "@resid_list_set_rec_wb(ptr %") || str_contains(l, "@resid_list_set_rec_wbf(ptr %")) { return true; }
     return ol_writes(f, i + 1);
 }
 
@@ -5743,7 +5767,7 @@ Bool ol_joins(Str rhs, Map(Str, Int) fam) {
     if (str_starts_with(rhs, "phi ptr ")) { return ol_all_in(ol_phi_vals(rhs), 0, fam); }
     Str m = ol_first_arg(rhs);
     if (m == "" || !fam.contains(m)) { return false; }
-    return str_starts_with(rhs, "call ptr @resid_list_set_w(ptr " + m + ", i8 1, ") || str_starts_with(rhs, "call ptr @resid_list_set_rec(ptr " + m + ", i8 1, ") || str_starts_with(rhs, "call ptr @resid_list_set_rec_wb(ptr " + m + ", ");
+    return str_starts_with(rhs, "call ptr @resid_list_set_w(ptr " + m + ", i8 1, ") || str_starts_with(rhs, "call ptr @resid_list_set_rec(ptr " + m + ", i8 1, ") || str_starts_with(rhs, "call ptr @resid_list_set_rec_wb(ptr " + m + ", ") || str_starts_with(rhs, "call ptr @resid_list_set_rec_wbf(ptr " + m + ", ");
 }
 
 // `call T @f(ptr %x, ...`: %x, else "".
@@ -5790,9 +5814,9 @@ OL ol_check(List(Str) f, Int i, OL v) {
     Str a = "(ptr " + m + ", ";
     Bool rd = str_starts_with(rhs, "call ptr @resid_list_get" + a) || rhs == "call i64 @resid_list_len(ptr " + m + ")" || str_starts_with(rhs, "call i64 @resid_list_elems" + a) || str_starts_with(rhs, "call ptr @resid_list_rec_at" + a);
     Bool wr = str_starts_with(rhs, "call ptr @resid_list_set_w" + a + "i8 1, ") || str_starts_with(rhs, "call ptr @resid_list_set_rec" + a + "i8 1, ");
-    Bool bw = str_starts_with(rhs, "call ptr @resid_list_rec_borrow" + a) || str_starts_with(rhs, "call ptr @resid_list_set_rec_wb" + a);
+    Bool bw = str_starts_with(rhs, "call ptr @resid_list_rec_borrow" + a) || str_starts_with(rhs, "call ptr @resid_list_set_rec_wb" + a) || str_starts_with(rhs, "call ptr @resid_list_set_rec_wbf" + a);
     if (!rd && !wr && !bw) { return ol_bad(v); }
-    OL v2 = OL {.reg = v.reg, .ok = true, .wrote = v.wrote || wr || str_contains(rhs, "_wb("), .borrow = v.borrow || bw, .fam = v.fam, .n = v.n};
+    OL v2 = OL {.reg = v.reg, .ok = true, .wrote = v.wrote || wr || str_contains(rhs, "_wb(") || str_contains(rhs, "_wbf("), .borrow = v.borrow || bw, .fam = v.fam, .n = v.n};
     return ol_check(f, i + 1, v2);
 }
 
@@ -6041,7 +6065,7 @@ List(Str) ol_op0(Str l, Map(Str, Int) fam) {
         Str w = str_slice(a[2], 4, str_len(a[2]));
         return [d + ".n = add i64 " + ol_elems(n) + ", 0", "call void @resid_ol_check(" + a[1] + ", i64 " + d + ".n)"].concat(ol_elem(d, d, s, a[1], w));
     }
-    if (str_starts_with(rhs, "call ptr @resid_list_set_rec_wb(") && a.len() == 4) {
+    if ((str_starts_with(rhs, "call ptr @resid_list_set_rec_wb(") && a.len() == 4) || (str_starts_with(rhs, "call ptr @resid_list_set_rec_wbf(") && a.len() == 6)) {
         Str w = str_slice(a[3], 4, str_len(a[3]));
         if (!vl_is_int_lit(w)) { return [l]; }
         return ol_elem(d + ".p", d, s, a[1], w).concat(["call void @resid_ol_put(ptr " + d + ".p, " + a[2] + f", i64 {(str_parse_int(w) - 1) * 8})", alias]);
@@ -9564,7 +9588,8 @@ LOF lo_fn_flags(Kg g, Int d, LOP lop, Funcs fs) {
     LOP pm = lo_with_memo(g, body, rl, lop, fs);
     LOW w0 = lo_params(g, d, 0, np, rl, pm, fs, LOW {.fl = rf, .chained = [], .reuse = [], .ro = lo_nomap_is()});
     LOW w1 = lo_locals(g, body, 0, rl, pm, fs, w0);
-    Map(Int, Int) f3 = lo_fieldidx(g, body, lo_borrows(g, body, 0, pm, fs, w1.fl));
+    Map(Int, Int) fb = lo_borrows(g, body, 0, pm, fs, w1.fl);
+    Map(Int, Int) f3 = lo_fieldidx(g, body, lo_bw_dedup(g, fb, fb.keys(), 0, su_dupmap(g, d), lo_nofl()));
     return LOF {.fl = ne_flags(g, body, fs, lop.ne, false, -1, f3), .ro = w1.ro};
 }
 
@@ -9629,7 +9654,24 @@ Map(Int, Int) lo_borrow_bind(Kg g, Int blk, Int i, Int s, LOP lop, Funcs fs, Map
     if (!lt.ok) { return fl; }
     BS r = lo_bscan(g, blk, i + 1, lo_bpath_item(g, xs, lop, fs), [g.ns[s].text], false, ty, ix, lop, fs, fl);
     if (!r.ok) { return fl; }
-    return lo_flag(lo_flag(fl, [e], 0, 2), r.ws, 0, 4);
+    return lo_bw_pair(lo_flag(lo_flag(fl, [e], 0, 2), r.ws, 0, 4), r.ws, 0, s);
+}
+
+// Each write-back of borrow bind s, keyed 0 - 2 - with node: s (read by
+// lw_bw_reg; node ids are never negative).
+Map(Int, Int) lo_bw_pair(Map(Int, Int) fl, List(Int) ws, Int i, Int s) {
+    if (i >= ws.len()) { return fl; }
+    return lo_bw_pair(fl.insert(0 - 2 - ws[i], s), ws, i + 1, s);
+}
+
+// The pairings whose borrow's name is bound once in the function, so a
+// lookup of the name at the write-back finds that borrow.
+Map(Int, Int) lo_bw_dedup(Kg g, Map(Int, Int) fl, List(Int) ks, Int i, Map(Str, Int) dup, Map(Int, Int) acc) {
+    if (i >= ks.len()) { return acc; }
+    Int k = ks[i];
+    Int s = fl.get(k) else { 0 };
+    Bool drop = k < 0 && dup.contains(g.ns[s].text);
+    return lo_bw_dedup(g, fl, ks, i + 1, dup, if (drop) { acc } else { acc.insert(k, s) });
 }
 
 // xs: a name, or a field of a name.

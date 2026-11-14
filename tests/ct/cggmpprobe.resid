@@ -19,16 +19,16 @@ List(Secret(UInt(8))) sec(List(Int) b) { return secret_bytes(mark(b, 0, ListBuf(
 
 @requires(declassify)
 Int ct_case_cggmp_secret_scalar() {
-    Secret(UInt(320)) a = classify((UInt(320)) 5);
-    Secret(UInt(320)) b = classify((UInt(320)) 7);
-    Secret(UInt(320)) s = cggmp_secret_scalar_add(a, b);
-    Secret(UInt(320)) m = cggmp_secret_scalar_mul(a, b);
-    Secret(UInt(320)) i = cggmp_secret_scalar_inv(m);
-    Secret(UInt(320)) l = cggmp_secret_scalar_lift((UInt(320)) 9);
-    UInt(320) out = ct_public(declassify(s, "CT probe output: CGGMP secret scalar arithmetic"));
-    UInt(320) out2 = ct_public(declassify(m, "CT probe output: CGGMP secret scalar multiplication"));
-    UInt(320) out3 = ct_public(declassify(i, "CT probe output: CGGMP secret scalar inversion"));
-    UInt(320) out4 = ct_public(declassify(l, "CT probe output: CGGMP secret scalar lift"));
+    Secret(UInt(576)) a = classify((UInt(576)) 5);
+    Secret(UInt(576)) b = classify((UInt(576)) 7);
+    Secret(UInt(576)) s = cggmp_secret_scalar_add(a, b);
+    Secret(UInt(576)) m = cggmp_secret_scalar_mul(a, b);
+    Secret(UInt(576)) i = cggmp_secret_scalar_inv(m);
+    Secret(UInt(576)) l = cggmp_secret_scalar_lift((UInt(576)) 9);
+    UInt(576) out = ct_public(declassify(s, "CT probe output: CGGMP secret scalar arithmetic"));
+    UInt(576) out2 = ct_public(declassify(m, "CT probe output: CGGMP secret scalar multiplication"));
+    UInt(576) out3 = ct_public(declassify(i, "CT probe output: CGGMP secret scalar inversion"));
+    UInt(576) out4 = ct_public(declassify(l, "CT probe output: CGGMP secret scalar lift"));
     println(f"cggmp-secret-scalar {out} {out2} {out3} {out4}");
     return 0;
 }
@@ -64,8 +64,8 @@ Int ct_case_cggmp_secret_material() {
 @requires(declassify)
 Int ct_case_cggmp_secret_config() {
     CgSecretMaterial m = cggmp_secret_material(sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()));
-    CgSecretMaterial t = cggmp_secret_material_tweak(m, classify((UInt(320)) 5));
-    UInt(320) out = ct_public(declassify(csc_scalar_from_bytes(t.ecdsa_share), "CT probe output: CGGMP secret material tweak"));
+    CgSecretMaterial t = cggmp_secret_material_tweak(m, classify((UInt(576)) 5));
+    UInt(576) out = ct_public(declassify(csc_scalar_from_bytes(t.ecdsa_share), "CT probe output: CGGMP secret material tweak"));
     Secret(UInt(2048)) p = cggmp_secret_paillier_p(t);
     Secret(UInt(2048)) q = cggmp_secret_paillier_q(t);
     Secret(UInt(2048)) lam = cggmp_secret_paillier_lambda(t);
@@ -94,8 +94,8 @@ Int ct_case_cggmp_secret_protocol() {
         secret_bytes(mark([1], 0, ListBuf())),
         secret_bytes(mark([2], 0, ListBuf()))
     );
-    CgSecretCtx t = cggmp_secret_ctx_tweak(c, classify((UInt(320)) 5));
-    UInt(320) out = ct_public(declassify(csc_scalar_from_bytes(t.material.ecdsa_share), "CT probe output: CGGMP secret context tweak"));
+    CgSecretCtx t = cggmp_secret_ctx_tweak(c, classify((UInt(576)) 5));
+    UInt(576) out = ct_public(declassify(csc_scalar_from_bytes(t.material.ecdsa_share), "CT probe output: CGGMP secret context tweak"));
     println(f"cggmp-secret-protocol {out}");
     return 0;
 }

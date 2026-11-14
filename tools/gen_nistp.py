@@ -8,9 +8,7 @@ rerun (python3 tools/gen_nistp.py); never edit the generated files.
 
 Design (see the header written into each file):
   - field and scalar elements are native UInt(W) integers in Montgomery
-    form, with R = 2^K and W just wide enough for an element and the guard
-    bits of a subtraction; the Montgomery product alone (the PxxxWord verb
-    pxxxw_mont) works in a wider WW, where t + q*m never overflows;
+    form, with R = 2^K and W wide enough that t + q*m never overflows;
   - the curve code is written once, generic over a per-curve behavior
     (P256Word(F, B), P384Word(F, B)) with a public instance (UInt(W), Int)
     and a secret one (Secret(UInt(W)), Secret(UInt(8))), so the compiler
@@ -23,14 +21,16 @@ Design (see the header written into each file):
   - points use the complete projective formulas of Renes, Costello and
     Batina (2016, algorithms 4 and 6, a = -3), so infinity and doubling
     need no special case, and scalar multiplication is a fixed-length
-    double-and-add-always with a masked select.
+    fixed-window multiplication with a masked read of the whole table
+    (verification, on public data only, interleaves two windowed
+    multiplications and skips zero windows).
 """
 import os
 import re
 
 CURVES = {
     "p256": dict(
-        K=256, T="P256Pt", A="P256Aff", S="P256Sig", BW="P256Word", XY="P256Xy",
+        K=256, W=576, T="P256Pt", A="P256Aff", S="P256Sig", BW="P256Word", XY="P256Xy",
         p=2**256 - 2**224 + 2**192 + 2**96 - 1,
         n=0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551,
         b=0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b,
@@ -39,7 +39,7 @@ CURVES = {
         name="NIST P-256 (secp256r1)",
     ),
     "p521": dict(
-        K=521, T="P521Pt", A="P521Aff", S="P521Sig", BW="P521Word", XY="P521Xy",
+        K=521, W=1088, T="P521Pt", A="P521Aff", S="P521Sig", BW="P521Word", XY="P521Xy",
         p=2**521 - 1,
         n=0x01fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa51868783bf2f966b7fcc0148f709a5d03bb5c9b8899c47aebb6fb71e91386409,
         b=0x0051953eb9618e1c9a1f929a21a0b68540eea2da725b99b315f3b8b489918ef109e156193951ec7e937b1652c0bd3bb1bf073573df883d2c34f1ef451fd46b503f00,
@@ -48,7 +48,7 @@ CURVES = {
         name="NIST P-521 (secp521r1)",
     ),
     "p384": dict(
-        K=384, T="P384Pt", A="P384Aff", S="P384Sig", BW="P384Word", XY="P384Xy",
+        K=384, W=832, T="P384Pt", A="P384Aff", S="P384Sig", BW="P384Word", XY="P384Xy",
         p=2**384 - 2**128 - 2**96 + 2**32 - 1,
         n=0xffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973,
         b=0xb3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef,
@@ -74,15 +74,15 @@ TEMPLATE = r'''// lib/@X@.resid — @NAME@: ECDSA (verify, sign with an RFC 6979
 // result. The public copy is the same code; verification and point
 // decoding use only it.
 //
-// Field and scalar elements are in Montgomery form (R = 2^@K@), held in
-// @W@ bits: an element below 2^@K@ and the guard bits of a subtraction.
-// The Montgomery product alone works in @WW@ bits, room for t + q*m, and
-// hands back @W@ (@X@w_mont), so nothing wraps. Selects are masks (through
-// ct_hide), reductions subtract with a borrow bit, the scalar ladder runs
-// all @K@ steps, and arithmetic wraps, so no overflow check branches on a
-// value either. What becomes public goes through @X@w_open: a signature,
-// a public key, and the verdicts "this scalar is usable" and "this point
-// is not infinity". At secret types that is a declassification, so the
+// Field and scalar elements are in Montgomery form (R = 2^@K@). @W@ bits
+// leave room for t + q*m, so nothing wraps. Selects are masks (through
+// ct_hide), reductions subtract with a borrow bit, scalar multiplication
+// runs every 4-bit window and reads all of its table with masks, and
+// arithmetic wraps, so no overflow check branches on a value either.
+// Verification alone, whose inputs are all public, takes a faster path
+// that depends on them. What becomes public goes through @X@w_open: a
+// signature, a public key, and the verdicts "this scalar is usable" and
+// "this point is not infinity". At secret types that is a declassification, so the
 // secret copies of signing, key derivation and ECDH need
 // @requires(declassify); the ECDH result itself stays secret.
 //
@@ -138,7 +138,9 @@ UInt(@W@) @X@_zero() { return 0; }
 behavior @BW@(F, B) {
     F @X@w_add(F a, F b);
     F @X@w_sub(F a, F b);
-    F @X@w_mont(F a, F b, UInt(@W@) m, UInt(@W@) minv);   // a * b / 2^@K@ mod m, below 2m (a, b < m)
+    F @X@w_mul(F a, F b);
+    F @X@w_mulf(F a, F b);           // a * b for a, b < 2^@KW@, on @PW@-bit words
+    F @X@w_mullo(F a, F b);          // a * b mod 2^@KW@, on @KW@-bit words
     F @X@w_and(F a, F b);
     F @X@w_or(F a, F b);
     F @X@w_xor(F a, F b);
@@ -153,16 +155,9 @@ behavior @BW@(F, B) {
 
 UInt(@W@) @X@i_add(UInt(@W@) a, UInt(@W@) b) { return wrapping_uadd(a, b); }
 UInt(@W@) @X@i_sub(UInt(@W@) a, UInt(@W@) b) { return wrapping_usub(a, b); }
-// The Montgomery product without its final subtraction: t = a * b and
-// q = t * minv mod 2^@K@ in @WW@ bits, factors cut to @KC@ bits first (the
-// optimizer then multiplies only the limbs that can be set), and
-// (t + q * m) / 2^@K@ back in @W@ bits.
-UInt(@W@) @X@i_mont(UInt(@W@) a, UInt(@W@) b, UInt(@W@) m, UInt(@W@) minv) {
-    UInt(@WW@) rm = @RMASK@;
-    UInt(@WW@) t = @MUL_A_B@;
-    UInt(@WW@) q = @MUL_TM_MI@ & rm;
-    return wrapping_u@W@(wrapping_uadd(t, @MUL_Q_M@) >> (UInt(@WW@)) @K@);
-}
+UInt(@W@) @X@i_mul(UInt(@W@) a, UInt(@W@) b) { return wrapping_umul(a, b); }
+UInt(@W@) @X@i_mulf(UInt(@W@) a, UInt(@W@) b) { return @MULF@; }
+UInt(@W@) @X@i_mullo(UInt(@W@) a, UInt(@W@) b) { return @MULLO@; }
 UInt(@W@) @X@i_and(UInt(@W@) a, UInt(@W@) b) { return a & b; }
 UInt(@W@) @X@i_or(UInt(@W@) a, UInt(@W@) b) { return a | b; }
 UInt(@W@) @X@i_xor(UInt(@W@) a, UInt(@W@) b) { return a ^ b; }
@@ -181,16 +176,13 @@ Int @X@i_byte(UInt(@W@) x, Int sh) { return wrapping_i64((x >> (UInt(@W@)) sh) &
 // from here on.
 UInt(@W@) @X@i_open(UInt(@W@) x) { return ct_public(x); }
 
-@BW@(UInt(@W@), Int) = { .@X@w_add = @X@i_add, .@X@w_sub = @X@i_sub, .@X@w_mont = @X@i_mont, .@X@w_and = @X@i_and, .@X@w_or = @X@i_or, .@X@w_xor = @X@i_xor, .@X@w_shr = @X@i_shr, .@X@w_shl = @X@i_shl, .@X@w_mask = @X@i_mask, .@X@w_lift = @X@i_lift, .@X@w_from_byte = @X@i_from_byte, .@X@w_byte = @X@i_byte, .@X@w_open = @X@i_open };
+@BW@(UInt(@W@), Int) = { .@X@w_add = @X@i_add, .@X@w_sub = @X@i_sub, .@X@w_mul = @X@i_mul, .@X@w_mulf = @X@i_mulf, .@X@w_mullo = @X@i_mullo, .@X@w_and = @X@i_and, .@X@w_or = @X@i_or, .@X@w_xor = @X@i_xor, .@X@w_shr = @X@i_shr, .@X@w_shl = @X@i_shl, .@X@w_mask = @X@i_mask, .@X@w_lift = @X@i_lift, .@X@w_from_byte = @X@i_from_byte, .@X@w_byte = @X@i_byte, .@X@w_open = @X@i_open };
 
 Secret(UInt(@W@)) @X@s_add(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return wrapping_uadd(a, b); }
 Secret(UInt(@W@)) @X@s_sub(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return wrapping_usub(a, b); }
-Secret(UInt(@W@)) @X@s_mont(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b, UInt(@W@) m, UInt(@W@) minv) {
-    UInt(@WW@) rm = @RMASK@;
-    Secret(UInt(@WW@)) t = @MUL_A_B@;
-    Secret(UInt(@WW@)) q = @MUL_TM_MI@ & rm;
-    return wrapping_u@W@(wrapping_uadd(t, @MUL_Q_M@) >> (UInt(@WW@)) @K@);
-}
+Secret(UInt(@W@)) @X@s_mul(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return wrapping_umul(a, b); }
+Secret(UInt(@W@)) @X@s_mulf(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return @MULF@; }
+Secret(UInt(@W@)) @X@s_mullo(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return @MULLO@; }
 Secret(UInt(@W@)) @X@s_and(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return a & b; }
 Secret(UInt(@W@)) @X@s_or(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return a | b; }
 Secret(UInt(@W@)) @X@s_xor(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return a ^ b; }
@@ -206,7 +198,7 @@ Secret(UInt(8)) @X@s_byte(Secret(UInt(@W@)) x, Int sh) { return wrapping_u8(x >>
 @requires(declassify)
 UInt(@W@) @X@s_open(Secret(UInt(@W@)) x) { return ct_public(declassify(x, "@NAME@ signature, public key or validity verdict")); }
 
-@BW@(Secret(UInt(@W@)), Secret(UInt(8))) = { .@X@w_add = @X@s_add, .@X@w_sub = @X@s_sub, .@X@w_mont = @X@s_mont, .@X@w_and = @X@s_and, .@X@w_or = @X@s_or, .@X@w_xor = @X@s_xor, .@X@w_shr = @X@s_shr, .@X@w_shl = @X@s_shl, .@X@w_mask = @X@s_mask, .@X@w_lift = @X@s_lift, .@X@w_from_byte = @X@s_from_byte, .@X@w_byte = @X@s_byte, .@X@w_open = @X@s_open };
+@BW@(Secret(UInt(@W@)), Secret(UInt(8))) = { .@X@w_add = @X@s_add, .@X@w_sub = @X@s_sub, .@X@w_mul = @X@s_mul, .@X@w_mulf = @X@s_mulf, .@X@w_mullo = @X@s_mullo, .@X@w_and = @X@s_and, .@X@w_or = @X@s_or, .@X@w_xor = @X@s_xor, .@X@w_shr = @X@s_shr, .@X@w_shl = @X@s_shl, .@X@w_mask = @X@s_mask, .@X@w_lift = @X@s_lift, .@X@w_from_byte = @X@s_from_byte, .@X@w_byte = @X@s_byte, .@X@w_open = @X@s_open };
 
 // ─── Branch-free helpers ─────────────────────────────────────────────
 
@@ -231,9 +223,18 @@ F @X@_csub(F u, UInt(@W@) m) {
     return @X@w_or(@X@w_and(@X@w_and(d, gmask), keep), @X@w_and(u, @X@w_xor(keep, ones)));
 }
 
-// a * b / R mod m (Montgomery), a, b < m.
+// a * b / R mod m (Montgomery), a, b < 2^@K@ (so the result is below m:
+// t + q*m < 2^@K@ * 2m). The products run on words only as wide as their
+// operands (@X@w_mulf, @X@w_mullo), not on all @W@ bits.
 @needs(@BW@(F, B))
-F @X@_mont(F a, F b, UInt(@W@) m, UInt(@W@) minv) { return @X@_csub(@X@w_mont(a, b, m, minv), m); }
+F @X@_mont(F a, F b, UInt(@W@) m, UInt(@W@) minv) {
+    F rm = @X@w_lift(@X@_rmask());
+    F mi = @X@w_lift(minv);
+    F mm = @X@w_lift(m);
+    F t = @X@w_mulf(a, b);
+    F q = @X@w_and(@X@w_mullo(@X@w_and(t, rm), mi), rm);
+    return @X@_csub(@X@w_shr(@X@w_add(t, @X@w_mulf(q, mm)), @K@), m);
+}
 
 // ─── Field (mod p), Montgomery form ──────────────────────────────────
 
@@ -442,18 +443,56 @@ pub @T@(F) @X@_dbl(@T@(F) p) {
     return @T@ {.x = @X@w_or(@X@w_and(a.x, mask), @X@w_and(b.x, nm)), .y = @X@w_or(@X@w_and(a.y, mask), @X@w_and(b.y, nm)), .z = @X@w_or(@X@w_and(a.z, mask), @X@w_and(b.z, nm))};
 }
 
+// [inf, p, 2p, ..., 15p]: index j holds j * p. Which steps run depends on
+// j only.
 @needs(@BW@(F, B))
-@T@(F) @X@_ladder(F k, Int i, @T@(F) r, @T@(F) p) {
-    if (i < 0) { return r; }
-    @T@(F) d = @X@_dbl(r);
-    return @X@_ladder(k, i - 1, @X@_sel(@X@w_mask(@X@w_shr(k, i)), @X@_add(d, p), d), p);
+List(@T@(F)) @X@_ctab(@T@(F) p, @T@(F) last, Int j, ListBuf(@T@(F)) acc) {
+    if (j >= 16) { return acc.finish(); }
+    @T@(F) next = if (j == 0) { @X@_inf() } else if (j == 1) { p } else if (j == 2) { @X@_dbl(p) } else { @X@_add(last, p) };
+    return @X@_ctab(p, next, j + 1, acc.push(next));
 }
 
-/// k * p for k < 2^@K@: every bit costs one doubling and one addition.
+// t[w] for a window w (0..15) that may be secret: every entry is read and
+// kept or dropped with a mask, so neither an address nor a branch depends
+// on w.
+@needs(@BW@(F, B))
+@T@(F) @X@_tsel(List(@T@(F)) t, F w, Int j, @T@(F) acc) {
+    if (j >= 16) { return acc; }
+    F one = @X@w_lift(1);
+    F jj = @X@w_lift((UInt(@W@)) j);
+    F m = @X@w_mask(@X@w_xor(@X@_nonzero(@X@w_xor(w, jj)), one));
+    return @X@_tsel(t, w, j + 1, @X@_sel(m, t[j], acc));
+}
+
+// Bits 4i..4i+3 of k.
+@needs(@BW@(F, B))
+F @X@_cwin(F k, Int i) {
+    F f = @X@w_lift(15);
+    return @X@w_and(@X@w_shr(k, 4 * i), f);
+}
+
+// Windows i..0 of k into acc: four doublings, then the window's multiple
+// of p added, a masked table read even when the window is 0 (adding
+// infinity, which the complete formulas cover).
+@needs(@BW@(F, B))
+@T@(F) @X@_wmul(F k, List(@T@(F)) t, Int i, @T@(F) acc) {
+    if (i < 0) { return acc; }
+    @T@(F) d = @X@_dbl(@X@_dbl(@X@_dbl(@X@_dbl(acc))));
+    @T@(F) z = @X@_inf();
+    return @X@_wmul(k, t, i - 1, @X@_add(d, @X@_tsel(t, @X@_cwin(k, i), 0, z)));
+}
+
+/// k * p for k < 2^@K@ (bits from @K@ up are ignored), in constant time:
+/// fixed 4-bit windows, each costing four doublings, one addition and a
+/// masked read of all sixteen table entries, whatever its value.
 @needs(@BW@(F, B))
 pub @T@(F) @X@_mul(F k, @T@(F) p) {
+    ListBuf(@T@(F)) b = ListBuf();
+    List(@T@(F)) t = @X@_ctab(p, p, 0, b);
+    F rm = @X@w_lift(@X@_rmask());
+    F kk = @X@w_and(k, rm);
     @T@(F) z = @X@_inf();
-    return @X@_ladder(k, @KM1@, z, p);
+    return @X@_wmul(kk, t, @KM1@ / 4 - 1, @X@_tsel(t, @X@_cwin(kk, @KM1@ / 4), 0, z));
 }
 
 /// Back to affine coordinates (no longer Montgomery form). Whether the
@@ -612,9 +651,50 @@ pub Bool @X@_verify_digest(List(Int) digest, UInt(@W@) r, UInt(@W@) s, @A@ q) {
     UInt(@W@) u2 = @X@_sfrom(@X@_smul(@X@_sto(r), w));
     @T@(UInt(@W@)) g = @X@_gen();
     @T@(UInt(@W@)) qp = @X@_from_aff(q);
-    @XY@(UInt(@W@)) pt = @X@_affine(@X@_add(@X@_mul(u1, g), @X@_mul(u2, qp)));
+    @XY@(UInt(@W@)) pt = @X@_affine(@X@_mul2_pub(u1, g, u2, qp));
     if (!pt.ok) { return false; }
     return @X@_reduce_n(pt.x) == r;
+}
+
+// ─── u1 * G + u2 * Q on public data (verification) ──────────────────
+// Verification has no secret: the key, the signature and the digest are
+// public, and so are u1 and u2. So its scalar multiplication may take a
+// path that depends on them -- Straus's interleaving with 4-bit windows:
+// one shared doubling chain, and an addition of a table point only for a
+// nonzero window. The formulas are the same complete ones, so the result
+// is the same point as u1 * G + u2 * Q by the ladder. Never use this for
+// a private scalar: @X@_mul is the constant-time one.
+
+// [P, 2P, ..., 15P] (index j holds (j + 1) * P).
+List(@T@(UInt(@W@))) @X@_wtab(@T@(UInt(@W@)) p, @T@(UInt(@W@)) last, Int j, ListBuf(@T@(UInt(@W@))) acc) {
+    if (j >= 15) { return acc.finish(); }
+    @T@(UInt(@W@)) next = if (j == 0) { p } else if (j == 1) { @X@_dbl(p) } else { @X@_add(last, p) };
+    return @X@_wtab(p, next, j + 1, acc.push(next));
+}
+
+// The 4-bit window i (bits 4i..4i+3) of the public scalar u.
+Int @X@_win(UInt(@W@) u, Int i) { return wrapping_i64((u >> (UInt(@W@)) (4 * i)) & (UInt(@W@)) 15); }
+
+// acc plus t[d - 1], or acc for d = 0.
+@T@(UInt(@W@)) @X@_wadd(@T@(UInt(@W@)) acc, List(@T@(UInt(@W@))) t, Int d) {
+    if (d == 0) { return acc; }
+    return @X@_add(acc, t[d - 1]);
+}
+
+@T@(UInt(@W@)) @X@_straus(UInt(@W@) u1, List(@T@(UInt(@W@))) t1, UInt(@W@) u2, List(@T@(UInt(@W@))) t2, Int i, @T@(UInt(@W@)) acc) {
+    if (i < 0) { return acc; }
+    @T@(UInt(@W@)) d = @X@_dbl(@X@_dbl(@X@_dbl(@X@_dbl(acc))));
+    return @X@_straus(u1, t1, u2, t2, i - 1, @X@_wadd(@X@_wadd(d, t1, @X@_win(u1, i)), t2, @X@_win(u2, i)));
+}
+
+/// u1 * g + u2 * q for public scalars below 2^@K@ and public points, in
+/// time that depends on them (Straus, 4-bit windows): for verification
+/// only, never for a private scalar.
+pub @T@(UInt(@W@)) @X@_mul2_pub(UInt(@W@) u1, @T@(UInt(@W@)) g, UInt(@W@) u2, @T@(UInt(@W@)) q) {
+    ListBuf(@T@(UInt(@W@))) b1 = ListBuf();
+    ListBuf(@T@(UInt(@W@))) b2 = ListBuf();
+    @T@(UInt(@W@)) z = @X@_inf();
+    return @X@_straus(u1, @X@_wtab(g, g, 0, b1), u2, @X@_wtab(q, q, 0, b2), @KM1@ / 4, z);
 }
 
 /// The refused signature: `ok` is false and r and s are zero.
@@ -721,25 +801,30 @@ def mod_inv(a, m):
 
 
 def render(x, c):
-    K = c["K"]
+    K, W = c["K"], c["W"]
     p, n = c["p"], c["n"]
     R = 2 ** K
     assert p % 4 == 3 and n.bit_length() == K
     KB = (K + 7) // 8
-    # Two widths: W holds an element (below 2^K, plus the guard bits of a
-    # subtraction at bit K + 8); WW the Montgomery sum t + q*m (2K + 1 bits)
-    # and the 2KC-bit products of factors cut to KC bits.
-    W = ((K + 9 + 63) // 64) * 64
-    KC = ((K + 63) // 64) * 64
-    WW = max(((2 * K + 2 + 63) // 64) * 64, 2 * KC)
-    assert W % 64 == 0 and K + 8 < W - 1 and KB * 8 <= W
-    def mul(x, y):
-        return f"(UInt({WW})) wrapping_umul((UInt({2 * KC})) wrapping_u{KC}({x}), (UInt({2 * KC})) wrapping_u{KC}({y}))"
+    # t + q*m < 2^(2K+1) and the guard bit K+8 must fit below the top bit.
+    assert 2 * K + 2 < W and W % 64 == 0
+    # Products: operands below 2^K fit KW-bit words (K rounded up to a
+    # multiple of 64), and their full product a 2KW-bit one; when that is
+    # wider than W, the W-bit product is exact (2K + 2 < W).
+    KW = (K + 63) // 64 * 64
+    PW = 2 * KW
+    kmask = f"(UInt({W})) {2 ** KW - 1}"
+    if PW in (128, 256, 512):
+        mulf = f"(UInt({W})) wrapping_umul(wrapping_u{PW}(wrapping_u{KW}(a)), wrapping_u{PW}(wrapping_u{KW}(b)))"
+    else:
+        mulf = f"wrapping_umul(a & {kmask}, b & {kmask})"
+    mullo = (f"(UInt({W})) wrapping_umul(wrapping_u{KW}(a), wrapping_u{KW}(b))" if KW in (64, 128, 256, 512)
+             else f"wrapping_umul(a & {kmask}, b & {kmask}) & {kmask}")
     vals = {
+        "@MULF@": mulf, "@MULLO@": mullo, "@KW@": str(KW), "@PW@": str(PW),
         "@X@": x, "@T@": c["T"], "@A@": c["A"], "@S@": c["S"], "@NAME@": c["name"],
         "@BW@": c["BW"], "@XY@": c["XY"],
-        "@W@": str(W), "@K@": str(K), "@KB@": str(KB), "@KM1@": str(K - 1), "@WW@": str(WW), "@KC@": str(KC),
-        "@MUL_A_B@": mul("a", "b"), "@MUL_TM_MI@": mul("t & rm", "minv"), "@MUL_Q_M@": mul("q", "m"),
+        "@W@": str(W), "@K@": str(K), "@KB@": str(KB), "@KM1@": str(K - 1),
         "@K8@": str(K + 8), "@WM1@": str(W - 1),
         "@P@": str(p), "@N@": str(n), "@GX@": str(c["gx"]), "@GY@": str(c["gy"]),
         "@PINV@": str((-mod_inv(p, R)) % R), "@NINV@": str((-mod_inv(n, R)) % R),

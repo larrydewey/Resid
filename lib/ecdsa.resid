@@ -393,18 +393,18 @@ pub EcSig ecdsa_low_s(Curve c, EcSig sig) {
     return EcSig {.ok = true, .r = sig.r, .s = ec_strip(s2, 0)};
 }
 
-List(Int) ec_low256(UInt(320) s) {
-    UInt(320) n = p256_n();
+List(Int) ec_low256(UInt(576) s) {
+    UInt(576) n = p256_n();
     if (s >= n) { return p256_to_be(s); }
     return p256_to_be(if (s > n >> 1) { n - s } else { s });
 }
-List(Int) ec_low384(UInt(448) s) {
-    UInt(448) n = p384_n();
+List(Int) ec_low384(UInt(832) s) {
+    UInt(832) n = p384_n();
     if (s >= n) { return p384_to_be(s); }
     return p384_to_be(if (s > n >> 1) { n - s } else { s });
 }
-List(Int) ec_low521(UInt(576) s) {
-    UInt(576) n = p521_n();
+List(Int) ec_low521(UInt(1088) s) {
+    UInt(1088) n = p521_n();
     if (s >= n) { return p521_to_be(s); }
     return p521_to_be(if (s > n >> 1) { n - s } else { s });
 }

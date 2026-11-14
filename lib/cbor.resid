@@ -249,7 +249,7 @@ CborDec cd_set_left(CborDec d, Int n) {
         CbStr(x) => CbStr(n),
         CbByt(x) => CbByt(n)
     };
-    return cd_at(d, d.pos, d.open[0..k - 1].concat([moved]));
+    return cd_at(d, d.pos, d.open.with(k - 1, moved));
 }
 
 /// How many parts the top frame has left, when it is the kind the caller expects.

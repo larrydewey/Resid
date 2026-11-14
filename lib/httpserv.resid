@@ -148,13 +148,25 @@ Str hs_ascii(List(UInt(8)) b, Int i, Int e, StrBuf acc) {
     return hs_ascii(b, i + 1, e, acc.push_char((Int) b[i]));
 }
 
-// First index at or after `from` where `pat` occurs in `b`, or -1.
+// First index at or after `from` where `pat` (not empty) occurs in `b`,
+// or -1. A match starting anywhere in [i, i + m) covers byte i + m - 1, so
+// when that byte occurs nowhere in `pat` the search moves on by m.
 Int hs_find(List(UInt(8)) b, List(UInt(8)) pat, Int from) {
-    Int n = b.len();
-    Int m = pat.len();
-    if (from + m > n) { return -1; }
-    if (hs_match_at(b, pat, from, 0, m)) { return from; }
-    return hs_find(b, pat, from + 1);
+    return hs_find_at(b, pat, from, b.len() - pat.len(), pat.len());
+}
+
+Int hs_find_at(List(UInt(8)) b, List(UInt(8)) pat, Int i, Int last, Int m) {
+    if (i > last) { return -1; }
+    UInt(8) c = b[i + m - 1];
+    if (!hs_has_byte(pat, c, 0, m)) { return hs_find_at(b, pat, i + m, last, m); }
+    if (b[i] == pat[0] && hs_match_at(b, pat, i, 1, m)) { return i; }
+    return hs_find_at(b, pat, i + 1, last, m);
+}
+
+Bool hs_has_byte(List(UInt(8)) pat, UInt(8) c, Int j, Int m) {
+    if (j >= m) { return false; }
+    if (pat[j] == c) { return true; }
+    return hs_has_byte(pat, c, j + 1, m);
 }
 
 Bool hs_match_at(List(UInt(8)) b, List(UInt(8)) pat, Int at, Int j, Int m) {
@@ -240,37 +252,33 @@ Bool hs_is_token(Str s, Int i) {
     return hs_is_token(s, i + 1);
 }
 
-// Header lines into the map; "" on success, else the rejecting status
-// as text ("400"). Obsolete line folding and whitespace before the colon
-// are refused (RFC 9112 §5.1-5.2).
-Str hs_headers(List(Str) lines, Int i, Map(Str, Str) acc, Int limit) {
-    if (i >= lines.len()) { return ""; }
-    if (i > limit) { return "431"; }
+/// Header lines read into a map, or the status that refuses them.
+/// `err` is "" on success, else the status as text ("400").
+type HsHeaders = { Str err; Map(Str, Str) map; };
+
+HsHeaders hs_headers_err(Str err) {
+    Map(Str, Str) none = {};
+    return HsHeaders { .err = err, .map = none };
+}
+
+// Header lines into the map, or the rejecting status. Obsolete line
+// folding and whitespace before the colon are refused (RFC 9112 §5.1-5.2).
+HsHeaders hs_headers(List(Str) lines, Int i, Map(Str, Str) acc, Int limit) {
+    if (i >= lines.len()) { return HsHeaders { .err = "", .map = acc }; }
+    if (i > limit) { return hs_headers_err("431"); }
     Str line = lines[i];
-    if (line == "") { return "400"; }
+    if (line == "") { return hs_headers_err("400"); }
     Int c0 = str_char_at(line, 0);
-    if (c0 == 32 || c0 == 9) { return "400"; }
+    if (c0 == 32 || c0 == 9) { return hs_headers_err("400"); }
     Int colon = str_index_of(line, ":", 0);
-    if (colon <= 0) { return "400"; }
+    if (colon <= 0) { return hs_headers_err("400"); }
     Str name = str_slice(line, 0, colon);
-    if (!hs_is_token(name, 0)) { return "400"; }
+    if (!hs_is_token(name, 0)) { return hs_headers_err("400"); }
     Str value = str_trim(str_slice(line, colon + 1, str_len(line)));
     Str key = str_to_lower(name);
     Option(Str) prior = acc.get(key);
     Str merged = match prior { Some(old) => old + ", " + value, None => value };
     return hs_headers(lines, i + 1, acc.insert(key, merged), limit);
-}
-
-// The map the lines make; built twice only on the error path.
-Map(Str, Str) hs_headers_map(List(Str) lines, Int i, Map(Str, Str) acc) {
-    if (i >= lines.len()) { return acc; }
-    Str line = lines[i];
-    Int colon = str_index_of(line, ":", 0);
-    Str key = str_to_lower(str_slice(line, 0, colon));
-    Str value = str_trim(str_slice(line, colon + 1, str_len(line)));
-    Option(Str) prior = acc.get(key);
-    Str merged = match prior { Some(old) => old + ", " + value, None => value };
-    return hs_headers_map(lines, i + 1, acc.insert(key, merged));
 }
 
 // Does a comma-separated header value list `want` (case-insensitive)?
@@ -325,9 +333,9 @@ HttpRequest hs_parse_head(List(UInt(8)) b, Int end) {
         return if (str_starts_with(version, "HTTP/")) { hs_reject(505) } else { hs_reject(400) };
     }
     Map(Str, Str) none = {};
-    Str herr = hs_headers(lines, 1, none, 256);
-    if (herr != "") { return hs_reject(str_parse_int(herr)); }
-    Map(Str, Str) headers = hs_headers_map(lines, 1, none);
+    HsHeaders hh = hs_headers(lines, 1, none, 256);
+    if (hh.err != "") { return hs_reject(str_parse_int(hh.err)); }
+    Map(Str, Str) headers = hh.map;
     if (version == "HTTP/1.1" && !headers.contains("host")) { return hs_reject(400); }
     Int q = str_index_of(target, "?", 0);
     Str path = if (q >= 0) { str_slice(target, 0, q) } else { target };
@@ -686,19 +694,21 @@ Int hs_serve_at(T conn, HttpReply closure(HttpRequest) handler, HttpLimits lim, 
 /// ends when its length is known; `cpos` and `cstate` the chunk scanner
 /// (0 size line, 1 chunk data, 2 trailer), `lines` the chunks seen and
 /// then the trailer lines; `ready` once the request is whole or one the
-/// parser will refuse.
-type HsFrame = { Int scan; Int head_end; Int end; Int cpos; Int cstate; Int total; Int lines; Bool ready; };
+/// parser will refuse. `head` is the head as parsed while framing, kept
+/// when the request has no body or a Content-Length one, so that answering
+/// it does not parse it again.
+type HsFrame = { Int scan; Int head_end; Int end; Int cpos; Int cstate; Int total; Int lines; Bool ready; Option(HttpRequest) head; };
 
 HsFrame hs_frame_new() {
-    return HsFrame { .scan = 0, .head_end = -1, .end = -1, .cpos = 0, .cstate = 0, .total = 0, .lines = 0, .ready = false };
+    return HsFrame { .scan = 0, .head_end = -1, .end = -1, .cpos = 0, .cstate = 0, .total = 0, .lines = 0, .ready = false, .head = None };
 }
 
 HsFrame hs_frame_ready(HsFrame f) {
-    return HsFrame { .scan = f.scan, .head_end = f.head_end, .end = f.end, .cpos = f.cpos, .cstate = f.cstate, .total = f.total, .lines = f.lines, .ready = true };
+    return HsFrame { .scan = f.scan, .head_end = f.head_end, .end = f.end, .cpos = f.cpos, .cstate = f.cstate, .total = f.total, .lines = f.lines, .ready = true, .head = f.head };
 }
 
 HsFrame hs_frame_chunk(HsFrame f, Int cpos, Int cstate, Int total, Int lines) {
-    return HsFrame { .scan = f.scan, .head_end = f.head_end, .end = f.end, .cpos = cpos, .cstate = cstate, .total = total, .lines = lines, .ready = false };
+    return HsFrame { .scan = f.scan, .head_end = f.head_end, .end = f.end, .cpos = cpos, .cstate = cstate, .total = total, .lines = lines, .ready = false, .head = f.head };
 }
 
 /// The framing of request bytes `b`, resumed from `f`; used by the event loop.
@@ -709,17 +719,21 @@ pub HsFrame hs_frame(List(UInt(8)) b, HsFrame f, HttpLimits lim) {
         Int from = if (f.scan >= 3) { f.scan - 3 } else { 0 };
         Int at = hs_find(b, [13, 10, 13, 10], from);
         if (at < 0) {
-            HsFrame waiting = HsFrame { .scan = n, .head_end = -1, .end = -1, .cpos = 0, .cstate = 0, .total = 0, .lines = 0, .ready = n > lim.head_max };
+            HsFrame waiting = HsFrame { .scan = n, .head_end = -1, .end = -1, .cpos = 0, .cstate = 0, .total = 0, .lines = 0, .ready = n > lim.head_max, .head = None };
             return waiting;
         }
-        HsFrame found = HsFrame { .scan = n, .head_end = at, .end = -1, .cpos = at + 4, .cstate = 0, .total = 0, .lines = 0, .ready = false };
+        HsFrame found = HsFrame { .scan = n, .head_end = at, .end = -1, .cpos = at + 4, .cstate = 0, .total = 0, .lines = 0, .ready = false, .head = None };
         if (at + 4 > lim.head_max) { return hs_frame_ready(found); }
         HttpRequest r = hs_parse_head(b, at);
         if (!r.ok) { return hs_frame_ready(found); }
         Int kind = hs_body_kind(r);
         if (kind == -2) { return hs_frame(b, found, lim); }
+        if (kind == -1) {
+            HsFrame bare = HsFrame { .scan = n, .head_end = at, .end = -1, .cpos = at + 4, .cstate = 0, .total = 0, .lines = 0, .ready = true, .head = Some(r) };
+            return bare;
+        }
         if (kind < 0 || kind > lim.body_max) { return hs_frame_ready(found); }
-        HsFrame sized = HsFrame { .scan = n, .head_end = at, .end = at + 4 + kind, .cpos = 0, .cstate = 0, .total = 0, .lines = 0, .ready = n >= at + 4 + kind };
+        HsFrame sized = HsFrame { .scan = n, .head_end = at, .end = at + 4 + kind, .cpos = 0, .cstate = 0, .total = 0, .lines = 0, .ready = n >= at + 4 + kind, .head = Some(r) };
         return sized;
     }
     if (f.end >= 0) {
@@ -751,7 +765,7 @@ HsFrame hs_chunks(List(UInt(8)) b, HsFrame f, HttpLimits lim) {
     }
     if (f.cstate == 2) {
         if (at == f.cpos) {
-            HsFrame whole = HsFrame { .scan = f.scan, .head_end = f.head_end, .end = at + 2, .cpos = at + 2, .cstate = 2, .total = f.total, .lines = f.lines, .ready = true };
+            HsFrame whole = HsFrame { .scan = f.scan, .head_end = f.head_end, .end = at + 2, .cpos = at + 2, .cstate = 2, .total = f.total, .lines = f.lines, .ready = true, .head = f.head };
             return whole;
         }
         if (f.lines >= 64) { return hs_frame_ready(f); }
@@ -862,8 +876,7 @@ HsConn(S, K) hs_ev_answer(HsConn(S, K) c, HttpOut(K) closure(HttpRequest) handle
         Int ph = if (c.peer_done) { 4 } else { 0 };
         return hs_conn_set(c, c.sess, c.inb, f, c.outb, c.out_at, ph, c.served, c.peer_done);
     }
-    HsBuf(HsMem) b = HsBuf { .conn = HsMem { .starved = false }, .data = c.inb, .eof = false };
-    HsReq(HsMem) rq = hs_read_request(b, lim);
+    HsReq(HsMem) rq = hs_frame_request(c.inb, f, lim);
     HttpRequest r0 = rq.req;
     HttpRequest r = if (rq.rest.conn.starved && r0.ok) { hs_reject(400) } else { r0 };
     if (!r.ok && r.status == 0) { return hs_conn_phase(c, 4); }
@@ -875,6 +888,31 @@ HsConn(S, K) hs_ev_answer(HsConn(S, K) c, HttpOut(K) closure(HttpRequest) handle
         Whole(reply) => hs_ev_reply(c, rq.rest.data, hs_wire(reply, keep, head), keep, lim),
         Stream(s) => if (head) { hs_ev_reply(c, rq.rest.data, hs_wire(HttpReply { .status = s.status, .headers = s.headers, .body = [] }, keep, true), keep, lim) } else { hs_ev_stream(c, rq.rest.data, s, keep, r.version == "HTTP/1.1", lim) }
     };
+}
+
+// The request a ready frame holds: the head parsed while framing and the
+// body by its length, as hs_read_request would read them; any other
+// request is read again from the bytes.
+@requires(network(readonly))
+HsReq(HsMem) hs_frame_request(List(UInt(8)) b, HsFrame f, HttpLimits lim) {
+    Option(HttpRequest) h = f.head;
+    return match h {
+        Some(r) => hs_frame_body(b, f, r, lim),
+        None => hs_read_request(HsBuf { .conn = HsMem { .starved = false }, .data = b, .eof = false }, lim)
+    };
+}
+
+@requires(network(readonly))
+HsReq(HsMem) hs_frame_body(List(UInt(8)) b, HsFrame f, HttpRequest r, HttpLimits lim) {
+    Int kind = hs_body_kind(r);
+    Int at = f.head_end + 4;
+    Int end = if (kind > 0) { at + kind } else { at };
+    if (kind < -1 || kind > lim.body_max || end > b.len()) {
+        return hs_read_request(HsBuf { .conn = HsMem { .starved = false }, .data = b, .eof = false }, lim);
+    }
+    HttpRequest r2 = if (kind < 0) { r } else { HttpRequest { .method = r.method, .target = r.target, .path = r.path, .query = r.query, .version = r.version, .headers = r.headers, .body = bytes_int(b[at..end]), .keep_alive = r.keep_alive, .ok = true, .status = 0 } };
+    HsReq(HsMem) out = HsReq { .req = r2, .rest = HsBuf { .conn = HsMem { .starved = false }, .data = b[end..], .eof = false } };
+    return out;
 }
 
 // Queue a whole reply's bytes.

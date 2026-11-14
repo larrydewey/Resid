@@ -67,7 +67,7 @@ pub UInt(64) cb_frac52_at(Float m, Int left, UInt(64) acc) {
 }
 
 /// The eight bytes of `v`, big-endian.
-pub List(Int) cb_be8(UInt(64) v) { return cb_rev(cb_be8_at(v, 8, []), 0, []); }
+pub List(Int) cb_be8(UInt(64) v) { return [cb_arg_byte(v, 7), cb_arg_byte(v, 6), cb_arg_byte(v, 5), cb_arg_byte(v, 4), cb_arg_byte(v, 3), cb_arg_byte(v, 2), cb_arg_byte(v, 1), cb_arg_byte(v, 0)]; }
 
 /// `acc` followed by the low `n` bytes of `v`, least significant first.
 pub List(Int) cb_be8_at(UInt(64) v, Int n, List(Int) acc) {

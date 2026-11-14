@@ -259,7 +259,90 @@ Int scan_digits(Int p, Bool frac) {
     return scan_digits(p + 1, frac);
 }
 
+// Digits for the word-sized path: the mantissa in slot 0 while it has at
+// most 18 significant digits (slot 1 counts them, 19 = too many).
+Int word_scan(Int p, Bool frac) {
+    Int c = ld8(p);
+    if (c < 48 || c > 57) { return p; }
+    _ = dset(4, dg(4) + 1);
+    Int n = dg(1);
+    Bool lead = n == 0 && c == 48;
+    _ = if (lead) { 0 } else { if (n < 18) { dset(0, dg(0) * 10 + c - 48) + dset(1, n + 1) } else { dset(1, 19) } };
+    _ = if (frac) { dset(3, dg(3) - 1) } else { 0 };
+    return word_scan(p + 1, frac);
+}
+
+// The common case without big integers: a mantissa of at most 18 digits
+// that dec_word_bits decides exactly; else the general path.
 Float dec_float(Int p, Int s, Int endp) {
+    _ = dset(0, 0) + dset(1, 0) + dset(2, 0) + dset(3, 0) + dset(4, 0);
+    Int q1 = word_scan(p, false);
+    Int q2 = if (ld8(q1) == 46) { word_scan(q1 + 1, true) } else { q1 };
+    if (dg(4) > 0 && dg(1) <= 18) {
+        Int ec = lower(ld8(q2));
+        Int es = ld8(q2 + 1);
+        Int pd = if (es == 45 || es == 43) { q2 + 2 } else { q2 + 1 };
+        Bool hase = ec == 101 && ld8(pd) >= 48 && ld8(pd) <= 57;
+        Int ev = if (hase) { exp_digits(pd, 0) } else { 0 };
+        Int pe = if (hase) { ld64(ds() + 40) } else { q2 };
+        Int e10 = dg(3) + (if (hase && es == 45) { 0 - ev } else { ev });
+        Int mant = dg(0);
+        Int r = if (mant == 0) { 0 } else { dec_word_bits(mant, e10) };
+        if (r >= 0) {
+            _ = set_end(endp, pe);
+            return bits_f(r);
+        }
+    }
+    return dec_float_big(p, s, endp);
+}
+
+// w * 10^e10 rounded to the nearest double (ties to even), as its bits,
+// for 0 < w < 2^63 when 128-bit words decide it exactly: Clinger's case
+// (w < 2^53, |e10| <= 22: both operands exact, one rounding) or |e10| <=
+// 19 (the product, or a quotient of at least 63 bits and its remainder,
+// in 128 bits). -1 when neither applies.
+pub Int dec_word_bits(Int w, Int e10) {
+    if (w < 9007199254740992 && e10 >= 0 - 22 && e10 <= 22) {
+        Float fm = (Float)w;
+        Float r = if (e10 < 0) { fm / pow10_f(0 - e10) } else { fm * pow10_f(e10) };
+        return resid_raw_f64_bits(r);
+    }
+    if (e10 > 19 || e10 < 0 - 19) { return 0 - 1; }
+    if (e10 >= 0) { return u128_to_bits((UInt(128))w * pow10_u(e10), 0, false); }
+    // Normalized so the dividend's top bit is bit 126.
+    Int sh = 127 - bitlen(w);
+    UInt(128) x = (UInt(128))w << (UInt(128))sh;
+    UInt(128) d = pow10_u(0 - e10);
+    UInt(128) q = x / d;
+    return u128_to_bits(q, 0 - sh, x - q * d != (UInt(128))0);
+}
+
+UInt(128) pow10_u(Int e) {
+    if (e == 19) { return (UInt(128))1000000000000000000 * (UInt(128))10; }
+    return (UInt(128))ld64(resid_raw_table([1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000, 10000000000, 100000000000, 1000000000000, 10000000000000, 100000000000000, 1000000000000000, 10000000000000000, 100000000000000000, 1000000000000000000]) + e * 8);
+}
+
+Int bitlen128(UInt(128) q) {
+    Int hi = (Int)(q >> (UInt(128))64);
+    return if (hi != 0) { 64 + bitlen(hi) } else { bitlen((Int)q) };
+}
+
+// The bits of q * 2^s (q > 0, a normal double's range) rounded to 53 bits,
+// ties to even; sticky: nonzero bits below q.
+Int u128_to_bits(UInt(128) q, Int s, Bool sticky) {
+    Int l = bitlen128(q);
+    Int drop = l - 53;
+    Int top = if (drop > 0) { (Int)(q >> (UInt(128))drop) } else { (Int)q << (0 - drop) };
+    Bool half = drop > 0 && ((q >> (UInt(128))(drop - 1)) & (UInt(128))1) != (UInt(128))0;
+    Bool below = sticky || (drop > 1 && (q & (((UInt(128))1 << (UInt(128))(drop - 1)) - (UInt(128))1)) != (UInt(128))0);
+    Bool up = half && (below || (top & 1) == 1);
+    Int mm = if (up) { top + 1 } else { top };
+    Bool carry = mm == 9007199254740992;
+    Int e = l - 1 + s + (if (carry) { 1 } else { 0 });
+    return ((e + 1023) << 52) | ((if (carry) { 4503599627370496 } else { mm }) & 4503599627370495);
+}
+
+Float dec_float_big(Int p, Int s, Int endp) {
     Int m = bn_new();
     _ = dset(0, m) + dset(1, 0) + dset(2, 0) + dset(3, 0) + dset(4, 0);
     Int p1 = scan_digits(p, false);
@@ -320,9 +403,9 @@ pub Float decimal_to_double(Int m, Int e10, Bool sticky) {
     return r;
 }
 
-Float pow10_f(Int e) {
-    if (e == 0) { return 1.0; }
-    return 10.0 * pow10_f(e - 1);
+// 10^e for 0 <= e <= 22 (each exactly a double).
+pub Float pow10_f(Int e) {
+    return resid_raw_bits_f64(ld64(resid_raw_table([4607182418800017408, 4621819117588971520, 4636737291354636288, 4652007308841189376, 4666723172467343360, 4681608360884174848, 4696837146684686336, 4711630319722168320, 4726483295884279808, 4741671816366391296, 4756540486875873280, 4771362005757984768, 4786511204640096256, 4801453603149578240, 4816244402031689728, 4831355200913801216, 4846369599423283200, 4861130398305394688, 4876203697187506176, 4891288408196988160, 4906019910204099648, 4921056587992461136, 4936209963552724370]) + e * 8));
 }
 
 Int mul_pow10(Int m, Int e) {
@@ -484,6 +567,7 @@ Int hex_digits(Int m, Int p, Bool frac) {
 Int fx() { return resid_raw_tls("ffmt_st", 24); }
 
 Int expand(Int m, Int e2, Int dbuf, Int need) {
+    if (expand_fits(e2)) { return expand_words(m, e2, dbuf, need); }
     Int ip = bn_new();
     Int fr = bn_new();
     _ = bn_from(ip, m);
@@ -501,6 +585,52 @@ Int expand(Int m, Int e2, Int dbuf, Int need) {
     _ = st64(fx() + 8, n);
     _ = if (!bn_zero(fr)) { st64(fx() + 16, 1) } else { 0 };
     return c_free(ip) + c_free(fr) + c_free(tmp);
+}
+
+// expand without big integers when the parts fit machine words: the
+// integer part m << e2 in an Int (e2 <= 10, m < 2^53) and the fraction
+// in 128 bits (at most 124 fraction bits, so ten times it still fits).
+// The same digits, X and sticky flag as the bignum path.
+Bool expand_fits(Int e2) { return e2 <= 10 && e2 >= 0 - 124; }
+
+Int expand_words(Int m, Int e2, Int dbuf, Int need) {
+    Int fbits = if (e2 >= 0) { 0 } else { 0 - e2 };
+    Int ip = if (e2 >= 0) { m << e2 } else { if (fbits >= 63) { 0 } else { lshr(m, fbits) } };
+    UInt(128) fmask = ((UInt(128))1 << (UInt(128))fbits) - (UInt(128))1;
+    UInt(128) fr0 = if (e2 >= 0) { (UInt(128))0 } else { (UInt(128))m & fmask };
+    Int tmp = resid_raw_tls("ffmt_tmp", 24);
+    Int il = word_digits(ip, tmp, 0);
+    Int kept = min(il, need);
+    _ = rev_into(tmp, il, dbuf, kept);
+    Bool isticky = digits_nz(tmp, 0, il - kept);
+    _ = st64(fx(), il) + st64(fx() + 8, kept) + st64(fx() + 16, if (isticky) { 1 } else { 0 });
+    UInt(128) fr1 = if (il == 0) { lead_zeros_w(fr0, fbits) } else { fr0 };
+    return frac_words(fr1, fbits, fmask, dbuf, kept, need);
+}
+
+// The decimal digits of ip >= 0, least significant first; their count.
+Int word_digits(Int ip, Int tmp, Int n) {
+    if (ip == 0) { return n; }
+    Int q = ip / 10;
+    return st8(tmp + n, ip - q * 10) * 0 + word_digits(q, tmp, n + 1);
+}
+
+UInt(128) lead_zeros_w(UInt(128) fr, Int fbits) {
+    if (fr == (UInt(128))0) { return fr; }
+    UInt(128) t = fr * (UInt(128))10;
+    if ((t >> (UInt(128))fbits) != (UInt(128))0) { return fr; }
+    _ = st64(fx(), ld64(fx()) - 1);
+    return lead_zeros_w(t, fbits);
+}
+
+Int frac_words(UInt(128) fr, Int fbits, UInt(128) fmask, Int dbuf, Int n, Int need) {
+    if (n >= need || fr == (UInt(128))0) {
+        _ = st64(fx() + 8, n);
+        return if (fr != (UInt(128))0) { st64(fx() + 16, 1) } else { 0 };
+    }
+    UInt(128) t = fr * (UInt(128))10;
+    _ = st8(dbuf + n, (Int)(t >> (UInt(128))fbits));
+    return frac_words(t & fmask, fbits, fmask, dbuf, n + 1, need);
 }
 
 Int int_digits(Int ip, Int tmp, Int n) {
@@ -735,6 +865,11 @@ Int fmt_g(Int o, Int k0, Int m, Int e2, Int prec, Int dbuf) {
     if (m == 0) { return put(o, k0, 48); }
     _ = expand(m, e2, dbuf, prec + 1);
     _ = round_digits(dbuf, prec);
+    return fmt_g_rounded(o, k0, prec, dbuf);
+}
+
+// %g's text from digits already expanded and rounded to prec (fx state).
+pub Int fmt_g_rounded(Int o, Int k0, Int prec, Int dbuf) {
     Int x = ld64(fx());
     Int e = x - 1;
     Int n = ld64(fx() + 8);
@@ -755,6 +890,68 @@ Int fmt_g(Int o, Int k0, Int m, Int e2, Int prec, Int dbuf) {
     Int ae = if (e < 0) { 0 - e } else { e };
     Int k7 = if (ae < 10) { put(o, k6, 48) } else { k6 };
     return k7 + itoa_into(o + k7, ae);
+}
+
+// ─── Shortest round-trip text ──────────────────────────────────────────
+
+// The shortest "%.<P>g" text (P = 1..17) that reads back as exactly v,
+// with %g's exponent form replaced by positional digits for exponents
+// 1..15 -- numfmt's float_short -- for a finite nonzero v whose expansion
+// fits words (expand_fits); its length, or -1 when v does not qualify.
+// The digits are expanded once (18 of them, the most any P needs) and
+// rounded per P from a copy; the read-back is dec_word_bits when the
+// digits allow it, else the text through c_strtod. The text is
+// exactly what c_strfromd writes for the same P.
+pub Int float_short_words(Int buf, Float v) {
+    Int b = resid_raw_f64_bits(v);
+    Int ef = lshr(b, 52) & 2047;
+    Int f = b & 4503599627370495;
+    if (ef == 2047 || (ef == 0 && f == 0)) { return 0 - 1; }
+    Int m = if (ef == 0) { f } else { f | 4503599627370496 };
+    Int e2 = (if (ef == 0) { 1 } else { ef }) - 1075;
+    if (!expand_fits(e2)) { return 0 - 1; }
+    Int master = resid_raw_tls("fshort_m", 32);
+    Int work = resid_raw_tls("fshort_w", 32);
+    _ = expand_words(m, e2, master, 18);
+    Int st = resid_raw_tls("fshort_s", 24);
+    _ = mcopy(st, fx(), 24);
+    Int k0 = if (b < 0) { put(buf, 0, 45) } else { 0 };
+    Float av = resid_raw_bits_f64(b & 9223372036854775807);
+    Int p = short_p(buf, k0, av, master, work, st, 1);
+    // %g's exponent form for exponents 1..15 prints positionally instead.
+    _ = short_round(master, work, st, p);
+    Int e = ld64(fx()) - 1;
+    Int prec = if (e >= p && e >= 1 && e <= 15) { e + 1 } else { p };
+    _ = if (prec != p) { short_round(master, work, st, prec) } else { 0 };
+    return fmt_g_rounded(buf, k0, prec, work);
+}
+
+// work = master rounded to p digits (fx state as round_digits leaves it).
+Int short_round(Int master, Int work, Int st, Int p) {
+    _ = mcopy(work, master, 18) + mcopy(fx(), st, 24);
+    return round_digits(work, p);
+}
+
+Int short_p(Int buf, Int k0, Float av, Int master, Int work, Int st, Int p) {
+    if (p >= 17) { return 17; }
+    _ = short_round(master, work, st, p);
+    Int k = ld64(fx()) - p;
+    Int d = digits_word(work, 0, p, 0);
+    Int r = dec_word_bits(d, k);
+    Bool same = if (r >= 0) { r == resid_raw_f64_bits(av) } else { reads_back(buf, k0, p, work, av) };
+    if (same) { return p; }
+    return short_p(buf, k0, av, master, work, st, p + 1);
+}
+
+Bool reads_back(Int buf, Int k0, Int p, Int work, Float av) {
+    Int n = fmt_g_rounded(buf, k0, p, work);
+    _ = st8(buf + n, 0);
+    return c_strtod(buf + k0, 0) == av;
+}
+
+Int digits_word(Int dbuf, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return digits_word(dbuf, i + 1, n, acc * 10 + ld8(dbuf + i));
 }
 
 // For tests/runtime/float_text.c, which checks both against glibc.

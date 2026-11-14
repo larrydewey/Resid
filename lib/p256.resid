@@ -7,22 +7,22 @@
 // One implementation for public and secret data (spec §48). The field,
 // scalar and point arithmetic, the ladder, key derivation, ECDH, signing
 // and the RFC 6979 nonce are written once, generic over P256Word(F, B):
-// F is a field element (UInt(320), or Secret(UInt(320)) when it derives
+// F is a field element (UInt(576), or Secret(UInt(576)) when it derives
 // from a private key or a nonce) and B a byte (Int, or Secret(UInt(8))).
 // The secret copy is checked by the compiler: no branch, index,
 // comparison or division depends on a private key, a nonce or an ECDH
 // result. The public copy is the same code; verification and point
 // decoding use only it.
 //
-// Field and scalar elements are in Montgomery form (R = 2^256), held in
-// 320 bits: an element below 2^256 and the guard bits of a subtraction.
-// The Montgomery product alone works in 576 bits, room for t + q*m, and
-// hands back 320 (p256w_mont), so nothing wraps. Selects are masks (through
-// ct_hide), reductions subtract with a borrow bit, the scalar ladder runs
-// all 256 steps, and arithmetic wraps, so no overflow check branches on a
-// value either. What becomes public goes through p256w_open: a signature,
-// a public key, and the verdicts "this scalar is usable" and "this point
-// is not infinity". At secret types that is a declassification, so the
+// Field and scalar elements are in Montgomery form (R = 2^256). 576 bits
+// leave room for t + q*m, so nothing wraps. Selects are masks (through
+// ct_hide), reductions subtract with a borrow bit, scalar multiplication
+// runs every 4-bit window and reads all of its table with masks, and
+// arithmetic wraps, so no overflow check branches on a value either.
+// Verification alone, whose inputs are all public, takes a faster path
+// that depends on them. What becomes public goes through p256w_open: a
+// signature, a public key, and the verdicts "this scalar is usable" and
+// "this point is not infinity". At secret types that is a declassification, so the
 // secret copies of signing, key derivation and ECDH need
 // @requires(declassify); the ECDH result itself stays secret.
 //
@@ -41,127 +41,119 @@ import "sha512g.resid";
 /// The length of a field element or scalar in bytes (32).
 pub Int p256_bytes() { return 32; }
 /// The field prime p of NIST P-256 (secp256r1).
-pub UInt(320) p256_p() { return 115792089210356248762697446949407573530086143415290314195533631308867097853951; }
+pub UInt(576) p256_p() { return 115792089210356248762697446949407573530086143415290314195533631308867097853951; }
 /// The order n of the base point of NIST P-256 (secp256r1).
-pub UInt(320) p256_n() { return 115792089210356248762697446949407573529996955224135760342422259061068512044369; }
+pub UInt(576) p256_n() { return 115792089210356248762697446949407573529996955224135760342422259061068512044369; }
 /// The base point's x coordinate.
-pub UInt(320) p256_gx() { return 48439561293906451759052585252797914202762949526041747995844080717082404635286; }
+pub UInt(576) p256_gx() { return 48439561293906451759052585252797914202762949526041747995844080717082404635286; }
 /// The base point's y coordinate.
-pub UInt(320) p256_gy() { return 36134250956749795798585127919587881956611106672985015071877198253568414405109; }
+pub UInt(576) p256_gy() { return 36134250956749795798585127919587881956611106672985015071877198253568414405109; }
 // -p^-1 and -n^-1 mod R
-UInt(320) p256_pinv() { return 115792089210356248768974548684794254293921932838497980611635986753331132366849; }
-UInt(320) p256_ninv() { return 43790243024438006127650828685417305984841428635278707415088219106730833919055; }
+UInt(576) p256_pinv() { return 115792089210356248768974548684794254293921932838497980611635986753331132366849; }
+UInt(576) p256_ninv() { return 43790243024438006127650828685417305984841428635278707415088219106730833919055; }
 // R^2 mod p and R^2 mod n, to enter the Montgomery domain
-UInt(320) p256_rrp() { return 134799733323198995502561713907086292154532538166959272814710328655875; }
-UInt(320) p256_rrn() { return 46533765739406314298121036767150998762426774378559716911348521029833835802274; }
+UInt(576) p256_rrp() { return 134799733323198995502561713907086292154532538166959272814710328655875; }
+UInt(576) p256_rrn() { return 46533765739406314298121036767150998762426774378559716911348521029833835802274; }
 // R mod p (one), b and G, all in Montgomery form
-UInt(320) p256_one() { return 26959946660873538059280334323183841250350249843923952699046031785985; }
-UInt(320) p256_bm() { return 99593677540221402957765480916910020772520766868399186769503856397241456836063; }
-UInt(320) p256_gxm() { return 11110593207902424140321080247206512405358633331993495164878354046817554469948; }
-UInt(320) p256_gym() { return 60359023176204190920225817201443260813112970217682417638161152432929735267850; }
+UInt(576) p256_one() { return 26959946660873538059280334323183841250350249843923952699046031785985; }
+UInt(576) p256_bm() { return 99593677540221402957765480916910020772520766868399186769503856397241456836063; }
+UInt(576) p256_gxm() { return 11110593207902424140321080247206512405358633331993495164878354046817554469948; }
+UInt(576) p256_gym() { return 60359023176204190920225817201443260813112970217682417638161152432929735267850; }
 // p - 2, n - 2 (inversion) and (p + 1) / 4 (square root; p = 3 mod 4)
-UInt(320) p256_pm2() { return 115792089210356248762697446949407573530086143415290314195533631308867097853949; }
-UInt(320) p256_nm2() { return 115792089210356248762697446949407573529996955224135760342422259061068512044367; }
-UInt(320) p256_psq() { return 28948022302589062190674361737351893382521535853822578548883407827216774463488; }
+UInt(576) p256_pm2() { return 115792089210356248762697446949407573530086143415290314195533631308867097853949; }
+UInt(576) p256_nm2() { return 115792089210356248762697446949407573529996955224135760342422259061068512044367; }
+UInt(576) p256_psq() { return 28948022302589062190674361737351893382521535853822578548883407827216774463488; }
 // R - 1, the guard bit 2^(K+8) and the mask below it, all ones
-UInt(320) p256_rmask() { return 115792089237316195423570985008687907853269984665640564039457584007913129639935; }
-UInt(320) p256_guard() { return 29642774844752946028434172162224104410437116074403984394101141506025761187823616; }
-UInt(320) p256_gmask() { return 29642774844752946028434172162224104410437116074403984394101141506025761187823615; }
-UInt(320) p256_ones() { return 2135987035920910082395021706169552114602704522356652769947041607822219725780640550022962086936575; }
-UInt(320) p256_zero() { return 0; }
+UInt(576) p256_rmask() { return 115792089237316195423570985008687907853269984665640564039457584007913129639935; }
+UInt(576) p256_guard() { return 29642774844752946028434172162224104410437116074403984394101141506025761187823616; }
+UInt(576) p256_gmask() { return 29642774844752946028434172162224104410437116074403984394101141506025761187823615; }
+UInt(576) p256_ones() { return 247330401473104534060502521019647190035131349101211839914063056092897225106531867170316401061243044989597671426016139339351365034306751209967546155101893167916606772148699135; }
+UInt(576) p256_zero() { return 0; }
 
 // ─── Field words: public and secret ─────────────────────────────────
 
-/// The 320-bit word operations the curve code needs, for public words
-/// (`UInt(320)`) and secret ones (`Secret(UInt(320))`). Arithmetic wraps
-/// modulo 2^320; shift amounts and lifted constants are public.
+/// The 576-bit word operations the curve code needs, for public words
+/// (`UInt(576)`) and secret ones (`Secret(UInt(576))`). Arithmetic wraps
+/// modulo 2^576; shift amounts and lifted constants are public.
 behavior P256Word(F, B) {
     F p256w_add(F a, F b);
     F p256w_sub(F a, F b);
-    F p256w_mont(F a, F b, UInt(320) m, UInt(320) minv);   // a * b / 2^256 mod m, below 2m (a, b < m)
+    F p256w_mul(F a, F b);
+    F p256w_mulf(F a, F b);           // a * b for a, b < 2^256, on 512-bit words
+    F p256w_mullo(F a, F b);          // a * b mod 2^256, on 256-bit words
     F p256w_and(F a, F b);
     F p256w_or(F a, F b);
     F p256w_xor(F a, F b);
     F p256w_shr(F x, Int n);
     F p256w_shl(F x, Int n);
     F p256w_mask(F bit);              // all ones when bit's low bit is 1, else 0
-    F p256w_lift(UInt(320) k);        // a public value taking part
+    F p256w_lift(UInt(576) k);        // a public value taking part
     F p256w_from_byte(B b);           // a byte (0..255)
     B p256w_byte(F x, Int sh);        // the byte at bit sh
-    UInt(320) p256w_open(F x);        // publish (a declassification at secret types)
+    UInt(576) p256w_open(F x);        // publish (a declassification at secret types)
 }
 
-UInt(320) p256i_add(UInt(320) a, UInt(320) b) { return wrapping_uadd(a, b); }
-UInt(320) p256i_sub(UInt(320) a, UInt(320) b) { return wrapping_usub(a, b); }
-// The Montgomery product without its final subtraction: t = a * b and
-// q = t * minv mod 2^256 in 576 bits, factors cut to 256 bits first (the
-// optimizer then multiplies only the limbs that can be set), and
-// (t + q * m) / 2^256 back in 320 bits.
-UInt(320) p256i_mont(UInt(320) a, UInt(320) b, UInt(320) m, UInt(320) minv) {
-    UInt(576) rm = 115792089237316195423570985008687907853269984665640564039457584007913129639935;
-    UInt(576) t = (UInt(576)) wrapping_umul((UInt(512)) wrapping_u256(a), (UInt(512)) wrapping_u256(b));
-    UInt(576) q = (UInt(576)) wrapping_umul((UInt(512)) wrapping_u256(t & rm), (UInt(512)) wrapping_u256(minv)) & rm;
-    return wrapping_u320(wrapping_uadd(t, (UInt(576)) wrapping_umul((UInt(512)) wrapping_u256(q), (UInt(512)) wrapping_u256(m))) >> (UInt(576)) 256);
-}
-UInt(320) p256i_and(UInt(320) a, UInt(320) b) { return a & b; }
-UInt(320) p256i_or(UInt(320) a, UInt(320) b) { return a | b; }
-UInt(320) p256i_xor(UInt(320) a, UInt(320) b) { return a ^ b; }
-UInt(320) p256i_shr(UInt(320) x, Int n) { return x >> (UInt(320)) n; }
-UInt(320) p256i_shl(UInt(320) x, Int n) { return x << (UInt(320)) n; }
+UInt(576) p256i_add(UInt(576) a, UInt(576) b) { return wrapping_uadd(a, b); }
+UInt(576) p256i_sub(UInt(576) a, UInt(576) b) { return wrapping_usub(a, b); }
+UInt(576) p256i_mul(UInt(576) a, UInt(576) b) { return wrapping_umul(a, b); }
+UInt(576) p256i_mulf(UInt(576) a, UInt(576) b) { return (UInt(576)) wrapping_umul(wrapping_u512(wrapping_u256(a)), wrapping_u512(wrapping_u256(b))); }
+UInt(576) p256i_mullo(UInt(576) a, UInt(576) b) { return (UInt(576)) wrapping_umul(wrapping_u256(a), wrapping_u256(b)); }
+UInt(576) p256i_and(UInt(576) a, UInt(576) b) { return a & b; }
+UInt(576) p256i_or(UInt(576) a, UInt(576) b) { return a | b; }
+UInt(576) p256i_xor(UInt(576) a, UInt(576) b) { return a ^ b; }
+UInt(576) p256i_shr(UInt(576) x, Int n) { return x >> (UInt(576)) n; }
+UInt(576) p256i_shl(UInt(576) x, Int n) { return x << (UInt(576)) n; }
 // The bit passes through ct_hide so the optimizer cannot turn the mask
 // back into a branch.
-UInt(320) p256i_mask(UInt(320) bit) {
+UInt(576) p256i_mask(UInt(576) bit) {
     Int h = ct_hide(wrapping_i64(bit & 1));
-    return wrapping_usub(p256_zero(), (UInt(320)) wrapping_u64(h));
+    return wrapping_usub(p256_zero(), (UInt(576)) wrapping_u64(h));
 }
-UInt(320) p256i_lift(UInt(320) k) { return k; }
-UInt(320) p256i_from_byte(Int b) { return (UInt(320)) wrapping_u64(b & 255); }
-Int p256i_byte(UInt(320) x, Int sh) { return wrapping_i64((x >> (UInt(320)) sh) & 255); }
+UInt(576) p256i_lift(UInt(576) k) { return k; }
+UInt(576) p256i_from_byte(Int b) { return (UInt(576)) wrapping_u64(b & 255); }
+Int p256i_byte(UInt(576) x, Int sh) { return wrapping_i64((x >> (UInt(576)) sh) & 255); }
 // ct_public: a value computed from a secret marked for tests/ct is public
 // from here on.
-UInt(320) p256i_open(UInt(320) x) { return ct_public(x); }
+UInt(576) p256i_open(UInt(576) x) { return ct_public(x); }
 
-P256Word(UInt(320), Int) = { .p256w_add = p256i_add, .p256w_sub = p256i_sub, .p256w_mont = p256i_mont, .p256w_and = p256i_and, .p256w_or = p256i_or, .p256w_xor = p256i_xor, .p256w_shr = p256i_shr, .p256w_shl = p256i_shl, .p256w_mask = p256i_mask, .p256w_lift = p256i_lift, .p256w_from_byte = p256i_from_byte, .p256w_byte = p256i_byte, .p256w_open = p256i_open };
+P256Word(UInt(576), Int) = { .p256w_add = p256i_add, .p256w_sub = p256i_sub, .p256w_mul = p256i_mul, .p256w_mulf = p256i_mulf, .p256w_mullo = p256i_mullo, .p256w_and = p256i_and, .p256w_or = p256i_or, .p256w_xor = p256i_xor, .p256w_shr = p256i_shr, .p256w_shl = p256i_shl, .p256w_mask = p256i_mask, .p256w_lift = p256i_lift, .p256w_from_byte = p256i_from_byte, .p256w_byte = p256i_byte, .p256w_open = p256i_open };
 
-Secret(UInt(320)) p256s_add(Secret(UInt(320)) a, Secret(UInt(320)) b) { return wrapping_uadd(a, b); }
-Secret(UInt(320)) p256s_sub(Secret(UInt(320)) a, Secret(UInt(320)) b) { return wrapping_usub(a, b); }
-Secret(UInt(320)) p256s_mont(Secret(UInt(320)) a, Secret(UInt(320)) b, UInt(320) m, UInt(320) minv) {
-    UInt(576) rm = 115792089237316195423570985008687907853269984665640564039457584007913129639935;
-    Secret(UInt(576)) t = (UInt(576)) wrapping_umul((UInt(512)) wrapping_u256(a), (UInt(512)) wrapping_u256(b));
-    Secret(UInt(576)) q = (UInt(576)) wrapping_umul((UInt(512)) wrapping_u256(t & rm), (UInt(512)) wrapping_u256(minv)) & rm;
-    return wrapping_u320(wrapping_uadd(t, (UInt(576)) wrapping_umul((UInt(512)) wrapping_u256(q), (UInt(512)) wrapping_u256(m))) >> (UInt(576)) 256);
-}
-Secret(UInt(320)) p256s_and(Secret(UInt(320)) a, Secret(UInt(320)) b) { return a & b; }
-Secret(UInt(320)) p256s_or(Secret(UInt(320)) a, Secret(UInt(320)) b) { return a | b; }
-Secret(UInt(320)) p256s_xor(Secret(UInt(320)) a, Secret(UInt(320)) b) { return a ^ b; }
-Secret(UInt(320)) p256s_shr(Secret(UInt(320)) x, Int n) { return x >> (UInt(320)) n; }
-Secret(UInt(320)) p256s_shl(Secret(UInt(320)) x, Int n) { return x << (UInt(320)) n; }
-Secret(UInt(320)) p256s_mask(Secret(UInt(320)) bit) {
+Secret(UInt(576)) p256s_add(Secret(UInt(576)) a, Secret(UInt(576)) b) { return wrapping_uadd(a, b); }
+Secret(UInt(576)) p256s_sub(Secret(UInt(576)) a, Secret(UInt(576)) b) { return wrapping_usub(a, b); }
+Secret(UInt(576)) p256s_mul(Secret(UInt(576)) a, Secret(UInt(576)) b) { return wrapping_umul(a, b); }
+Secret(UInt(576)) p256s_mulf(Secret(UInt(576)) a, Secret(UInt(576)) b) { return (UInt(576)) wrapping_umul(wrapping_u512(wrapping_u256(a)), wrapping_u512(wrapping_u256(b))); }
+Secret(UInt(576)) p256s_mullo(Secret(UInt(576)) a, Secret(UInt(576)) b) { return (UInt(576)) wrapping_umul(wrapping_u256(a), wrapping_u256(b)); }
+Secret(UInt(576)) p256s_and(Secret(UInt(576)) a, Secret(UInt(576)) b) { return a & b; }
+Secret(UInt(576)) p256s_or(Secret(UInt(576)) a, Secret(UInt(576)) b) { return a | b; }
+Secret(UInt(576)) p256s_xor(Secret(UInt(576)) a, Secret(UInt(576)) b) { return a ^ b; }
+Secret(UInt(576)) p256s_shr(Secret(UInt(576)) x, Int n) { return x >> (UInt(576)) n; }
+Secret(UInt(576)) p256s_shl(Secret(UInt(576)) x, Int n) { return x << (UInt(576)) n; }
+Secret(UInt(576)) p256s_mask(Secret(UInt(576)) bit) {
     Secret(Int) h = ct_hide(wrapping_i64(bit & 1));
-    return wrapping_usub(p256_zero(), (UInt(320)) wrapping_u64(h));
+    return wrapping_usub(p256_zero(), (UInt(576)) wrapping_u64(h));
 }
-Secret(UInt(320)) p256s_lift(UInt(320) k) { return classify(k); }
-Secret(UInt(320)) p256s_from_byte(Secret(UInt(8)) b) { return (UInt(320)) b; }
-Secret(UInt(8)) p256s_byte(Secret(UInt(320)) x, Int sh) { return wrapping_u8(x >> (UInt(320)) sh); }
+Secret(UInt(576)) p256s_lift(UInt(576) k) { return classify(k); }
+Secret(UInt(576)) p256s_from_byte(Secret(UInt(8)) b) { return (UInt(576)) b; }
+Secret(UInt(8)) p256s_byte(Secret(UInt(576)) x, Int sh) { return wrapping_u8(x >> (UInt(576)) sh); }
 @requires(declassify)
-UInt(320) p256s_open(Secret(UInt(320)) x) { return ct_public(declassify(x, "NIST P-256 (secp256r1) signature, public key or validity verdict")); }
+UInt(576) p256s_open(Secret(UInt(576)) x) { return ct_public(declassify(x, "NIST P-256 (secp256r1) signature, public key or validity verdict")); }
 
-P256Word(Secret(UInt(320)), Secret(UInt(8))) = { .p256w_add = p256s_add, .p256w_sub = p256s_sub, .p256w_mont = p256s_mont, .p256w_and = p256s_and, .p256w_or = p256s_or, .p256w_xor = p256s_xor, .p256w_shr = p256s_shr, .p256w_shl = p256s_shl, .p256w_mask = p256s_mask, .p256w_lift = p256s_lift, .p256w_from_byte = p256s_from_byte, .p256w_byte = p256s_byte, .p256w_open = p256s_open };
+P256Word(Secret(UInt(576)), Secret(UInt(8))) = { .p256w_add = p256s_add, .p256w_sub = p256s_sub, .p256w_mul = p256s_mul, .p256w_mulf = p256s_mulf, .p256w_mullo = p256s_mullo, .p256w_and = p256s_and, .p256w_or = p256s_or, .p256w_xor = p256s_xor, .p256w_shr = p256s_shr, .p256w_shl = p256s_shl, .p256w_mask = p256s_mask, .p256w_lift = p256s_lift, .p256w_from_byte = p256s_from_byte, .p256w_byte = p256s_byte, .p256w_open = p256s_open };
 
 // ─── Branch-free helpers ─────────────────────────────────────────────
 
-/// 1 when v != 0, else 0 (v < 2^(320-1)): 0 - v has its top bit set
+/// 1 when v != 0, else 0 (v < 2^(576-1)): 0 - v has its top bit set
 /// exactly when v is nonzero.
 @needs(P256Word(F, B))
 pub F p256_nonzero(F v) {
     F z = p256w_lift(p256_zero());
     F one = p256w_lift(1);
-    return p256w_and(p256w_shr(p256w_or(v, p256w_sub(z, v)), 319), one);
+    return p256w_and(p256w_shr(p256w_or(v, p256w_sub(z, v)), 575), one);
 }
 
 // u - m when u >= m, else u, for u < 2m (m public).
 @needs(P256Word(F, B))
-F p256_csub(F u, UInt(320) m) {
+F p256_csub(F u, UInt(576) m) {
     F guard = p256w_lift(p256_guard());
     F mm = p256w_lift(m);
     F gmask = p256w_lift(p256_gmask());
@@ -171,9 +163,18 @@ F p256_csub(F u, UInt(320) m) {
     return p256w_or(p256w_and(p256w_and(d, gmask), keep), p256w_and(u, p256w_xor(keep, ones)));
 }
 
-// a * b / R mod m (Montgomery), a, b < m.
+// a * b / R mod m (Montgomery), a, b < 2^256 (so the result is below m:
+// t + q*m < 2^256 * 2m). The products run on words only as wide as their
+// operands (p256w_mulf, p256w_mullo), not on all 576 bits.
 @needs(P256Word(F, B))
-F p256_mont(F a, F b, UInt(320) m, UInt(320) minv) { return p256_csub(p256w_mont(a, b, m, minv), m); }
+F p256_mont(F a, F b, UInt(576) m, UInt(576) minv) {
+    F rm = p256w_lift(p256_rmask());
+    F mi = p256w_lift(minv);
+    F mm = p256w_lift(m);
+    F t = p256w_mulf(a, b);
+    F q = p256w_and(p256w_mullo(p256w_and(t, rm), mi), rm);
+    return p256_csub(p256w_shr(p256w_add(t, p256w_mulf(q, mm)), 256), m);
+}
 
 // ─── Field (mod p), Montgomery form ──────────────────────────────────
 
@@ -208,13 +209,13 @@ pub F p256_ffrom(F a) {
 // A public exponent as 32-bit words, least significant first: its bits are
 // then read with Int operations, never a shift of a wide value whose
 // stack bytes a secret may have used before.
-List(Int) p256_ewords(UInt(320) e, Int j, Int n, ListBuf(Int) acc) {
+List(Int) p256_ewords(UInt(576) e, Int j, Int n, ListBuf(Int) acc) {
     if (j >= n) { return acc.finish(); }
-    Int w = wrapping_i64((e >> (UInt(320)) (j * 32)) & (UInt(320)) 4294967295);
+    Int w = wrapping_i64((e >> (UInt(576)) (j * 32)) & (UInt(576)) 4294967295);
     return p256_ewords(e, j + 1, n, acc.push(w));
 }
 
-List(Int) p256_ebits(UInt(320) e) { return p256_ewords(e, 0, 255 / 32 + 1, ListBuf()); }
+List(Int) p256_ebits(UInt(576) e) { return p256_ewords(e, 0, 255 / 32 + 1, ListBuf()); }
 
 // a^e for a public exponent e (as p256_ebits), MSB first from bit i: which
 // steps multiply depends on e only.
@@ -288,7 +289,7 @@ pub type P256Pt(F) = { F x; F y; F z; };
 
 /// Affine, ordinary integers, public; ok is false for infinity or a bad
 /// encoding.
-pub type P256Aff = { UInt(320) x; UInt(320) y; Bool ok; };
+pub type P256Aff = { UInt(576) x; UInt(576) y; Bool ok; };
 
 /// Affine at F; ok (whether the point is finite) is public.
 pub type P256Xy(F) = { F x; F y; Bool ok; };
@@ -382,18 +383,56 @@ P256Pt(F) p256_sel(F mask, P256Pt(F) a, P256Pt(F) b) {
     return P256Pt {.x = p256w_or(p256w_and(a.x, mask), p256w_and(b.x, nm)), .y = p256w_or(p256w_and(a.y, mask), p256w_and(b.y, nm)), .z = p256w_or(p256w_and(a.z, mask), p256w_and(b.z, nm))};
 }
 
+// [inf, p, 2p, ..., 15p]: index j holds j * p. Which steps run depends on
+// j only.
 @needs(P256Word(F, B))
-P256Pt(F) p256_ladder(F k, Int i, P256Pt(F) r, P256Pt(F) p) {
-    if (i < 0) { return r; }
-    P256Pt(F) d = p256_dbl(r);
-    return p256_ladder(k, i - 1, p256_sel(p256w_mask(p256w_shr(k, i)), p256_add(d, p), d), p);
+List(P256Pt(F)) p256_ctab(P256Pt(F) p, P256Pt(F) last, Int j, ListBuf(P256Pt(F)) acc) {
+    if (j >= 16) { return acc.finish(); }
+    P256Pt(F) next = if (j == 0) { p256_inf() } else if (j == 1) { p } else if (j == 2) { p256_dbl(p) } else { p256_add(last, p) };
+    return p256_ctab(p, next, j + 1, acc.push(next));
 }
 
-/// k * p for k < 2^256: every bit costs one doubling and one addition.
+// t[w] for a window w (0..15) that may be secret: every entry is read and
+// kept or dropped with a mask, so neither an address nor a branch depends
+// on w.
+@needs(P256Word(F, B))
+P256Pt(F) p256_tsel(List(P256Pt(F)) t, F w, Int j, P256Pt(F) acc) {
+    if (j >= 16) { return acc; }
+    F one = p256w_lift(1);
+    F jj = p256w_lift((UInt(576)) j);
+    F m = p256w_mask(p256w_xor(p256_nonzero(p256w_xor(w, jj)), one));
+    return p256_tsel(t, w, j + 1, p256_sel(m, t[j], acc));
+}
+
+// Bits 4i..4i+3 of k.
+@needs(P256Word(F, B))
+F p256_cwin(F k, Int i) {
+    F f = p256w_lift(15);
+    return p256w_and(p256w_shr(k, 4 * i), f);
+}
+
+// Windows i..0 of k into acc: four doublings, then the window's multiple
+// of p added, a masked table read even when the window is 0 (adding
+// infinity, which the complete formulas cover).
+@needs(P256Word(F, B))
+P256Pt(F) p256_wmul(F k, List(P256Pt(F)) t, Int i, P256Pt(F) acc) {
+    if (i < 0) { return acc; }
+    P256Pt(F) d = p256_dbl(p256_dbl(p256_dbl(p256_dbl(acc))));
+    P256Pt(F) z = p256_inf();
+    return p256_wmul(k, t, i - 1, p256_add(d, p256_tsel(t, p256_cwin(k, i), 0, z)));
+}
+
+/// k * p for k < 2^256 (bits from 256 up are ignored), in constant time:
+/// fixed 4-bit windows, each costing four doublings, one addition and a
+/// masked read of all sixteen table entries, whatever its value.
 @needs(P256Word(F, B))
 pub P256Pt(F) p256_mul(F k, P256Pt(F) p) {
+    ListBuf(P256Pt(F)) b = ListBuf();
+    List(P256Pt(F)) t = p256_ctab(p, p, 0, b);
+    F rm = p256w_lift(p256_rmask());
+    F kk = p256w_and(k, rm);
     P256Pt(F) z = p256_inf();
-    return p256_ladder(k, 255, z, p);
+    return p256_wmul(kk, t, 255 / 4 - 1, p256_tsel(t, p256_cwin(kk, 255 / 4), 0, z));
 }
 
 /// Back to affine coordinates (no longer Montgomery form). Whether the
@@ -401,7 +440,7 @@ pub P256Pt(F) p256_mul(F k, P256Pt(F) p) {
 @needs(P256Word(F, B))
 pub P256Xy(F) p256_affine(P256Pt(F) p) {
     F zi = p256_finv(p.z);
-    UInt(320) nz = p256w_open(p256_nonzero(p.z));
+    UInt(576) nz = p256w_open(p256_nonzero(p.z));
     return P256Xy {.x = p256_ffrom(p256_fmul(p.x, zi)), .y = p256_ffrom(p256_fmul(p.y, zi)), .ok = nz == 1};
 }
 
@@ -424,8 +463,8 @@ pub F p256_load(List(B) b) {
 }
 
 /// A public big-endian byte string as an integer (the last 32 bytes).
-pub UInt(320) p256_from_be(List(Int) b) {
-    UInt(320) v = p256_load(b);
+pub UInt(576) p256_from_be(List(Int) b) {
+    UInt(576) v = p256_load(b);
     return v;
 }
 
@@ -443,18 +482,18 @@ pub List(B) p256_store(F v) {
 }
 
 /// A public integer as exactly 32 big-endian bytes.
-pub List(Int) p256_to_be(UInt(320) v) {
+pub List(Int) p256_to_be(UInt(576) v) {
     List(Int) b = p256_store(v);
     return b;
 }
 
 /// Whether x, y < p is a point of the curve (ordinary integers).
-pub Bool p256_on_curve(UInt(320) x, UInt(320) y) {
+pub Bool p256_on_curve(UInt(576) x, UInt(576) y) {
     if (x >= p256_p() || y >= p256_p()) { return false; }
-    UInt(320) xm = p256_fto(x);
-    UInt(320) ym = p256_fto(y);
-    UInt(320) x3 = p256_fmul(p256_fsq(xm), xm);
-    UInt(320) rhs = p256_fadd(p256_fsub(x3, p256_fadd(xm, p256_fadd(xm, xm))), p256_bm());
+    UInt(576) xm = p256_fto(x);
+    UInt(576) ym = p256_fto(y);
+    UInt(576) x3 = p256_fmul(p256_fsq(xm), xm);
+    UInt(576) rhs = p256_fadd(p256_fsub(x3, p256_fadd(xm, p256_fadd(xm, xm))), p256_bm());
     return p256_fsq(ym) == rhs;
 }
 
@@ -466,22 +505,22 @@ pub P256Aff p256_bad() { return P256Aff {.x = 0, .y = 0, .ok = false}; }
 /// There is no encoding of infinity: 00 is refused too.
 pub P256Aff p256_decode(List(Int) b) {
     if (b.len() == 1 + 2 * 32 && b[0] == 4) {
-        UInt(320) x = p256_from_be(b[1..1 + 32]);
-        UInt(320) y = p256_from_be(b[1 + 32..]);
+        UInt(576) x = p256_from_be(b[1..1 + 32]);
+        UInt(576) y = p256_from_be(b[1 + 32..]);
         if (!p256_on_curve(x, y)) { return p256_bad(); }
         return P256Aff {.x = x, .y = y, .ok = true};
     }
     if (b.len() == 1 + 32 && (b[0] == 2 || b[0] == 3)) {
-        UInt(320) x = p256_from_be(b[1..]);
+        UInt(576) x = p256_from_be(b[1..]);
         if (x >= p256_p()) { return p256_bad(); }
-        UInt(320) xm = p256_fto(x);
-        UInt(320) x3 = p256_fmul(p256_fsq(xm), xm);
-        UInt(320) y2 = p256_fadd(p256_fsub(x3, p256_fadd(xm, p256_fadd(xm, xm))), p256_bm());
-        UInt(320) ym = p256_fsqrt(y2);
+        UInt(576) xm = p256_fto(x);
+        UInt(576) x3 = p256_fmul(p256_fsq(xm), xm);
+        UInt(576) y2 = p256_fadd(p256_fsub(x3, p256_fadd(xm, p256_fadd(xm, xm))), p256_bm());
+        UInt(576) ym = p256_fsqrt(y2);
         if (p256_fsq(ym) != y2) { return p256_bad(); }
-        UInt(320) y0 = p256_ffrom(ym);
+        UInt(576) y0 = p256_ffrom(ym);
         Bool flip = wrapping_i64(y0 & 1) != (b[0] & 1);
-        UInt(320) y = if (flip) { p256_csub(wrapping_usub(p256_p(), y0), p256_p()) } else { y0 };
+        UInt(576) y = if (flip) { p256_csub(wrapping_usub(p256_p(), y0), p256_p()) } else { y0 };
         return P256Aff {.x = x, .y = y, .ok = true};
     }
     return p256_bad();
@@ -498,7 +537,7 @@ pub List(Int) p256_encode(P256Aff a) { return [4].concat(p256_to_be(a.x)).concat
 pub Bool p256_scalar_ok(F d) {
     F n = p256w_lift(p256_n());
     F one = p256w_lift(1);
-    F below = p256w_and(p256w_shr(p256w_sub(d, n), 319), one);
+    F below = p256w_and(p256w_shr(p256w_sub(d, n), 575), one);
     return p256w_open(p256w_and(below, p256_nonzero(d))) == 1;
 }
 
@@ -529,32 +568,73 @@ pub List(B) p256_ecdh(F d, P256Aff q) {
 // ─── ECDSA (SEC 1 §4.1, FIPS 186-5) ─────────────────────────────────
 
 /// An ECDSA signature (r, s); `ok` is false for a refused one.
-pub type P256Sig = { Bool ok; UInt(320) r; UInt(320) s; };
+pub type P256Sig = { Bool ok; UInt(576) r; UInt(576) s; };
 
 /// The leftmost 256 bits of a digest as an integer mod n (SEC 1 §4.1.3
 /// step 5; n has exactly 256 bits).
-pub UInt(320) p256_bits2int(List(Int) digest) {
+pub UInt(576) p256_bits2int(List(Int) digest) {
     List(Int) lead = if (digest.len() > 32) { digest[0..32] } else { digest };
     // 32 bytes hold more than 256 bits when 256 is not a whole number of
     // bytes: the leftmost 256 are the integer.
-    UInt(320) v = p256_from_be(lead);
+    UInt(576) v = p256_from_be(lead);
     Int extra = lead.len() * 8 - 256;
-    return p256_reduce_n(if (extra > 0) { v >> (UInt(320)) extra } else { v });
+    return p256_reduce_n(if (extra > 0) { v >> (UInt(576)) extra } else { v });
 }
 
 /// Verify (r, s) over a message digest under the public point q. Every
 /// input is public: this runs on the public copy only.
-pub Bool p256_verify_digest(List(Int) digest, UInt(320) r, UInt(320) s, P256Aff q) {
+pub Bool p256_verify_digest(List(Int) digest, UInt(576) r, UInt(576) s, P256Aff q) {
     if (!q.ok || !p256_on_curve(q.x, q.y)) { return false; }
     if (r == 0 || s == 0 || r >= p256_n() || s >= p256_n()) { return false; }
-    UInt(320) w = p256_sinv(p256_sto(s));
-    UInt(320) u1 = p256_sfrom(p256_smul(p256_sto(p256_bits2int(digest)), w));
-    UInt(320) u2 = p256_sfrom(p256_smul(p256_sto(r), w));
-    P256Pt(UInt(320)) g = p256_gen();
-    P256Pt(UInt(320)) qp = p256_from_aff(q);
-    P256Xy(UInt(320)) pt = p256_affine(p256_add(p256_mul(u1, g), p256_mul(u2, qp)));
+    UInt(576) w = p256_sinv(p256_sto(s));
+    UInt(576) u1 = p256_sfrom(p256_smul(p256_sto(p256_bits2int(digest)), w));
+    UInt(576) u2 = p256_sfrom(p256_smul(p256_sto(r), w));
+    P256Pt(UInt(576)) g = p256_gen();
+    P256Pt(UInt(576)) qp = p256_from_aff(q);
+    P256Xy(UInt(576)) pt = p256_affine(p256_mul2_pub(u1, g, u2, qp));
     if (!pt.ok) { return false; }
     return p256_reduce_n(pt.x) == r;
+}
+
+// ─── u1 * G + u2 * Q on public data (verification) ──────────────────
+// Verification has no secret: the key, the signature and the digest are
+// public, and so are u1 and u2. So its scalar multiplication may take a
+// path that depends on them -- Straus's interleaving with 4-bit windows:
+// one shared doubling chain, and an addition of a table point only for a
+// nonzero window. The formulas are the same complete ones, so the result
+// is the same point as u1 * G + u2 * Q by the ladder. Never use this for
+// a private scalar: p256_mul is the constant-time one.
+
+// [P, 2P, ..., 15P] (index j holds (j + 1) * P).
+List(P256Pt(UInt(576))) p256_wtab(P256Pt(UInt(576)) p, P256Pt(UInt(576)) last, Int j, ListBuf(P256Pt(UInt(576))) acc) {
+    if (j >= 15) { return acc.finish(); }
+    P256Pt(UInt(576)) next = if (j == 0) { p } else if (j == 1) { p256_dbl(p) } else { p256_add(last, p) };
+    return p256_wtab(p, next, j + 1, acc.push(next));
+}
+
+// The 4-bit window i (bits 4i..4i+3) of the public scalar u.
+Int p256_win(UInt(576) u, Int i) { return wrapping_i64((u >> (UInt(576)) (4 * i)) & (UInt(576)) 15); }
+
+// acc plus t[d - 1], or acc for d = 0.
+P256Pt(UInt(576)) p256_wadd(P256Pt(UInt(576)) acc, List(P256Pt(UInt(576))) t, Int d) {
+    if (d == 0) { return acc; }
+    return p256_add(acc, t[d - 1]);
+}
+
+P256Pt(UInt(576)) p256_straus(UInt(576) u1, List(P256Pt(UInt(576))) t1, UInt(576) u2, List(P256Pt(UInt(576))) t2, Int i, P256Pt(UInt(576)) acc) {
+    if (i < 0) { return acc; }
+    P256Pt(UInt(576)) d = p256_dbl(p256_dbl(p256_dbl(p256_dbl(acc))));
+    return p256_straus(u1, t1, u2, t2, i - 1, p256_wadd(p256_wadd(d, t1, p256_win(u1, i)), t2, p256_win(u2, i)));
+}
+
+/// u1 * g + u2 * q for public scalars below 2^256 and public points, in
+/// time that depends on them (Straus, 4-bit windows): for verification
+/// only, never for a private scalar.
+pub P256Pt(UInt(576)) p256_mul2_pub(UInt(576) u1, P256Pt(UInt(576)) g, UInt(576) u2, P256Pt(UInt(576)) q) {
+    ListBuf(P256Pt(UInt(576))) b1 = ListBuf();
+    ListBuf(P256Pt(UInt(576))) b2 = ListBuf();
+    P256Pt(UInt(576)) z = p256_inf();
+    return p256_straus(u1, p256_wtab(g, g, 0, b1), u2, p256_wtab(q, q, 0, b2), 255 / 4, z);
 }
 
 /// The refused signature: `ok` is false and r and s are zero.
@@ -570,12 +650,12 @@ pub P256Sig p256_sign_k(F d, List(Int) digest, F k) {
     if (!p256_scalar_ok(d) || !p256_scalar_ok(k)) { return p256_sig_bad(); }
     P256Pt(F) g = p256_gen();
     P256Xy(F) rp = p256_affine(p256_mul(k, g));
-    UInt(320) r = p256w_open(p256_reduce_n(rp.x));
+    UInt(576) r = p256w_open(p256_reduce_n(rp.x));
     F e0 = p256w_lift(p256_bits2int(digest));
     F rr = p256w_lift(r);
     F e = p256_sto(e0);
     F rd = p256_smul(p256_sto(rr), p256_sto(d));
-    UInt(320) s = p256w_open(p256_sfrom(p256_smul(p256_sinv(p256_sto(k)), p256_sadd(e, rd))));
+    UInt(576) s = p256w_open(p256_sfrom(p256_smul(p256_sinv(p256_sto(k)), p256_sadd(e, rd))));
     if (!rp.ok || r == 0 || s == 0) { return p256_sig_bad(); }
     return P256Sig {.ok = true, .r = r, .s = s};
 }

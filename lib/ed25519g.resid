@@ -19,10 +19,10 @@
 // Field elements are kept below p = 2^255 - 19 in a signed 512-bit
 // integer: a product of two is below 2^510, so wrapping arithmetic never
 // wraps and the sign bit is free for p_sign masks. The scalar
-// multiplication is a double-and-always-add ladder over the 256 bits of
-// the scalar, choosing the sum or the double with a mask (the formulas
-// are complete, so adding the identity is fine): no table, no index and no
-// branch on a scalar bit. Wide secrets live in records and parameters,
+// multiplication runs all 64 4-bit windows of the scalar, each adding an
+// entry of a 16-point table read whole under masks (the formulas are
+// complete, so adding the identity is fine): no index and no branch on a
+// scalar bit. Wide secrets live in records and parameters,
 // never in a list (E0258).
 
 import "word.resid";
@@ -70,8 +70,9 @@ pub P eg_fsub(P a, P b) {
 }
 
 /// `a` * `b` mod p, for `a` and `b` below p; branch-free.
-/// Folds the high half in three times (2^256 = 38 mod p), leaving less
-/// than 3p, then makes two masked subtractions.
+/// Folds the high half in twice (2^256 = 38 mod p): a * b < 2^510, so the
+/// first fold leaves less than 2^262 and the second less than 2^256 +
+/// 2^12 < 3p; then two masked subtractions.
 @needs(Wide512(P, B))
 pub P eg_fmul(P a, P b) {
     P m = p_lift(eg_m256());
@@ -80,8 +81,7 @@ pub P eg_fmul(P a, P b) {
     P t = p_mul256(a, b);
     P r = p_add(p_and(t, m), p_mul256(p_shr(t, 256), k38));
     P r2 = p_add(p_and(r, m), p_mul256(p_shr(r, 256), k38));
-    P r3 = p_add(p_and(r2, m), p_mul256(p_shr(r2, 256), k38));
-    return eg_csub(eg_csub(r3, pp), pp);
+    return eg_csub(eg_csub(r2, pp), pp);
 }
 
 /// `res`^(2^(`i` + 1)) * `base`^(bits `i`..0 of `e`) mod p, by
@@ -96,11 +96,50 @@ pub P eg_fpow(P res, P base, Int(512) e, Int i) {
     return eg_fpow(rs, base, e, i - 1);
 }
 
+// `a` squared `n` times (n public).
+@needs(Wide512(P, B))
+P eg_sqn(P a, Int n) {
+    if (n <= 0) { return a; }
+    return eg_sqn(eg_fmul(a, a), n - 1);
+}
+
+/// The powers a^11 and a^(2^250 - 1) that `eg_finv` and `eg_pow_p38` are
+/// built from (ref10's addition chain: 250 squarings, 11 products). The
+/// chain is fixed, so its steps do not depend on a.
+type EgChain(P) = { P a11; P a250; };
+
+@needs(Wide512(P, B))
+EgChain(P) eg_chain(P a) {
+    P a2 = eg_fmul(a, a);
+    P a9 = eg_fmul(a, eg_sqn(a2, 2));
+    P a11 = eg_fmul(a2, a9);
+    P e5 = eg_fmul(a9, eg_fmul(a11, a11));
+    P e10 = eg_fmul(eg_sqn(e5, 5), e5);
+    P e20 = eg_fmul(eg_sqn(e10, 10), e10);
+    P e40 = eg_fmul(eg_sqn(e20, 20), e20);
+    P e50 = eg_fmul(eg_sqn(e40, 10), e10);
+    P e100 = eg_fmul(eg_sqn(e50, 50), e50);
+    P e200 = eg_fmul(eg_sqn(e100, 100), e100);
+    P e250 = eg_fmul(eg_sqn(e200, 50), e50);
+    return EgChain {.a11 = a11, .a250 = e250};
+}
+
 /// The inverse of `a` mod p, computed as a^(p - 2); 0 for 0.
+/// p - 2 = 2^255 - 21 = (2^250 - 1) * 2^5 + 11, by a fixed addition chain
+/// (254 squarings, 11 products): no step depends on `a`.
 @needs(Wide512(P, B))
 pub P eg_finv(P a) {
-    P one = p_lift((Int(512)) 1);
-    return eg_fpow(one, a, eg_p() - (Int(512)) 2, 254);
+    EgChain(P) c = eg_chain(a);
+    return eg_fmul(eg_sqn(c.a250, 5), c.a11);
+}
+
+/// `a`^((p + 3) / 8) mod p, the candidate square root of RFC 8032
+/// §5.1.3: (p + 3) / 8 = 2^252 - 2 = (2^250 - 1) * 4 + 2, by the same
+/// fixed chain as `eg_finv`.
+@needs(Wide512(P, B))
+pub P eg_pow_p38(P a) {
+    EgChain(P) c = eg_chain(a);
+    return eg_fmul(eg_sqn(c.a250, 2), eg_fmul(a, a));
 }
 
 // ── points in extended coordinates (X, Y, Z, T with T = XY/Z), a = -1 ──
@@ -183,12 +222,64 @@ pub EgPt(P) eg_base() {
     return eg_pt(bx, by);
 }
 
+/// The table [identity, q, 2q, ..., 15q] (index j holds [j]q), built from
+/// entry `j` on after `last`; start with `j` = 0. Which steps run depends
+/// on j only.
+@needs(Wide512(P, B))
+pub List(EgPt(P)) eg_ctab(EgPt(P) q, EgPt(P) last, Int j, ListBuf(EgPt(P)) acc) {
+    if (j >= 16) { return acc.finish(); }
+    EgPt(P) next = if (j == 0) { eg_id() } else if (j == 1) { q } else if (j == 2) { eg_dbl(q) } else { eg_add(last, q) };
+    return eg_ctab(q, next, j + 1, acc.push(next));
+}
+
+// t[w] for a window w (0..15) that may be secret: every entry is read and
+// kept or dropped with a mask (all ones where w - j is zero, from the sign
+// of (w - j) | (j - w)), so no address or branch depends on w.
+@needs(Wide512(P, B))
+EgPt(P) eg_tsel(List(EgPt(P)) t, P w, Int j, EgPt(P) acc) {
+    if (j >= 16) { return acc; }
+    P jj = p_lift((Int(512)) j);
+    P ones = p_lift(eg_ones());
+    P d = p_sub(w, jj);
+    P m = p_xor(p_sign(p_or(d, p_sub(jj, w))), ones);
+    return eg_tsel(t, w, j + 1, eg_sel(m, t[j], acc));
+}
+
+// Bits 4i..4i+3 of k (k >= 0).
+@needs(Wide512(P, B))
+P eg_cwin(P k, Int i) {
+    P f = p_lift((Int(512)) 15);
+    return p_and(p_shr(k, 4 * i), f);
+}
+
+// Windows i..0 of k into acc: four doublings, then the window's multiple
+// added, a masked table read even for a zero window (adding the identity,
+// which the complete formula covers).
+@needs(Wide512(P, B))
+EgPt(P) eg_wmul(P k, List(EgPt(P)) t, Int i, EgPt(P) acc) {
+    if (i < 0) { return acc; }
+    EgPt(P) d = eg_dbl(eg_dbl(eg_dbl(eg_dbl(acc))));
+    EgPt(P) o = eg_id();
+    return eg_wmul(k, t, i - 1, eg_add(d, eg_tsel(t, eg_cwin(k, i), 0, o)));
+}
+
+/// The point [`k`]`q`, for 0 <= `k` < 2^256, in constant time: fixed
+/// 4-bit windows, each four doublings, one addition and a masked read of
+/// all sixteen table entries, whatever its value. No branch or index
+/// depends on `k`.
+@needs(Wide512(P, B))
+pub EgPt(P) eg_mul(P k, EgPt(P) q) {
+    ListBuf(EgPt(P)) b = ListBuf();
+    List(EgPt(P)) t = eg_ctab(q, q, 0, b);
+    EgPt(P) o = eg_id();
+    return eg_wmul(k, t, 62, eg_tsel(t, eg_cwin(k, 63), 0, o));
+}
+
 /// The point [`k`]B, for 0 <= `k` < 2^256; no branch or index on `k`.
 @needs(Wide512(P, B))
 pub EgPt(P) eg_base_mul(P k) {
     EgPt(P) b = eg_base();
-    EgPt(P) o = eg_id();
-    return eg_ladder(k, b, o, 255);
+    return eg_mul(k, b);
 }
 
 // ── encodings ───────────────────────────────────────────────────────

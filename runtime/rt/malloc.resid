@@ -300,6 +300,24 @@ pub Int c_free(Int p) {
     return big_free(p - 16, h);
 }
 
+// Free p when only its first n bytes were written since it was allocated
+// (a receive buffer sized for the most a call may return): in secret mode
+// only those are wiped, since every earlier owner of the block wiped its
+// own bytes when it freed them; the rest of a 64 KB buffer that took a
+// 300-byte request is not cleared again.
+pub Int c_free_prefix(Int p, Int n) {
+    if (p == 0) { return 0; }
+    _ = if (secret_mode() && n > 0) { resid_raw_fill(p, 0, n) } else { 0 };
+    Int h = ld64(p - 16);
+    if (h == 63) { return 0; }
+    if (h < 64) {
+        Int head = heap_tls() + h * 8;
+        _ = st64(p, ld64(head));
+        return st64(head, p);
+    }
+    return big_keep(p - 16, h);
+}
+
 Int big_free(Int b, Int h) {
     _ = if (secret_mode()) { resid_raw_fill(b + 16, 0, h - 16) } else { 0 };
     return big_keep(b, h);

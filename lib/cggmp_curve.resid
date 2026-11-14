@@ -1,7 +1,7 @@
 // cggmp_curve.resid — P-256 points and scalars for the CGGMP21 protocol, held
 // as natural numbers (List(UInt(64))) so that protocol records and message
 // lists never hold a wide fixed-width integer. Public values; variable time.
-// Conversions to p256.resid's UInt(320) happen inside each operation.
+// Conversions to p256.resid's UInt(576) happen inside each operation.
 //
 // A scalar is a natural number below n. A point is affine; `inf` marks the
 // identity. The transcript encoding follows the Taurus oracle's P-256 curve:
@@ -26,9 +26,9 @@ pub List(UInt(64)) cv_p() { return bn_from_be(p256_to_be(p256_p())); }
 /// The identity point (point at infinity).
 pub CvPt cv_inf() { return CvPt {.inf = true, .x = [], .y = []}; }
 
-UInt(320) cv_u(List(UInt(64)) x) { return p256_from_be(bn_to_be(x, 32)); }
+UInt(576) cv_u(List(UInt(64)) x) { return p256_from_be(bn_to_be(x, 32)); }
 
-List(UInt(64)) cv_nat(UInt(320) v) { return bn_from_be(p256_to_be(v)); }
+List(UInt(64)) cv_nat(UInt(576) v) { return bn_from_be(p256_to_be(v)); }
 
 P256Aff cv_aff(CvPt p) {
     if (p.inf) { return p256_bad(); }
@@ -94,7 +94,7 @@ pub Option(CvPt) cv_dec(List(Int) b) {
 }
 
 // The curve constant b of y^2 = x^3 - 3x + b.
-UInt(320) cv_b() { return 41058363725152142129326129780047268409114441015993725554835256314039467401291; }
+UInt(576) cv_b() { return 41058363725152142129326129780047268409114441015993725554835256314039467401291; }
 
 // ─── Scalars ────────────────────────────────────────────────────
 
