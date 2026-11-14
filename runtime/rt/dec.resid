@@ -153,32 +153,55 @@ Int from_limbs(Int sign, Int l, Int n0, Int exp, Int prec) {
 @noinline
 Int mul1(Int r, Int a, Int n, UInt(64) m) {
     if (m < (UInt(64))4294967296) {
-        // hi = floor(a*m / B) < 2^32 estimated in double precision, biased
-        // low by 2^-15: exact or one short, fixed by one rare correction.
-        Float mb = (Float)(Int)m * 2.0 / 10000000000000000000.0;
-        UInt(64) h = mul1_small(r, a, a + n * 8, m, mb, (UInt(64))0);
+        // hi = floor(a*m / B) < 2^32 estimated as floor(a * mr / 2^94)
+        // with mr = floor(m * 2^94 / B) < 2^64 (div_b: m * 2^30 * 2^64 < B^2):
+        // never over, and one short only when the fraction of a*m / B is
+        // below a / 2^94 < 2^-30, so the remainder plus the carry stays
+        // below B + 2^34 (no wrap) and one rare correction fixes it.
+        UInt(64) mr = div_b((UInt(128))(m << (UInt(64))30) << (UInt(128))64);
+        UInt(64) h = mul1_small(r, a, a + n * 8, m, mr, (UInt(64))0);
         return su(li(r, n), h) * 0 + n + 1;
     }
     UInt(64) h = mul1_big(r, a, n, m, 0, (UInt(64))0);
     return su(li(r, n), h) * 0 + n + 1;
 }
 
-// Walks a from pa to pe, writing r from pr.
-UInt(64) mul1_small(Int pr, Int pa, Int pe, UInt(64) m, Float mb, UInt(64) hprev) {
+// floor(a * m / B) or one less (see mul1).
+UInt(64) mul1_est(UInt(64) a, UInt(64) mr) { return (UInt(64))(((UInt(128))a * (UInt(128))mr) >> (UInt(128))64) >> (UInt(64))30; }
+
+// Walks a from pa to pe, writing r from pr, two limbs per step: their
+// estimates are independent (the second's carry in is the first's
+// estimate), so the pair's corrections are tested together. A last odd
+// limb, or a pair needing a correction, goes through mul1_one.
+UInt(64) mul1_small(Int pr, Int pa, Int pe, UInt(64) m, UInt(64) mr, UInt(64) hprev) {
+    if (pe - pa >= 16) {
+        UInt(64) a0 = lu(pa);
+        UInt(64) a1 = lu(pa + 8);
+        UInt(64) h0 = mul1_est(a0, mr);
+        UInt(64) h1 = mul1_est(a1, mr);
+        UInt(64) s0 = a0 * m - h0 * bb() + hprev;
+        UInt(64) s1 = a1 * m - h1 * bb() + h0;
+        if (s0 < bb() && s1 < bb()) {
+            _ = su(pr, s0) + su(pr + 8, s1);
+            return mul1_small(pr + 16, pa + 16, pe, m, mr, h1);
+        }
+    }
     if (pa >= pe) { return hprev; }
-    UInt(64) ai = lu(pa);
-    UInt(64) hi0 = (UInt(64))(Int)((Float)(Int)(ai >> (UInt(64))1) * mb - 0.000030517578125);
-    UInt(64) s0 = ai * m - hi0 * bb() + hprev;
-    // The correction stays a (rarely taken) branch, off the carried path.
-    if (s0 >= bb()) { return mul1_fix(pr, pa, pe, m, mb, s0, hi0); }
-    _ = su(pr, s0);
-    return mul1_small(pr + 8, pa + 8, pe, m, mb, hi0);
+    return mul1_one(pr, pa, pe, m, mr, hprev);
 }
 
+// One limb of mul1_small, with its correction.
 @noinline
-UInt(64) mul1_fix(Int pr, Int pa, Int pe, UInt(64) m, Float mb, UInt(64) s0, UInt(64) hi0) {
-    _ = su(pr, s0 - bb());
-    return mul1_small(pr + 8, pa + 8, pe, m, mb, hi0 + (UInt(64))1);
+UInt(64) mul1_one(Int pr, Int pa, Int pe, UInt(64) m, UInt(64) mr, UInt(64) hprev) {
+    UInt(64) ai = lu(pa);
+    UInt(64) hi0 = mul1_est(ai, mr);
+    UInt(64) s0 = ai * m - hi0 * bb() + hprev;
+    if (s0 >= bb()) {
+        _ = su(pr, s0 - bb());
+        return mul1_small(pr + 8, pa + 8, pe, m, mr, hi0 + (UInt(64))1);
+    }
+    _ = su(pr, s0);
+    return mul1_small(pr + 8, pa + 8, pe, m, mr, hi0);
 }
 
 UInt(64) mul1_big(Int r, Int a, Int n, UInt(64) m, Int i, UInt(64) hprev) {
