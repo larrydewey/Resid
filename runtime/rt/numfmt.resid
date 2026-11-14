@@ -179,6 +179,8 @@ pub Int float_short(Int buf, Float v) {
     // A Resid NaN prints as `nan` whatever its sign bit (sqrt(-1.0) and
     // 0.0 / 0.0 differ only there; spec §6.7).
     if (v != v) { return mcopy(buf, resid_raw_addr("nan"), 4) * 0 + 3; }
+    Int w = float_short_words(buf, v);
+    if (w >= 0) { return w; }
     Int n = float_short_at(buf, v, 1);
     // %g writes 10.0 as 1e+01 when one digit suffices; below 10^16 the
     // same digits print positionally.
