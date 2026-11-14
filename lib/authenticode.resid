@@ -1,0 +1,297 @@
+// lib/authenticode.resid — Authenticode signatures on PE/COFF images
+// (EFI applications and drivers), as UEFI Secure Boot checks them.
+//
+// The image digest follows Microsoft's "Windows Authenticode Portable
+// Executable Signature Format" (and EDK2's DxeImageVerificationLib): SHA-256
+// over the headers without the CheckSum field and the certificate-table
+// directory entry, then each section's raw data in file order, then any
+// data after the last section up to the certificate table. The signature
+// is a PKCS#7 SignedData (lib/pkcs7.resid) over an SpcIndirectDataContent
+// that carries that digest, in a WIN_CERTIFICATE appended to the image
+// (8-byte aligned) and named by the certificate-table directory entry.
+// The PE checksum is recomputed after signing (firmware ignores it, other
+// tools check it).
+//
+// Images are read strictly: PE32 or PE32+, every header and section inside
+// the file, and a certificate table, when present, that ends the file.
+// Signing refuses an image that already carries one.
+//
+//   List(Int) signed = ac_sign(image, db_cert, db_key);
+//   Str why = ac_check(signed, db_cert);   // "" when it verifies
+
+import "crypto.resid";
+import "der.resid";
+import "certverify.resid";
+import "rsakey.resid";
+import "pkcs7.resid";
+
+// ─── Reading the image ──────────────────────────────────────────
+
+Int ac_u16(List(Int) b, Int o) { return b[o] | (b[o + 1] << 8); }
+Int ac_u32(List(Int) b, Int o) { return b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24); }
+
+/// Where a PE image keeps what Authenticode needs: the CheckSum field, the
+/// certificate-table directory entry and the table it names (offset and
+/// size, both 0 when unsigned), the size of the headers, and the sections'
+/// raw data as (offset, size) pairs in file order. ok = false when the
+/// image is malformed.
+pub type PeLayout = {
+    Bool ok;
+    Int checksum_at;
+    Int certdir_at;
+    Int cert_at;
+    Int cert_size;
+    Int headers;
+    List(Int) sec_at;
+    List(Int) sec_size;
+};
+
+PeLayout pe_bad() {
+    return PeLayout {.ok = false, .checksum_at = 0, .certdir_at = 0, .cert_at = 0, .cert_size = 0, .headers = 0, .sec_at = [], .sec_size = []};
+}
+
+/// The layout of PE image `b`, read strictly (see the head of this file).
+pub PeLayout pe_layout(List(Int) b) {
+    Int n = b.len();
+    if (n < 64 || b[0] != 77 || b[1] != 90) { return pe_bad(); }       // "MZ"
+    Int pe = ac_u32(b, 60);
+    if (pe < 64 || pe + 24 > n || ac_u32(b, pe) != 17744) { return pe_bad(); }   // "PE\0\0"
+    Int nsec = ac_u16(b, pe + 6);
+    Int optsize = ac_u16(b, pe + 20);
+    Int opt = pe + 24;
+    if (opt + optsize > n || optsize < 2) { return pe_bad(); }
+    Int magic = ac_u16(b, opt);
+    // PE32 (0x10b) and PE32+ (0x20b) differ in where the directories start.
+    Int dirs = if (magic == 267) { opt + 96 } else { if (magic == 523) { opt + 112 } else { 0 - 1 } };
+    if (dirs < 0) { return pe_bad(); }
+    Int ndirs = ac_u32(b, dirs - 4);
+    Int certdir = dirs + 4 * 8;
+    // The certificate-table entry must exist and lie in the optional header.
+    if (ndirs < 5 || certdir + 8 > opt + optsize) { return pe_bad(); }
+    Int headers = ac_u32(b, opt + 60);
+    Int sections = opt + optsize;
+    if (nsec < 1 || nsec > 96 || sections + nsec * 40 > headers || headers > n) { return pe_bad(); }
+    Int cert_at = ac_u32(b, certdir);
+    Int cert_size = ac_u32(b, certdir + 4);
+    // A table, when there is one, ends the file and starts 8-aligned past
+    // the headers.
+    Bool cert_ok = (cert_at == 0 && cert_size == 0) || (cert_at >= headers && cert_at % 8 == 0 && cert_size >= 8 && cert_at + cert_size == n);
+    if (!cert_ok) { return pe_bad(); }
+    return pe_sections(b, sections, nsec, 0, cert_at, cert_size, headers, opt + 64, certdir, ListBuf(), ListBuf());
+}
+
+PeLayout pe_sections(List(Int) b, Int at, Int nsec, Int i, Int cert_at, Int cert_size, Int headers, Int ck, Int certdir, ListBuf(Int) offs, ListBuf(Int) sizes) {
+    if (i >= nsec) { return pe_sorted(offs.finish(), sizes.finish(), cert_at, cert_size, headers, ck, certdir, b.len()); }
+    Int size = ac_u32(b, at + i * 40 + 16);
+    Int off = ac_u32(b, at + i * 40 + 20);
+    // Sections without raw data (.bss) are not hashed.
+    if (size == 0) { return pe_sections(b, at, nsec, i + 1, cert_at, cert_size, headers, ck, certdir, offs, sizes); }
+    Int limit = if (cert_size > 0) { cert_at } else { b.len() };
+    if (off < headers || off + size > limit) { return pe_drop(offs.finish(), sizes.finish()); }
+    return pe_sections(b, at, nsec, i + 1, cert_at, cert_size, headers, ck, certdir, offs.push(off), sizes.push(size));
+}
+
+PeLayout pe_drop(List(Int) offs, List(Int) sizes) { return pe_bad(); }
+
+// Sections in file order (by PointerToRawData), none overlapping another.
+PeLayout pe_sorted(List(Int) offs, List(Int) sizes, Int cert_at, Int cert_size, Int headers, Int ck, Int certdir, Int n) {
+    List(Int) order = pe_order(offs, 0, []);
+    List(Int) so = pe_pick(offs, order, 0, ListBuf());
+    List(Int) ss = pe_pick(sizes, order, 0, ListBuf());
+    if (!pe_disjoint(so, ss, 1)) { return pe_bad(); }
+    return PeLayout {.ok = true, .checksum_at = ck, .certdir_at = certdir, .cert_at = cert_at, .cert_size = cert_size, .headers = headers, .sec_at = so, .sec_size = ss};
+}
+
+// Indices of `offs` sorted by value (insertion sort; at most 96 sections).
+List(Int) pe_order(List(Int) offs, Int i, List(Int) acc) {
+    if (i >= offs.len()) { return acc; }
+    return pe_order(offs, i + 1, pe_ins(offs, acc, i, 0, ListBuf()));
+}
+
+List(Int) pe_ins(List(Int) offs, List(Int) sorted, Int x, Int j, ListBuf(Int) acc) {
+    if (j >= sorted.len()) { return acc.push(x).finish(); }
+    if (offs[x] < offs[sorted[j]]) { return pe_tail(sorted, j, acc.push(x)); }
+    return pe_ins(offs, sorted, x, j + 1, acc.push(sorted[j]));
+}
+
+List(Int) pe_tail(List(Int) xs, Int j, ListBuf(Int) acc) {
+    if (j >= xs.len()) { return acc.finish(); }
+    return pe_tail(xs, j + 1, acc.push(xs[j]));
+}
+
+List(Int) pe_pick(List(Int) xs, List(Int) order, Int i, ListBuf(Int) acc) {
+    if (i >= order.len()) { return acc.finish(); }
+    return pe_pick(xs, order, i + 1, acc.push(xs[order[i]]));
+}
+
+Bool pe_disjoint(List(Int) offs, List(Int) sizes, Int i) {
+    if (i >= offs.len()) { return true; }
+    if (offs[i - 1] + sizes[i - 1] > offs[i]) { return false; }
+    return pe_disjoint(offs, sizes, i + 1);
+}
+
+// ─── The digest ─────────────────────────────────────────────────
+
+/// The Authenticode SHA-256 digest of image `b` with layout `l` (see the
+/// head of this file).
+pub List(Int) ac_digest_of(List(Int) b, PeLayout l) {
+    ListBuf(Int) h0 = ac_copy(ListBuf(), b, 0, l.checksum_at);
+    ListBuf(Int) h1 = ac_copy(h0, b, l.checksum_at + 4, l.certdir_at);
+    ListBuf(Int) h2 = ac_copy(h1, b, l.certdir_at + 8, l.headers);
+    ListBuf(Int) h3 = ac_secs(h2, b, l, 0);
+    Int hashed = l.headers + ac_sum(l.sec_size, 0, 0);
+    Int end = b.len() - l.cert_size;
+    ListBuf(Int) h4 = if (end > hashed) { ac_copy(h3, b, hashed, end) } else { h3 };
+    return sha256_bytes(h4.finish());
+}
+
+/// The Authenticode SHA-256 digest of PE image `b`, or [] when it is
+/// malformed.
+pub List(Int) ac_digest(List(Int) b) {
+    PeLayout l = pe_layout(b);
+    if (!l.ok) { return []; }
+    return ac_digest_of(b, l);
+}
+
+ListBuf(Int) ac_copy(ListBuf(Int) acc, List(Int) b, Int i, Int end) {
+    if (i >= end) { return acc; }
+    return ac_copy(acc.push(b[i]), b, i + 1, end);
+}
+
+ListBuf(Int) ac_secs(ListBuf(Int) acc, List(Int) b, PeLayout l, Int i) {
+    if (i >= l.sec_at.len()) { return acc; }
+    return ac_secs(ac_copy(acc, b, l.sec_at[i], l.sec_at[i] + l.sec_size[i]), b, l, i + 1);
+}
+
+Int ac_sum(List(Int) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return ac_sum(xs, i + 1, acc + xs[i]);
+}
+
+// ─── SpcIndirectDataContent ─────────────────────────────────────
+
+/// SPC_INDIRECT_DATA_OBJID (1.3.6.1.4.1.311.2.1.4), the signed content type.
+pub List(Int) ac_oid_indirect_data() { return [6, 10, 43, 6, 1, 4, 1, 130, 55, 2, 1, 4]; }
+List(Int) ac_oid_pe_image_data() { return [6, 10, 43, 6, 1, 4, 1, 130, 55, 2, 1, 15]; }   // 1.3.6.1.4.1.311.2.1.15
+List(Int) ac_oid_opus_info() { return [6, 10, 43, 6, 1, 4, 1, 130, 55, 2, 1, 12]; }      // 1.3.6.1.4.1.311.2.1.12
+
+// SpcPeImageData: no flags, and the file link every signer writes,
+// [0] { [2] { [0] BMPString "<<<Obsolete>>>" } }.
+List(Int) ac_pe_image_data() {
+    List(Int) obsolete = [0, 60, 0, 60, 0, 60, 0, 79, 0, 98, 0, 115, 0, 111, 0, 108, 0, 101, 0, 116, 0, 101, 0, 62, 0, 62, 0, 62];
+    return der_el(48, [3, 1, 0].concat(der_el(160, der_el(162, der_el(128, obsolete)))));
+}
+
+/// The SpcIndirectDataContent SEQUENCE carrying image digest `digest`.
+pub List(Int) ac_indirect_data(List(Int) digest) {
+    List(Int) attr = der_el(48, ac_oid_pe_image_data().concat(ac_pe_image_data()));
+    List(Int) dinfo = der_el(48, p7_alg_sha256().concat(der_el(4, digest)));
+    return der_el(48, attr.concat(dinfo));
+}
+
+// The content octets of the one DER element `el` (the digest's input).
+List(Int) ac_inner(List(Int) el) {
+    Der d = der_top(el);
+    return der_value(el, d);
+}
+
+// ─── Signing ────────────────────────────────────────────────────
+
+/// Image `b` signed with `key`, whose certificate `cert` travels in the
+/// signature, or [] when the image is malformed, already signed, or the
+/// key cannot sign.
+@requires(declassify)
+pub List(Int) ac_sign(List(Int) b, List(Int) cert, RsaKey key) {
+    PeLayout l0 = pe_layout(b);
+    if (!l0.ok || l0.cert_size != 0) { return []; }
+    // The table starts 8-aligned, so the image is padded first; the
+    // padding is data after the last section and so is hashed.
+    List(Int) img = b.concat(ac_zeros((8 - b.len() % 8) % 8));
+    PeLayout l = pe_layout(img);
+    if (!l.ok) { return []; }
+    List(Int) spc = ac_indirect_data(ac_digest_of(img, l));
+    P7Content c = P7Content {.content_type = ac_oid_indirect_data(), .signed = ac_inner(spc), .embedded = spc,
+        .attributes = true, .extra_attributes = [p7_attribute(ac_oid_opus_info(), [48, 0])]};
+    List(Int) sd = p7_sign(c, cert, key);
+    if (sd.len() == 0) { return []; }
+    List(Int) blob = p7_content_info(sd);
+    // WIN_CERTIFICATE: dwLength (header and blob, unpadded), revision 2.0,
+    // type PKCS_SIGNED_DATA, then the blob padded to 8 bytes.
+    Int len = 8 + blob.len();
+    Int padded = len + (8 - len % 8) % 8;
+    List(Int) win = ac_le32(len).concat([0, 2, 2, 0]).concat(blob).concat(ac_zeros(padded - len));
+    List(Int) with_dir = ac_put(ac_put(img, l.certdir_at, ac_le32(img.len())), l.certdir_at + 4, ac_le32(padded));
+    List(Int) out = with_dir.concat(win);
+    return ac_put(out, l.checksum_at, ac_le32(pe_checksum(out, l.checksum_at)));
+}
+
+List(Int) ac_zeros(Int n) { return ac_zeros_acc(n, ListBuf()); }
+
+List(Int) ac_zeros_acc(Int n, ListBuf(Int) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return ac_zeros_acc(n - 1, acc.push(0));
+}
+
+List(Int) ac_le32(Int v) { return [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >> 24) & 255]; }
+
+// `b` with bytes `v` written at `at`.
+List(Int) ac_put(List(Int) b, Int at, List(Int) v) {
+    return b[0..at].concat(v).concat(b[at + v.len()..b.len()]);
+}
+
+/// The PE checksum of `b` (IMAGEHLP's CheckSumMappedFile): the 16-bit
+/// one's-complement-style sum of the file with its CheckSum field (at
+/// `checksum_at`) taken as zero, plus the file's length.
+pub Int pe_checksum(List(Int) b, Int checksum_at) {
+    Int s = pe_ck_sum(b, checksum_at, 0, 0);
+    return (s + b.len()) & 4294967295;
+}
+
+Int pe_ck_sum(List(Int) b, Int ck, Int i, Int acc) {
+    if (i >= b.len()) { return acc; }
+    Int lo = if (i >= ck && i < ck + 4) { 0 } else { b[i] };
+    Int hi = if (i + 1 >= b.len() || (i + 1 >= ck && i + 1 < ck + 4)) { 0 } else { b[i + 1] };
+    Int s = acc + lo + (hi << 8);
+    return pe_ck_sum(b, ck, i + 2, (s & 65535) + (s >> 16));
+}
+
+// ─── Checking ───────────────────────────────────────────────────
+
+/// Why image `b`'s Authenticode signature is refused, or "" when it is
+/// one signature, by the key in certificate `trusted`, over this exact
+/// image. The image digest is recomputed and compared with the signed one.
+pub Str ac_check(List(Int) b, List(Int) trusted) {
+    PeLayout l = pe_layout(b);
+    if (!l.ok) { return "not a well-formed PE image"; }
+    if (l.cert_size == 0) { return "not signed"; }
+    Int at = l.cert_at;
+    Int len = ac_u32(b, at);
+    // One WIN_CERTIFICATE, revision 2.0, PKCS_SIGNED_DATA, filling the table
+    // but for its alignment padding.
+    if (len < 9 || at + len > b.len() || ac_u16(b, at + 4) != 512 || ac_u16(b, at + 6) != 2) { return "not one PKCS#7 WIN_CERTIFICATE"; }
+    if (len + (8 - len % 8) % 8 != l.cert_size) { return "more than one certificate entry"; }
+    List(Int) blob = b[at + 8..at + len];
+    P7Parsed p = p7_parse(blob);
+    if (!p.ok || !eq_bytes(p.content_type, ac_oid_indirect_data())) { return "not an Authenticode signature"; }
+    List(Int) spc = p.embedded;
+    List(Int) signed_digest = ac_signed_digest(spc);
+    if (signed_digest.len() == 0) { return "the signed content is not a SHA-256 PE image digest"; }
+    if (!eq_bytes(signed_digest, ac_digest_of(b, l))) { return "the image changed after it was signed"; }
+    return p7_check(blob, ac_oid_indirect_data(), ac_inner(spc), trusted);
+}
+
+/// The image digest an SpcIndirectDataContent `spc` carries, or [] unless
+/// it describes a PE image (SPC_PE_IMAGE_DATA) and its digest is SHA-256.
+pub List(Int) ac_signed_digest(List(Int) spc) {
+    Der top = der_top(spc);
+    if (!top.ok || top.tag != 48) { return []; }
+    Der attr = der_child(spc, top);
+    Der dinfo = der_sibling(spc, attr, top);
+    if (!attr.ok || attr.tag != 48 || !dinfo.ok || dinfo.tag != 48 || !der_is_last(dinfo, top)) { return []; }
+    Der kind = der_child(spc, attr);
+    if (!kind.ok || !eq_bytes(der_encoded(spc, kind), ac_oid_pe_image_data())) { return []; }
+    Der alg = der_child(spc, dinfo);
+    Der dig = der_sibling(spc, alg, dinfo);
+    if (!alg.ok || !eq_bytes(der_encoded(spc, alg), p7_alg_sha256()) || !dig.ok || dig.tag != 4 || dig.len != 32 || !der_is_last(dig, dinfo)) { return []; }
+    return der_value(spc, dig);
+}

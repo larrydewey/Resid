@@ -1,0 +1,91 @@
+// UEFI Secure Boot formats end to end: an RSA-2048 key made from a seed
+// (lib/rsakey.resid), its self-signed certificate (lib/x509gen.resid), the
+// key written as PKCS#8 PEM and read back as secrets, and the PE images in
+// tests/crypto/secureboot signed with it (lib/authenticode.resid over
+// lib/pkcs7.resid). Writes db.key, db.crt and <image>.signed.efi into
+// <out> for tests/crypto/secureboot/check.py, and prints a pass/FAIL line
+// per check made here: each signature verifies, and a changed image, a
+// signature checked against another certificate, a second signature and a
+// malformed image are refused.
+//
+//   sbprobe <out-dir> <fixture-dir> <seed>
+
+import "../../lib/crypto.resid";
+import "../../lib/rsakey.resid";
+import "../../lib/x509gen.resid";
+import "../../lib/pkcs7.resid";
+import "../../lib/authenticode.resid";
+import "../../lib/certverify.resid";
+
+// rk_draw_len(2048) bytes from SHA-256 over the seed and a counter.
+List(Int) stream(Str seed, Int i, Int want, List(Int) acc) {
+    if (acc.len() >= want) { return acc[0..want]; }
+    return stream(seed, i + 1, want, acc.concat(sha256_bytes(bytes_of(f"{seed}/{i}"))));
+}
+
+Int report(Bool ok, Str what) {
+    println((if (ok) { "pass  " } else { "FAIL  " }) + what);
+    return if (ok) { 0 } else { 1 };
+}
+
+// `b` with byte `at` flipped.
+List(Int) flip(List(Int) b, Int at) { return b[0..at].concat([b[at] ^ 1]).concat(b[at + 1..b.len()]); }
+
+@requires(filesystem, declassify)
+Int image(Str out, Str fixtures, Str name, List(Int) cert, List(Int) other, RsaKey key) {
+    List(Int) img = filesystem.read_bytes(fixtures + "/" + name + ".efi");
+    List(Int) signed = ac_sign(img, cert, key);
+    Int a = report(signed.len() > img.len(), f"{name}: signed");
+    _ = filesystem.write_bytes(out + "/" + name + ".signed.efi", signed);
+    Int b = report(ac_check(signed, cert) == "", f"{name}: the signature verifies against the certificate");
+    Int c = report(ac_check(flip(signed, 1024 + 5), cert) == "the image changed after it was signed", f"{name}: a changed section is refused");
+    Int d = report(ac_check(flip(signed, img.len() - 3), cert) == "the image changed after it was signed", f"{name}: changed data after the sections is refused");
+    Int e = report(ac_check(signed, other) == "the signature does not verify", f"{name}: another key with the same issuer and serial does not verify it");
+    Int f = report(ac_sign(signed, cert, key).len() == 0, f"{name}: a signed image is not signed again");
+    Int g = report(ac_check(img, cert) == "not signed", f"{name}: the unsigned image is reported unsigned");
+    Int h = report(eq_bytes(ac_digest(signed), ac_digest(img.concat([0, 0, 0, 0, 0, 0, 0, 0][0..(8 - img.len() % 8) % 8]))), f"{name}: the digest ignores the checksum and the certificate table");
+    return a + b + c + d + e + f + g + h;
+}
+
+@requires(args, filesystem, declassify)
+Int main() {
+    Str out = args.get(1);
+    Str fixtures = args.get(2);
+    Str seed = args.get(3);
+    Option(RsaKeyParts) made = rsa_keygen_from(2048, stream(seed, 0, rk_draw_len(2048), []));
+    Option(RsaKeyParts) other_made = rsa_keygen_from(2048, stream(seed + "/other", 0, rk_draw_len(2048), []));
+    return match made {
+        Some(p) => match other_made {
+            Some(q) => with_keys(out, fixtures, p, q),
+            None => report(false, "a key from the second seed")
+        },
+        None => report(false, "a key from the seed")
+    };
+}
+
+@requires(filesystem, declassify)
+Int with_keys(Str out, Str fixtures, RsaKeyParts p, RsaKeyParts q) {
+    RsaCertSpec s = RsaCertSpec {.cn = "Resid test db", .serial = [1, 2, 3, 4, 5, 6, 7, 8], .not_before = 1767225600, .not_after = 2713910400, .ca = true};
+    List(Int) cert = x509g_rsa_cert(s, p.n, p.e, "Resid test db", rsa_key_of(p));
+    List(Int) other = x509g_rsa_cert(s, q.n, q.e, "Resid test db", rsa_key_of(q));
+    Int f0 = report(cert.len() > 0 && other.len() > 0, "self-signed RSA certificates made");
+    _ = filesystem.write_secret(out + "/db.key", bytes_of(rsa_key_pem(p)));
+    _ = filesystem.write_bytes(out + "/db.crt", cert);
+    // The key read back from its file, as a tool that signs later would.
+    Option(RsaKey) loaded = rsa_key_parse(filesystem.read_bytes(out + "/db.key"));
+    return match loaded {
+        Some(key) => with_loaded(out, fixtures, p, cert, other, key, f0),
+        None => report(false, "the key reads back from PKCS#8 PEM")
+    };
+}
+
+@requires(filesystem, declassify)
+Int with_loaded(Str out, Str fixtures, RsaKeyParts p, List(Int) cert, List(Int) other, RsaKey key, Int f0) {
+    Int f1 = report(eq_bytes(key.n, p.n) && rsa_key_verify(p.n, p.e, [1, 2, 3], rsa_key_sign(key, [1, 2, 3])), "the key reads back from PKCS#8 PEM and signs");
+    Bool refused = match rsa_key_parse(bytes_of("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")) { Some(_) => false, None => true };
+    Int f2 = report(refused, "a malformed key file is refused");
+    Int f3 = report(ac_sign([77, 90, 0, 0], cert, key).len() == 0 && ac_check([77, 90], cert) == "not a well-formed PE image", "a malformed image is refused");
+    Int fails = f0 + f1 + f2 + f3 + image(out, fixtures, "tiny64", cert, other, key) + image(out, fixtures, "tiny32", cert, other, key);
+    println(f"SUMMARY fail={fails}");
+    return if (fails == 0) { 0 } else { 1 };
+}

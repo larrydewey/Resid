@@ -179,5 +179,30 @@ else
     fail=$((fail + 1)); echo "FAIL ctap2: $(grep -m3 -E 'error|expected|actual' "$W/ctap2.log" | tr '\n' ' ')"
 fi
 
+# UEFI Secure Boot formats (lib/rsakey, lib/x509gen's RSA certificates,
+# lib/pkcs7, lib/authenticode): sbprobe makes a key from a seed, signs the
+# PE32+ and PE32 images in tests/crypto/secureboot (gen_pe.py) and checks
+# its own refusals; check.py then verifies the key file, the certificate
+# and each Authenticode signature independently with pyca/cryptography
+# (skipped without it). UEFI firmware itself checks the same signatures in
+# Hafen's test suite (OVMF with Secure Boot on).
+(cd "$ROOT" && "$COMPILER" tests/crypto/sbprobe.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/sbprobe") > "$W/build.log" 2>&1 || {
+    echo "FAIL build sbprobe"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
+mkdir -p "$W/sb"
+if out="$("$W/sbprobe" "$W/sb" "$ROOT/tests/crypto/secureboot" "resid secure boot" 2>&1)"; then
+    pass=$((pass + $(printf '%s\n' "$out" | grep -c '^pass ')))
+else
+    fail=$((fail + 1)); printf '%s\n' "$out" | grep -E '^FAIL|abort' | head -5
+fi
+if python3 -c 'import cryptography' 2>/dev/null; then
+    if out="$(python3 "$ROOT/tests/crypto/secureboot/check.py" "$W/sb" 2>&1)"; then
+        pass=$((pass + $(printf '%s\n' "$out" | grep -c '^pass ')))
+    else
+        fail=$((fail + 1)); printf '%s\n' "$out" | grep -E '^FAIL|Error' | head -5
+    fi
+else
+    echo "note: secure boot cross-check skipped (python3 cryptography not installed)"
+fi
+
 echo "crypto: $pass passed, $fail failed ($files vector files)"
 [ "$fail" -eq 0 ]

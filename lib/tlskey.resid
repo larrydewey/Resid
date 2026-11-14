@@ -117,9 +117,10 @@ List(Int) tk_ec_sign(Curve c, HashAlg h, List(Secret(UInt(8))) scalar, List(Int)
 // nothing else: the private scalar or seed is sliced out at public bounds
 // and never published.
 
-// One framing byte, published.
+/// One framing byte of secret key bytes `b`, published: a tag, length,
+/// version or algorithm OID octet, never a key byte.
 @requires(declassify)
-Int tk_at(List(Secret(UInt(8))) b, Int i) {
+pub Int tk_at(List(Secret(UInt(8))) b, Int i) {
     UInt(8) v = declassify(b[i], "private key DER framing: a tag, length or algorithm OID octet");
     return (Int) ct_public(v);
 }

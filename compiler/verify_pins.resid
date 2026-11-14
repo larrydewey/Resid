@@ -54,7 +54,7 @@ pub List(Str) vp_pins() {
         "spdm_msg.resid=86f45ab9ad1a36950dbcf4d712d8771b55a99052e8814e4149bd992e2647777f",
         "tls.resid=cbc5b0e0ec6294bf42e36ff068fab78b25d26966b577ed1605044cbb76af5cd4",
         "tlsclient.resid=b0963a23867aa2a3fa0fa07404392133176ac006e2a945a076c3437f745848b4",
-        "tlskey.resid=429cf9cecf8ae1adfd5ba0fa3d3e446d9ecc773b06715b2a43c205a7a9c7ea73",
+        "tlskey.resid=8f3655640467052695607c5862c98e98c545ed255c95ab412ab35ab8eaa1db06",
         "tlsmsg.resid=54d8d12eaf1208e9b78c59800fce5d7f74b4e80b3c0400980f956379968600c4",
         "tlsserver.resid=cf8bbbf2cf2ff172685d0589da7f446414c21b56b463b9c4badbdee727d81082",
         "tlswire.resid=eaf730256697cc42c1052d5eb86f96be1dc457c6ddcb73e46c42c229ccc3594e",

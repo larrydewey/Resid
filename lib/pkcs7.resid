@@ -1,0 +1,290 @@
+// lib/pkcs7.resid — PKCS#7 SignedData (RFC 2315; CMS, RFC 5652) with one
+// RSA signer and SHA-256: made, and checked against a certificate the
+// caller trusts.
+//
+// This is the shape UEFI firmware verifies: Authenticode signatures on EFI
+// executables (lib/authenticode.resid) and the signatures on time-based
+// authenticated variables (PK, KEK, db). The signer is named by issuer and
+// serial number, its certificate travels in `certificates`, and the
+// signature is PKCS#1 v1.5 (rsaEncryption), either over the signed
+// attributes (contentType and messageDigest, plus any the caller adds) or,
+// without attributes, over the content itself.
+//
+// The digest a signer commits to is SHA-256 of the *content octets*: for
+// the id-data type the raw bytes, for a structured content (Authenticode's
+// SpcIndirectDataContent) the value of its outer SEQUENCE without its tag
+// and length (RFC 2315 9.3). The caller passes those octets as `signed`.
+//
+// Verification here is deliberately narrow: one signer, SHA-256, RSA, and
+// a trust decision that is the caller's certificate itself (the signer's
+// issuer and serial must name it and its key must verify the signature).
+// It is what a build checks before it ships a signed file, not a general
+// PKCS#7 path validator.
+
+import "crypto.resid";
+import "der.resid";
+import "certverify.resid";
+import "x509.resid";
+import "rsa.resid";
+import "hash.resid";
+import "rsakey.resid";
+
+/// What to sign: the content type (an encoded OBJECT IDENTIFIER), the
+/// content octets the digest covers (see the head of this file), the DER
+/// carried as content inside the SignedData (empty for a detached
+/// signature), whether to sign attributes, and extra signed attributes
+/// (each an encoded Attribute SEQUENCE) after contentType and messageDigest.
+pub type P7Content = {
+    List(Int) content_type;
+    List(Int) signed;
+    List(Int) embedded;
+    Bool attributes;
+    List(List(Int)) extra_attributes;
+};
+
+// ─── Encoding pieces ────────────────────────────────────────────
+
+List(Int) p7_cat(List(List(Int)) xs, Int i, ListBuf(Int) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return p7_cat(xs, i + 1, p7_push(acc, xs[i], 0));
+}
+
+ListBuf(Int) p7_push(ListBuf(Int) acc, List(Int) b, Int i) {
+    if (i >= b.len()) { return acc; }
+    return p7_push(acc.push(b[i]), b, i + 1);
+}
+
+List(Int) p7_join(List(List(Int)) xs) { return p7_cat(xs, 0, ListBuf()); }
+List(Int) p7_seq(List(List(Int)) xs) { return der_el(48, p7_join(xs)); }
+
+/// The id-data content type (1.2.840.113549.1.7.1), encoded.
+pub List(Int) p7_oid_data() { return [6, 9, 42, 134, 72, 134, 247, 13, 1, 7, 1]; }
+/// The id-signedData content type (1.2.840.113549.1.7.2), encoded.
+pub List(Int) p7_oid_signed_data() { return [6, 9, 42, 134, 72, 134, 247, 13, 1, 7, 2]; }
+List(Int) p7_oid_content_type() { return [6, 9, 42, 134, 72, 134, 247, 13, 1, 9, 3]; }    // 1.2.840.113549.1.9.3
+List(Int) p7_oid_message_digest() { return [6, 9, 42, 134, 72, 134, 247, 13, 1, 9, 4]; }  // 1.2.840.113549.1.9.4
+/// The id-sha256 AlgorithmIdentifier (2.16.840.1.101.3.4.2.1) with NULL
+/// parameters, as Authenticode and UEFI tools write it.
+pub List(Int) p7_alg_sha256() { return [48, 13, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 1, 5, 0]; }
+
+/// An Attribute: SEQUENCE { type OID, SET { value } }.
+pub List(Int) p7_attribute(List(Int) oid, List(Int) value) {
+    return p7_seq([oid, der_el(49, value)]);
+}
+
+// DER orders a SET OF by its elements' encodings, compared as octet
+// strings (X.690 11.6); a shorter prefix comes first.
+Int p7_cmp(List(Int) a, List(Int) b, Int i) {
+    if (i >= a.len() && i >= b.len()) { return 0; }
+    if (i >= a.len()) { return 0 - 1; }
+    if (i >= b.len()) { return 1; }
+    if (a[i] != b[i]) { return a[i] - b[i]; }
+    return p7_cmp(a, b, i + 1);
+}
+
+List(List(Int)) p7_insert(List(List(Int)) sorted, List(Int) x, Int i, ListBuf(List(Int)) acc) {
+    if (i >= sorted.len()) { return acc.push(x).finish(); }
+    if (p7_cmp(x, sorted[i], 0) < 0) { return p7_rest(sorted, i, acc.push(x)); }
+    return p7_insert(sorted, x, i + 1, acc.push(sorted[i]));
+}
+
+List(List(Int)) p7_rest(List(List(Int)) xs, Int i, ListBuf(List(Int)) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return p7_rest(xs, i + 1, acc.push(xs[i]));
+}
+
+List(List(Int)) p7_sort(List(List(Int)) xs, Int i, List(List(Int)) acc) {
+    if (i >= xs.len()) { return acc; }
+    return p7_sort(xs, i + 1, p7_insert(acc, xs[i], 0, ListBuf()));
+}
+
+/// The content of a DER SET OF holding `xs`, in DER order.
+pub List(Int) p7_set_of(List(List(Int)) xs) {
+    List(List(Int)) none = [];
+    return p7_join(p7_sort(xs, 0, none));
+}
+
+// ─── The signer's certificate ───────────────────────────────────
+
+/// The issuer Name and serial number a SignerInfo names its certificate
+/// by, both as encoded elements; ok = false for a certificate x509_parse
+/// refuses or that does not hold an RSA key.
+pub type P7CertId = { Bool ok; List(Int) issuer; List(Int) serial; List(Int) n; List(Int) e; };
+
+/// The issuer, serial and RSA public key of DER certificate `cert`.
+pub P7CertId p7_cert_id(List(Int) cert) {
+    Result(Cert, Str) c = x509_parse(cert);
+    return match c {
+        Ok(v) => if (v.key.kind == 2) {
+            P7CertId {.ok = true, .issuer = v.issuer, .serial = der_el(2, v.serial), .n = v.key.n, .e = v.key.e}
+        } else { p7_no_id() },
+        Err(_) => p7_no_id()
+    };
+}
+
+P7CertId p7_no_id() { return P7CertId {.ok = false, .issuer = [], .serial = [], .n = [], .e = []}; }
+
+// ─── Signing ────────────────────────────────────────────────────
+
+/// The signed attributes for `c`: contentType, messageDigest (SHA-256 of
+/// `c.signed`) and the extras, as the content of their SET, in DER order.
+pub List(Int) p7_signed_attrs(P7Content c) {
+    List(Int) ct = p7_attribute(p7_oid_content_type(), c.content_type);
+    List(Int) md = p7_attribute(p7_oid_message_digest(), der_el(4, sha256_bytes(c.signed)));
+    return p7_set_of([ct, md].concat(c.extra_attributes));
+}
+
+/// The SignedData SEQUENCE (RFC 2315 9.1) of `c`, signed by `key` whose
+/// certificate is `cert` (DER; it must hold key's public key). Empty when
+/// the certificate is unusable or the key cannot sign.
+@requires(declassify)
+pub List(Int) p7_sign(P7Content c, List(Int) cert, RsaKey key) {
+    P7CertId id = p7_cert_id(cert);
+    if (!id.ok || !eq_bytes(id.n, key.n)) { return []; }
+    List(Int) attrs = p7_signed_attrs(c);
+    // With attributes, the signature covers their SET (tag 0x31, not the
+    // [0] tag they are stored under: RFC 5652 5.4).
+    List(Int) sig = if (c.attributes) { rsa_key_sign(key, der_el(49, attrs)) } else { rsa_key_sign(key, c.signed) };
+    if (sig.len() == 0) { return []; }
+    List(Int) signer = p7_seq([
+        der_el(2, [1]),
+        p7_seq([id.issuer, id.serial]),
+        p7_alg_sha256(),
+        if (c.attributes) { der_el(160, attrs) } else { [] },
+        rk_alg_rsa(),
+        der_el(4, sig)
+    ]);
+    List(Int) encap = p7_seq([c.content_type, if (c.embedded.len() > 0) { der_el(160, c.embedded) } else { [] }]);
+    return p7_seq([
+        der_el(2, [1]),
+        der_el(49, p7_alg_sha256()),
+        encap,
+        der_el(160, cert),
+        der_el(49, signer)
+    ]);
+}
+
+/// `signed_data` (a SignedData SEQUENCE) inside a ContentInfo, as an
+/// Authenticode WIN_CERTIFICATE carries it.
+pub List(Int) p7_content_info(List(Int) signed_data) {
+    return p7_seq([p7_oid_signed_data(), der_el(160, signed_data)]);
+}
+
+// ─── Checking ───────────────────────────────────────────────────
+
+/// What a SignedData holds, read strictly: its content type and embedded
+/// content (the [0] element's value, empty when detached), and its one
+/// signer's issuer, serial, signed attributes (the SET's content, empty
+/// when there are none) and signature.
+pub type P7Parsed = {
+    Bool ok;
+    List(Int) content_type;
+    List(Int) embedded;
+    List(Int) issuer;
+    List(Int) serial;
+    List(Int) attrs;
+    Bool has_attrs;
+    List(Int) signature;
+};
+
+P7Parsed p7_bad() {
+    return P7Parsed {.ok = false, .content_type = [], .embedded = [], .issuer = [], .serial = [], .attrs = [], .has_attrs = false, .signature = []};
+}
+
+/// `der` read as a SignedData SEQUENCE, or as a ContentInfo holding one.
+/// Refuses anything but version 1 with SHA-256 and rsaEncryption and
+/// exactly one signer.
+pub P7Parsed p7_parse(List(Int) der) {
+    Der top = der_top(der);
+    if (!top.ok || top.tag != 48) { return p7_bad(); }
+    Der first = der_child(der, top);
+    // A ContentInfo starts with the signedData OID; a SignedData with its
+    // version INTEGER.
+    if (first.ok && first.tag == 6) {
+        if (!eq_bytes(der_encoded(der, first), p7_oid_signed_data())) { return p7_bad(); }
+        Der wrap = der_sibling(der, first, top);
+        if (!wrap.ok || wrap.tag != 160 || !der_is_last(wrap, top)) { return p7_bad(); }
+        Der sd = der_child(der, wrap);
+        if (!der_is_last(sd, wrap) || sd.tag != 48) { return p7_bad(); }
+        return p7_parse_sd(der, sd);
+    }
+    return p7_parse_sd(der, top);
+}
+
+P7Parsed p7_parse_sd(List(Int) b, Der sd) {
+    Der ver = der_child(b, sd);
+    Der algs = der_sibling(b, ver, sd);
+    Der encap = der_sibling(b, algs, sd);
+    Der certs = der_sibling(b, encap, sd);
+    // certificates [0] is optional; when absent the next element is the
+    // SET of signer infos.
+    Der infos = if (certs.ok && certs.tag == 160) { der_sibling(b, certs, sd) } else { certs };
+    if (der_small_uint(b, ver) != 1 || !algs.ok || algs.tag != 49 || !eq_bytes(der_value(b, algs), p7_alg_sha256())) { return p7_bad(); }
+    if (!encap.ok || encap.tag != 48 || !infos.ok || infos.tag != 49 || !der_is_last(infos, sd)) { return p7_bad(); }
+    Der ctype = der_child(b, encap);
+    if (!ctype.ok || ctype.tag != 6) { return p7_bad(); }
+    Der econt = der_sibling(b, ctype, encap);
+    Bool detached = der_is_last(ctype, encap);
+    if (!detached && (!econt.ok || econt.tag != 160 || !der_is_last(econt, encap))) { return p7_bad(); }
+    Der si = der_child(b, infos);
+    if (!si.ok || si.tag != 48 || !der_is_last(si, infos)) { return p7_bad(); }
+    return p7_parse_si(b, si, der_encoded(b, ctype), if (detached) { [] } else { der_value(b, econt) });
+}
+
+P7Parsed p7_parse_si(List(Int) b, Der si, List(Int) ctype, List(Int) embedded) {
+    Der ver = der_child(b, si);
+    Der sid = der_sibling(b, ver, si);
+    Der dalg = der_sibling(b, sid, si);
+    Der next = der_sibling(b, dalg, si);
+    Bool has_attrs = next.ok && next.tag == 160;
+    Der salg = if (has_attrs) { der_sibling(b, next, si) } else { next };
+    Der sig = der_sibling(b, salg, si);
+    if (der_small_uint(b, ver) != 1 || !sid.ok || sid.tag != 48 || !eq_bytes(der_encoded(b, dalg), p7_alg_sha256())) { return p7_bad(); }
+    if (!eq_bytes(der_encoded(b, salg), rk_alg_rsa()) || !sig.ok || sig.tag != 4 || !der_is_last(sig, si)) { return p7_bad(); }
+    Der issuer = der_child(b, sid);
+    Der serial = der_sibling(b, issuer, sid);
+    if (!issuer.ok || issuer.tag != 48 || !serial.ok || serial.tag != 2 || !der_is_last(serial, sid)) { return p7_bad(); }
+    return P7Parsed {.ok = true, .content_type = ctype, .embedded = embedded,
+        .issuer = der_encoded(b, issuer), .serial = der_encoded(b, serial),
+        .attrs = if (has_attrs) { der_value(b, next) } else { [] }, .has_attrs = has_attrs,
+        .signature = der_value(b, sig)};
+}
+
+// The value of the one attribute of type `oid` in the attribute SET
+// content `attrs` (its single SET value, encoded), or [] when it is
+// missing, repeated or not single-valued.
+List(Int) p7_attr_value(List(Int) attrs, List(Int) oid) {
+    return p7_attr_scan(attrs, oid, 0, [], 0);
+}
+
+List(Int) p7_attr_scan(List(Int) a, List(Int) oid, Int pos, List(Int) found, Int seen) {
+    if (pos >= a.len()) { return if (seen == 1) { found } else { [] }; }
+    Der at = der_at(a, pos, a.len());
+    if (!at.ok || at.tag != 48) { return []; }
+    Der t = der_child(a, at);
+    Der vals = der_sibling(a, t, at);
+    if (!t.ok || t.tag != 6 || !vals.ok || vals.tag != 49 || !der_is_last(vals, at)) { return []; }
+    Bool match_oid = eq_bytes(der_encoded(a, t), oid);
+    Der v = der_child(a, vals);
+    if (match_oid && (!v.ok || !der_is_last(v, vals))) { return []; }
+    return p7_attr_scan(a, oid, at.next, if (match_oid) { der_encoded(a, v) } else { found }, if (match_oid) { seen + 1 } else { seen });
+}
+
+/// Why a signature was refused, or "" when it verifies: the SignedData
+/// `der` must be one `trusted` (a DER certificate holding an RSA key)
+/// made over `signed` (the content octets, see the head of this file),
+/// with content type `content_type`.
+pub Str p7_check(List(Int) der, List(Int) content_type, List(Int) signed, List(Int) trusted) {
+    P7Parsed p = p7_parse(der);
+    if (!p.ok) { return "not a PKCS#7 SignedData with one SHA-256 RSA signer"; }
+    P7CertId id = p7_cert_id(trusted);
+    if (!id.ok) { return "the trusted certificate does not hold an RSA key"; }
+    if (!eq_bytes(p.content_type, content_type)) { return "the signed content has another type"; }
+    if (!eq_bytes(p.issuer, id.issuer) || !eq_bytes(p.serial, id.serial)) { return "signed by another certificate"; }
+    if (!p.has_attrs) {
+        return if (rsa_key_verify(id.n, id.e, signed, p.signature)) { "" } else { "the signature does not verify" };
+    }
+    if (!eq_bytes(p7_attr_value(p.attrs, p7_oid_content_type()), content_type)) { return "the signed contentType attribute disagrees"; }
+    if (!eq_bytes(p7_attr_value(p.attrs, p7_oid_message_digest()), der_el(4, sha256_bytes(signed)))) { return "the signed digest does not match the content"; }
+    return if (rsa_key_verify(id.n, id.e, der_el(49, p.attrs), p.signature)) { "" } else { "the signature does not verify" };
+}

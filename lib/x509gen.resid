@@ -12,12 +12,24 @@
 //
 // Times are Unix seconds, written as UTCTime through 2049 and
 // GeneralizedTime from 2050 (RFC 5280 4.1.2.5).
+//
+// RSA certificates (sha256WithRSAEncryption, keys from lib/rsakey.resid)
+// are for signing code and firmware variables, as UEFI Secure Boot's
+// platform, key-exchange and signature-database keys: an authority
+// (keyCertSign) or a code-signing leaf (the codeSigning EKU).
+//
+//   RsaCertSpec s = RsaCertSpec {.cn = "Owner db", .serial = random_bytes(16), ...};
+//   List(Int) der = x509g_rsa_cert(s, parts.n, parts.e, "Owner db", rsa_key_of(parts));
 
 import "crypto.resid";
 import "ecdsa.resid";
 import "calendar.resid";
 import "certverify.resid";
+import "rsakey.resid";
 
+/// What an ECDSA P-256 certificate says about its subject: the common
+/// name, the serial (positive, at most 20 octets), the validity in Unix
+/// seconds, whether it is a CA, and the subject alternative names of a leaf.
 pub type CertSpec = {
     Str cn;                        // subject common name
     List(Int) serial;              // positive, at most 20 octets
@@ -81,7 +93,8 @@ List(Int) oid_server_auth() { return [6, 8, 43, 6, 1, 5, 5, 7, 3, 1]; }         
 
 Str two(Int n) { return if (n < 10) { "0" + f"{n}" } else { f"{n}" }; }
 
-// UTCTime (YYMMDDHHMMSSZ) through 2049, GeneralizedTime from 2050.
+/// Unix time `t` as a certificate time: UTCTime (YYMMDDHHMMSSZ) through
+/// 2049, GeneralizedTime from 2050.
 pub List(Int) x509g_time(Int t) {
     Int days = if (t >= 0) { t / 86400 } else { (t - 86399) / 86400 };
     Int secs = t - days * 86400;
@@ -95,6 +108,8 @@ pub List(Int) x509g_time(Int t) {
 
 List(Int) name_of(Str cn) { return g_seq(der_el(49, g_seq(cat([oid_cn(), g_utf8(cn)])))); }
 
+/// The SubjectPublicKeyInfo of a P-256 public key `pub65` (the
+/// uncompressed point).
 pub List(Int) x509g_spki(List(Int) pub65) {
     return g_seq(cat([g_seq(cat([oid_ec_public_key(), oid_prime256v1()])), g_bits(pub65)]));
 }
@@ -150,6 +165,59 @@ pub List(Int) x509g_cert(CertSpec s, List(Int) subject_pub, Str issuer_cn, List(
 /// (a server's key file).
 pub List(Int) x509g_sec1_key(List(Int) priv32, List(Int) pub65) {
     return g_seq(cat([der_el(2, [1]), g_octets(priv32), g_explicit(0, oid_prime256v1()), g_explicit(1, g_bits(pub65))]));
+}
+
+// ─── RSA certificates ───────────────────────────────────────────
+
+/// What an RSA certificate says about its subject: the common name, the
+/// serial (positive, at most 20 octets), the validity in Unix seconds, and
+/// whether it is an authority (keyCertSign) or a code-signing leaf.
+pub type RsaCertSpec = {
+    Str cn;
+    List(Int) serial;
+    Int not_before; Int not_after;
+    Bool ca;
+};
+
+List(Int) oid_code_signing() { return [6, 8, 43, 6, 1, 5, 5, 7, 3, 3]; }           // 1.3.6.1.5.5.7.3.3
+
+/// The sha256WithRSAEncryption AlgorithmIdentifier (1.2.840.113549.1.1.11,
+/// NULL parameters).
+pub List(Int) x509g_alg_rsa_sha256() { return [48, 13, 6, 9, 42, 134, 72, 134, 247, 13, 1, 1, 11, 5, 0]; }
+
+List(Int) rsa_extensions(RsaCertSpec s) {
+    List(Int) bc = ext(oid_basic_constraints(), true, g_seq(if (s.ca) { [1, 1, 255] } else { [] }));
+    // digitalSignature, keyCertSign and cRLSign for an authority (it signs
+    // firmware variables as well as certificates); digitalSignature for a leaf.
+    List(Int) ku = ext(oid_key_usage(), true, if (s.ca) { [3, 2, 1, 134] } else { [3, 2, 7, 128] });
+    List(Int) eku = if (s.ca) { [] } else { ext(oid_ext_key_usage(), false, g_seq(oid_code_signing())) };
+    return g_explicit(3, g_seq(cat([bc, ku, eku])));
+}
+
+/// The to-be-signed part of `s`'s certificate for the RSA public key
+/// (`n`, `e`, big-endian), issued by `issuer_cn`.
+pub List(Int) x509g_rsa_tbs(RsaCertSpec s, List(Int) n, List(Int) e, Str issuer_cn) {
+    return g_seq(cat([
+        g_explicit(0, der_el(2, [2])),
+        g_uint(s.serial),
+        x509g_alg_rsa_sha256(),
+        name_of(issuer_cn),
+        g_seq(cat([x509g_time(s.not_before), x509g_time(s.not_after)])),
+        name_of(s.cn),
+        rsa_spki_der(n, e),
+        rsa_extensions(s)
+    ]));
+}
+
+/// The certificate (DER) for the RSA public key (`n`, `e`), signed with
+/// sha256WithRSAEncryption by the issuer's key (the subject's own for a
+/// self-signed certificate); empty if the key cannot sign.
+@requires(declassify)
+pub List(Int) x509g_rsa_cert(RsaCertSpec s, List(Int) n, List(Int) e, Str issuer_cn, RsaKey issuer) {
+    List(Int) tbs = x509g_rsa_tbs(s, n, e, issuer_cn);
+    List(Int) sig = rsa_key_sign(issuer, tbs);
+    if (sig.len() == 0) { return []; }
+    return g_seq(cat([tbs, x509g_alg_rsa_sha256(), g_bits(sig)]));
 }
 
 // ─── PEM ────────────────────────────────────────────────────────

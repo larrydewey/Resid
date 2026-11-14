@@ -10054,6 +10054,10 @@ List(Str) own_names_more(Kg lgi, Int unit, Funcs fs, List(Str) omw, List(Str) na
 
 List(Str) own_names_more_n(Kg lgi, Int unit, Funcs fs, List(Str) omw, List(Str) names, Int k) { return own_names_more(lgi, unit, fs, omw, names, k); }
 
+/// The release this compiler is, as `residc --version` prints it. Bumped
+/// in the commit that a release tag (vX.Y.Z) points at.
+Str resid_version() { return "0.7.0"; }
+
 @requires(args)
 Str pick_opt(Int i, Str flag, Str acc) {
     if (i <= 1) { return acc; }
@@ -10354,6 +10358,7 @@ Int main() {
     }
     Str arg1  =  args.get(1);
     // `residc lsp`: the language server (compiler/lsp.resid) on stdio.
+    if (arg1 == "--version" || arg1 == "version") { println("residc " + resid_version()); return 0; }
     if (arg1 == "lsp") { return lsp_main(); }
     if (arg1 == "keygen") {
         return cmd_keygen(if (argc >= 3) { args.get(2) } else { "keys" });

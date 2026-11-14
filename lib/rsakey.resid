@@ -1,0 +1,378 @@
+// lib/rsakey.resid — RSA private keys: made, written out, and read back
+// for signing.
+//
+// Two halves, kept apart on purpose:
+//
+// - Making a key (rsa_keygen) and writing it out (rsa_key_pkcs8) run on
+//   public integers (lib/bignum.resid), in variable time. They run once,
+//   on the machine that will keep the key, and their output is the key
+//   file. Do not make keys where another process can time this one.
+// - Reading a key back (rsa_key_parse) treats the file as secret from the
+//   first byte, as lib/tlskey.resid does: the PEM armor and DER framing
+//   are published, the integers are not. Signing (rsa_key_sign) is
+//   lib/rsasign.resid's constant-time PKCS#1 v1.5 on those secrets.
+//
+// Keys are 2048, 3072 or 4096 bits with e = 65537, two primes of half the
+// size each (FIPS 186-5 B.3.3's shape: the primes differ in their top 100
+// bits, d = e^-1 mod lcm(p - 1, q - 1) and d > 2^(bits / 2)).
+//
+//   RsaKeyParts parts = rsa_keygen(2048);
+//   _ = filesystem.write_secret("db.key", bytes_u8(rsa_key_pem(parts)));
+//   Option(RsaKey) key = rsa_key_parse(filesystem.read_bytes("db.key"));
+
+import "bignum.resid";
+import "crypto.resid";
+import "word.resid";
+import "hash.resid";
+import "rsa.resid";
+import "rsasign.resid";
+import "tlskey.resid";
+import "certverify.resid";
+
+/// A freshly made RSA key as public big-endian integers, for writing out
+/// once. `n` and `d` are bits / 8 bytes, the five CRT values bits / 16
+/// (zero-padded on the left); `e` has no leading zero.
+pub type RsaKeyParts = { List(Int) n; List(Int) e; List(Int) d; List(Int) p; List(Int) q; List(Int) dp; List(Int) dq; List(Int) iqmp; };
+
+/// An RSA private key held for signing: the public modulus and exponent,
+/// and the private values as secret big-endian bytes, `d` in as many bytes
+/// as `n`, `p`, `q` and `iqmp` (q^-1 mod p) in as many as a prime.
+pub type RsaKey = { List(Int) n; List(Int) e; List(Secret(UInt(8))) d; List(Secret(UInt(8))) p; List(Secret(UInt(8))) q; List(Secret(UInt(8))) iqmp; };
+
+// ─── Making a key ───────────────────────────────────────────────
+
+/// Whether `bits` is a key size this module makes and reads: 2048, 3072
+/// or 4096.
+pub Bool rsa_key_size_ok(Int bits) { return bits == 2048 || bits == 3072 || bits == 4096; }
+
+/// A new key of `bits` bits (2048, 3072 or 4096) with e = 65537, from
+/// fresh random bytes. Aborts for any other size. Variable time: see the
+/// head of this file.
+pub RsaKeyParts rsa_keygen(Int bits) {
+    rt_assert(rsa_key_size_ok(bits), "rsa_keygen: the size must be 2048, 3072 or 4096 bits");
+    return rk_gen_loop(bits, 0);
+}
+
+RsaKeyParts rk_gen_loop(Int bits, Int tries) {
+    rt_assert(tries < 64, "rsa_keygen: no key after 64 tries, so the random source is broken");
+    Option(RsaKeyParts) k = rsa_keygen_from(bits, random_bytes(rk_draw_len(bits)));
+    return match k {
+        Some(parts) => parts,
+        None => rk_gen_loop(bits, tries + 1)
+    };
+}
+
+/// How many random bytes rsa_keygen_from reads: one starting point per
+/// prime and per retry, 16 starting points in all.
+pub Int rk_draw_len(Int bits) { return 16 * (bits / 16); }
+
+/// The key of `bits` bits made from the random bytes `rnd` (at least
+/// rk_draw_len(bits) of them), or None when they gave no two suitable
+/// primes. The same bytes always give the same key, so tests can pin one.
+pub Option(RsaKeyParts) rsa_keygen_from(Int bits, List(Int) rnd) {
+    if (!rsa_key_size_ok(bits) || rnd.len() < rk_draw_len(bits)) { return None; }
+    List(UInt(64)) e = [65537];
+    Int half = bits / 2;
+    Int nb = half / 8;
+    Option(List(UInt(64))) p = rk_prime_stream(rnd, 0, 8, nb, half, e);
+    return match p {
+        Some(pv) => rk_with_p(bits, rnd, pv, e),
+        None => None
+    };
+}
+
+Option(RsaKeyParts) rk_with_p(Int bits, List(Int) rnd, List(UInt(64)) p, List(UInt(64)) e) {
+    Int half = bits / 2;
+    Int nb = half / 8;
+    Option(List(UInt(64))) q = rk_q_stream(rnd, 8, 16, nb, half, e, p);
+    return match q {
+        Some(qv) => rk_parts(bits, p, qv, e),
+        None => None
+    };
+}
+
+// The first prime from starting points `i`..`end` - 1 (each `nb` bytes of
+// `rnd`).
+Option(List(UInt(64))) rk_prime_stream(List(Int) rnd, Int i, Int end, Int nb, Int bits, List(UInt(64)) e) {
+    if (i >= end) { return None; }
+    Option(List(UInt(64))) p = rk_prime(bn_slice_int(rnd, i * nb, nb), bits, e);
+    return match p {
+        Some(v) => Some(v),
+        None => rk_prime_stream(rnd, i + 1, end, nb, bits, e)
+    };
+}
+
+// The first prime q from starting points `i`..`end` - 1 that differs from
+// p in its top 100 bits (|p - q| > 2^(bits - 100)).
+Option(List(UInt(64))) rk_q_stream(List(Int) rnd, Int i, Int end, Int nb, Int bits, List(UInt(64)) e, List(UInt(64)) p) {
+    if (i >= end) { return None; }
+    Option(List(UInt(64))) q = rk_prime(bn_slice_int(rnd, i * nb, nb), bits, e);
+    Bool far = match q {
+        Some(v) => bn_bit_len(rk_absdiff(p, v)) > bits - 100,
+        None => false
+    };
+    if (far) { return q; }
+    return rk_q_stream(rnd, i + 1, end, nb, bits, e, p);
+}
+
+List(UInt(64)) rk_absdiff(List(UInt(64)) a, List(UInt(64)) b) {
+    return if (bn_cmp(a, b) >= 0) { bn_sub(a, b) } else { bn_sub(b, a) };
+}
+
+/// A prime of exactly `bits` bits, its top two bits set (so a product of
+/// two has exactly 2 * bits bits), with gcd(p - 1, e) = 1, searched upward
+/// from the odd number made of `rnd` (bits / 8 bytes), or None when the
+/// 4096 odd numbers from there hold none. Candidates are screened by the
+/// odd primes below 2000, then must pass Miller-Rabin to base 2 and to the
+/// first twelve primes as bases (random candidates of 1024 bits or more
+/// that pass are prime but for a chance far below 2^-100).
+pub Option(List(UInt(64))) rk_prime(List(Int) rnd, Int bits, List(UInt(64)) e) {
+    List(UInt(64)) x = bn_from_be(rnd);
+    List(UInt(64)) low = bn_sub(bn_shl([1], bits), [1]);
+    List(UInt(64)) p0 = bn_or(bn_or(bn_and(x, low), bn_shl([3], bits - 2)), [1]);
+    List(Int) primes = bn_small_primes(2000);
+    return rk_search(p0, primes, rk_residues(p0, primes, 0, ListBuf()), e, bits, 0);
+}
+
+List(Int) rk_residues(List(UInt(64)) p0, List(Int) primes, Int i, ListBuf(Int) acc) {
+    if (i >= primes.len()) { return acc.finish(); }
+    List(UInt(64)) r = bn_mod(p0, [u64(primes[i])]);
+    return rk_residues(p0, primes, i + 1, acc.push(if (r.len() == 0) { 0 } else { (Int) r[0] }));
+}
+
+// Whether p0 + 2 i is free of the small primes.
+Bool rk_sieve_ok(List(Int) primes, List(Int) res, Int i, Int k) {
+    if (k >= primes.len()) { return true; }
+    if ((res[k] + 2 * i) % primes[k] == 0) { return false; }
+    return rk_sieve_ok(primes, res, i, k + 1);
+}
+
+Option(List(UInt(64))) rk_search(List(UInt(64)) p0, List(Int) primes, List(Int) res, List(UInt(64)) e, Int bits, Int i) {
+    if (i >= 4096) { return None; }
+    if (rk_sieve_ok(primes, res, i, 0)) {
+        List(UInt(64)) p = bn_add(p0, [u64(2 * i)]);
+        // Adding to p0 can carry past the top only in the last candidates
+        // below 2^bits; such a p is not `bits` bits long and is skipped.
+        Bool fits = bn_bit_len(p) == bits;
+        if (fits && bn_cmp(bn_gcd(bn_sub(p, [1]), e), [1]) == 0
+            && bn_miller_rabin(p, [[2]]) && bn_miller_rabin(p, bn_mr_bases())) {
+            return Some(p);
+        }
+    }
+    return rk_search(p0, primes, res, e, bits, i + 1);
+}
+
+// The whole key from its two primes, ordered p > q so iqmp = q^-1 mod p is
+// the CRT coefficient lib/rsasign.resid expects.
+Option(RsaKeyParts) rk_parts(Int bits, List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) e) {
+    List(UInt(64)) p = if (bn_cmp(a, b) >= 0) { a } else { b };
+    List(UInt(64)) q = if (bn_cmp(a, b) >= 0) { b } else { a };
+    List(UInt(64)) n = bn_mul(p, q);
+    List(UInt(64)) p1 = bn_sub(p, [1]);
+    List(UInt(64)) q1 = bn_sub(q, [1]);
+    List(UInt(64)) lam = bn_divmod(bn_mul(p1, q1), bn_gcd(p1, q1)).q;
+    Option(List(UInt(64))) d = bn_modinv(e, lam);
+    Option(List(UInt(64))) iqmp = bn_modinv(q, p);
+    return match d {
+        Some(dv) => match iqmp {
+            Some(iv) => rk_check(bits, n, e, dv, p, q, iv),
+            None => None
+        },
+        None => None
+    };
+}
+
+Option(RsaKeyParts) rk_check(Int bits, List(UInt(64)) n, List(UInt(64)) e, List(UInt(64)) d, List(UInt(64)) p, List(UInt(64)) q, List(UInt(64)) iqmp) {
+    // FIPS 186-5 A.1.1: d > 2^(bits / 2), else the key is regenerated.
+    if (bn_bit_len(n) != bits || bn_bit_len(d) <= bits / 2) { return None; }
+    Int k = bits / 8;
+    Int h = bits / 16;
+    return Some(RsaKeyParts {
+        .n = bn_to_be(n, k), .e = bn_to_be(e, 0), .d = bn_to_be(d, k),
+        .p = bn_to_be(p, h), .q = bn_to_be(q, h),
+        .dp = bn_to_be(bn_mod(d, bn_sub(p, [1])), h), .dq = bn_to_be(bn_mod(d, bn_sub(q, [1])), h),
+        .iqmp = bn_to_be(iqmp, h)
+    });
+}
+
+// ─── Writing a key out ──────────────────────────────────────────
+
+List(Int) rk_cat(List(List(Int)) xs, Int i, ListBuf(Int) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return rk_cat(xs, i + 1, rk_push(acc, xs[i], 0));
+}
+
+ListBuf(Int) rk_push(ListBuf(Int) acc, List(Int) b, Int i) {
+    if (i >= b.len()) { return acc; }
+    return rk_push(acc.push(b[i]), b, i + 1);
+}
+
+List(Int) rk_join(List(List(Int)) xs) { return rk_cat(xs, 0, ListBuf()); }
+
+Int rk_lead(List(Int) b, Int i) {
+    if (i < b.len() - 1 && b[i] == 0) { return rk_lead(b, i + 1); }
+    return i;
+}
+
+/// A non-negative INTEGER from big-endian bytes, in its minimal DER form.
+pub List(Int) rk_der_uint(List(Int) be) {
+    List(Int) b = if (be.len() == 0) { [0] } else { be[rk_lead(be, 0)..be.len()] };
+    return der_el(2, if (b[0] >= 128) { [0].concat(b) } else { b });
+}
+
+/// The rsaEncryption AlgorithmIdentifier (1.2.840.113549.1.1.1, NULL
+/// parameters), as keys and PKCS#7 signer infos name it.
+pub List(Int) rk_alg_rsa() { return [48, 13, 6, 9, 42, 134, 72, 134, 247, 13, 1, 1, 1, 5, 0]; }
+
+/// The RSAPublicKey (RFC 8017 A.1.1) SEQUENCE of modulus `n` and
+/// exponent `e`.
+pub List(Int) rsa_public_key_der(List(Int) n, List(Int) e) {
+    return der_el(48, rk_join([rk_der_uint(n), rk_der_uint(e)]));
+}
+
+/// The SubjectPublicKeyInfo of an RSA public key, as a certificate holds it.
+pub List(Int) rsa_spki_der(List(Int) n, List(Int) e) {
+    return der_el(48, rk_join([rk_alg_rsa(), der_el(3, [0].concat(rsa_public_key_der(n, e)))]));
+}
+
+/// The key as PKCS#8 PrivateKeyInfo (RFC 5208) holding a PKCS#1
+/// RSAPrivateKey (RFC 8017 A.1.2), DER: the form `openssl pkey` reads.
+pub List(Int) rsa_key_pkcs8(RsaKeyParts k) {
+    List(Int) rsa = der_el(48, rk_join([der_el(2, [0]), rk_der_uint(k.n), rk_der_uint(k.e), rk_der_uint(k.d),
+        rk_der_uint(k.p), rk_der_uint(k.q), rk_der_uint(k.dp), rk_der_uint(k.dq), rk_der_uint(k.iqmp)]));
+    return der_el(48, rk_join([der_el(2, [0]), rk_alg_rsa(), der_el(4, rsa)]));
+}
+
+/// The key as a PEM "PRIVATE KEY" block (PKCS#8), the text of a key file.
+pub Str rsa_key_pem(RsaKeyParts k) {
+    return rk_pem("PRIVATE KEY", rsa_key_pkcs8(k));
+}
+
+/// `der` armored as PEM under `label`, base64 in lines of 64.
+pub Str rk_pem(Str label, List(Int) der) {
+    return "-----BEGIN " + label + "-----\n" + rk_lines(base64_encode(der), 0, StrBuf()) + "-----END " + label + "-----\n";
+}
+
+Str rk_lines(Str b, Int i, StrBuf acc) {
+    Int n = str_len(b);
+    if (i >= n) { return acc.finish(); }
+    Int e = if (i + 64 < n) { i + 64 } else { n };
+    return rk_lines(b, e, acc.push(str_slice(b, i, e)).push("\n"));
+}
+
+// ─── Reading a key back ─────────────────────────────────────────
+
+/// The key in a key file's bytes (PEM or DER, PKCS#8 "PRIVATE KEY" or
+/// PKCS#1 "RSA PRIVATE KEY"), or None when it holds no RSA key of 2048,
+/// 3072 or 4096 bits with two primes of equal length. The bytes are
+/// secret from here on; only the framing, n and e are published.
+@requires(declassify)
+pub Option(RsaKey) rsa_key_parse(List(Int) file) {
+    List(Secret(UInt(8))) f = secret_bytes(file);
+    if (f.len() == 0) { return None; }
+    Bool is_der = tk_at(f, 0) == 48;
+    List(Secret(UInt(8))) der = if (is_der) { f } else { tk_pem_block(f, ["PRIVATE KEY", "RSA PRIVATE KEY"]) };
+    if (der.len() == 0) { return None; }
+    Option(RsaKey) as_pkcs8 = rk_pkcs8(der);
+    return match as_pkcs8 { Some(k) => Some(k), None => rk_pkcs1(der, 0) };
+}
+
+@requires(declassify)
+Option(RsaKey) rk_pkcs8(List(Secret(UInt(8))) der) {
+    Tlv seq = tk_tlv(der, 0);
+    if (!seq.ok || tk_tag_num(seq) != tk_tag_seq()) { return None; }
+    Tlv ver = tk_tlv(der, seq.start);
+    if (!ver.ok || tk_tag_num(ver) != tk_tag_int()) { return None; }
+    Tlv alg = tk_tlv(der, ver.end);
+    if (!alg.ok || tk_tag_num(alg) != tk_tag_seq()) { return None; }
+    Tlv key = tk_tlv(der, alg.end);
+    if (!key.ok || tk_tag_num(key) != tk_tag_octet()) { return None; }
+    if (tk_alg_oid1(der, alg) != "1.2.840.113549.1.1.1") { return None; }
+    return rk_pkcs1(tk_value(der, key), 0);
+}
+
+// RSAPrivateKey: version 0, then n, e, d, p, q, dp, dq, qinv.
+@requires(declassify)
+Option(RsaKey) rk_pkcs1(List(Secret(UInt(8))) der, Int at) {
+    Tlv seq = tk_tlv(der, at);
+    if (!seq.ok || tk_tag_num(seq) != tk_tag_seq() || seq.end != der.len()) { return None; }
+    Tlv ver = rk_int(der, seq.start);
+    Tlv n = rk_int(der, ver.end);
+    Tlv e = rk_int(der, n.end);
+    Tlv d = rk_int(der, e.end);
+    Tlv p = rk_int(der, d.end);
+    Tlv q = rk_int(der, p.end);
+    Tlv dp = rk_int(der, q.end);
+    Tlv dq = rk_int(der, dp.end);
+    Tlv qi = rk_int(der, dq.end);
+    if (!(ver.ok && n.ok && e.ok && d.ok && p.ok && q.ok && dp.ok && dq.ok && qi.ok) || qi.end != seq.end) { return None; }
+    // The version must be 0 (two primes); n and e are public.
+    if (ver.len != 1 || tk_at(der, ver.start) != 0) { return None; }
+    List(Int) nb = rk_pub(der, n);
+    List(Int) eb = rk_pub(der, e);
+    Int k = nb.len();
+    if (!rsa_key_size_ok(k * 8) || (nb[0] & 128) == 0) { return None; }
+    Int h = k / 2;
+    // A prime of h bytes is encoded in h bytes, or h + 1 with a zero first
+    // (its top bit set). Its length is framing, so it is public.
+    if (p.len < h || p.len > h + 1 || q.len < h || q.len > h + 1) { return None; }
+    return Some(RsaKey {.n = nb, .e = eb, .d = rk_fixed(der, d, k), .p = rk_fixed(der, p, h), .q = rk_fixed(der, q, h), .iqmp = rk_fixed(der, qi, h)});
+}
+
+@requires(declassify)
+Tlv rk_int(List(Secret(UInt(8))) der, Int at) {
+    Tlv t = tk_tlv(der, at);
+    if (!t.ok || tk_tag_num(t) != tk_tag_int() || t.len < 1) { return Tlv { .tag = 0, .start = at, .len = 0, .end = at, .ok = false }; }
+    return t;
+}
+
+// A public INTEGER's magnitude, no sign octet.
+@requires(declassify)
+List(Int) rk_pub(List(Secret(UInt(8))) der, Tlv t) {
+    ListBuf(Int) none = ListBuf();
+    List(Int) b = rk_pub_at(der, t.start, t.end, none);
+    return b[rk_lead(b, 0)..b.len()];
+}
+
+@requires(declassify)
+List(Int) rk_pub_at(List(Secret(UInt(8))) der, Int i, Int end, ListBuf(Int) acc) {
+    if (i >= end) { return acc.finish(); }
+    return rk_pub_at(der, i + 1, end, acc.push(tk_at(der, i)));
+}
+
+// A secret INTEGER as exactly `w` bytes: an encoding longer than `w`
+// loses its first bytes (the sign octet), a shorter one is padded with
+// zeros. Only the encoding's length, which is public, decides which.
+List(Secret(UInt(8))) rk_fixed(List(Secret(UInt(8))) der, Tlv t, Int w) {
+    List(Secret(UInt(8))) v = tk_value(der, t);
+    if (v.len() >= w) { return v[v.len() - w..v.len()]; }
+    return rk_zeros(w - v.len(), 0, ListBuf()).concat(v);
+}
+
+List(Secret(UInt(8))) rk_zeros(Int n, Int i, ListBuf(Secret(UInt(8))) acc) {
+    if (i >= n) { return acc.finish(); }
+    return rk_zeros(n, i + 1, acc.push(classify((UInt(8)) 0)));
+}
+
+/// The key held as secrets, from the parts rsa_keygen made: what a
+/// program that both makes a key and signs with it at once uses, without
+/// a round trip through the file.
+pub RsaKey rsa_key_of(RsaKeyParts k) {
+    return RsaKey {.n = k.n, .e = k.e, .d = secret_bytes(k.d), .p = secret_bytes(k.p), .q = secret_bytes(k.q), .iqmp = secret_bytes(k.iqmp)};
+}
+
+// ─── Signing ────────────────────────────────────────────────────
+
+/// The PKCS#1 v1.5 signature of `msg` under SHA-256 with key `k`, in
+/// constant time (lib/rsasign.resid), checked against the public key
+/// before it is returned; empty if the key cannot sign.
+@requires(declassify)
+pub List(Int) rsa_key_sign(RsaKey k, List(Int) msg) {
+    return rsa_pkcs1_sign(Sha256, k.n, k.e, k.d, k.p, k.q, k.iqmp, msg);
+}
+
+/// Whether `sig` is k's PKCS#1 v1.5 SHA-256 signature of `msg`.
+pub Bool rsa_key_verify(List(Int) n, List(Int) e, List(Int) msg, List(Int) sig) {
+    RsaPub pk = rsa_pub(n, e);
+    return pk.ok && rsa_pkcs1_verify(Sha256, pk, msg, sig);
+}
