@@ -9,8 +9,9 @@
 
 import "word.resid";
 
-Int sha2k(Int i) {
-    List(Int) ks = [
+// The 64 round constants (FIPS 180-4 §4.2.2).
+List(Int) sha2ks() {
+    return [
         1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221,
         3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580,
         3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986,
@@ -20,7 +21,6 @@ Int sha2k(Int i) {
         430227734, 506948616, 659060556, 883997877, 958139571, 1322822218, 1537002063, 1747873779,
         1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298
     ];
-    return ks[i];
 }
 
 @needs(Word(W, B))
@@ -49,16 +49,17 @@ W g_sched(List(B) m, Int base, Int i, W w0, W w1, W w9, W w14) {
 }
 
 // The 64 rounds of one block, the state and the schedule window in
-// parameters (the loop index i is public).
+// parameters (the loop index i is public). The round constants `ks` are
+// passed down, so a round reads them without a call.
 @needs(Word(W, B))
-List(W) g_blk(List(B) m, Int base, Int i, List(W) h0, W a, W b, W c, W d, W e, W f, W g, W h, W w0, W w1, W w2, W w3, W w4, W w5, W w6, W w7, W w8, W w9, W w10, W w11, W w12, W w13, W w14, W w15) {
+List(W) g_blk(List(B) m, Int base, List(Int) ks, Int i, List(W) h0, W a, W b, W c, W d, W e, W f, W g, W h, W w0, W w1, W w2, W w3, W w4, W w5, W w6, W w7, W w8, W w9, W w10, W w11, W w12, W w13, W w14, W w15) {
     if (i >= 64) {
         return [w_add(h0[0], a), w_add(h0[1], b), w_add(h0[2], c), w_add(h0[3], d), w_add(h0[4], e), w_add(h0[5], f), w_add(h0[6], g), w_add(h0[7], h)];
     }
     W wi = g_sched(m, base, i, w0, w1, w9, w14);
-    W t1 = w_add(w_addk(w_add(w_add(h, g_bsig1(e)), g_ch(e, f, g)), sha2k(i)), wi);
+    W t1 = w_add(w_addk(w_add(w_add(h, g_bsig1(e)), g_ch(e, f, g)), ks[i]), wi);
     W t2 = w_add(g_bsig0(a), g_maj(a, b, c));
-    return g_blk(m, base, i + 1, h0, w_add(t1, t2), a, b, c, w_add(d, t1), e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
+    return g_blk(m, base, ks, i + 1, h0, w_add(t1, t2), a, b, c, w_add(d, t1), e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
 }
 
 /// Runs the compression function on the 64-byte block at `base` of `m`.
@@ -70,7 +71,7 @@ pub List(W) sha256g_block(List(B) m, Int base, List(W) h) {
     // The state words as unsigned 32-bit values, whatever the caller held
     // them as (a signed Int is the same word).
     Int m32 = 4294967295;
-    return g_blk(m, base, 0, h, w_andk(h[0], m32), w_andk(h[1], m32), w_andk(h[2], m32), w_andk(h[3], m32), w_andk(h[4], m32), w_andk(h[5], m32), w_andk(h[6], m32), w_andk(h[7], m32), z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z);
+    return g_blk(m, base, sha2ks(), 0, h, w_andk(h[0], m32), w_andk(h[1], m32), w_andk(h[2], m32), w_andk(h[3], m32), w_andk(h[4], m32), w_andk(h[5], m32), w_andk(h[6], m32), w_andk(h[7], m32), z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z);
 }
 
 /// Compresses each 64-byte block of `m` from `pos` up to `total` into `h`.

@@ -1223,7 +1223,13 @@ pub List(Int) w64_shr(List(Int) x, Int n) {
 /// SHA-512 round constant K[`i`] (0..79) as a limb pair
 /// (FIPS 180-4 §4.2.3).
 pub List(Int) k512_limb_at(Int i) {
-    List(Int) ks = [
+    List(Int) ks = k512_limbs();
+    return w64(ks[i * 2], ks[(i * 2) + 1]);
+}
+
+// The SHA-512 round constants as 160 32-bit limbs, high limb first.
+List(Int) k512_limbs() {
+    return [
         1116352408, 3609767458, 1899447441, 602891725,
         3049323471, 3964484399, 3921009573, 2173295548,
         961987163, 4081628472, 1508970993, 3053834265,
@@ -1265,9 +1271,6 @@ pub List(Int) k512_limb_at(Int i) {
         1288033470, 3409855158, 1501505948, 4234509866,
         1607167915, 987167468, 1816402316, 1246189591,
     ];
-    Int hi = ks[i * 2];
-    Int lo = ks[(i * 2) + 1];
-    return w64(hi, lo);
 }
 
 // ─── SHA-512 padding and message words ─────────────────────────
@@ -1649,8 +1652,8 @@ pub UInt(64) ss1_64(UInt(64) x) { return r64(x, 19) ^ r64(x, 61) ^ (x >> ((UInt(
 
 /// SHA-512 round constant K[`i`] (0..79) as a 64-bit word.
 pub UInt(64) k512_u(Int i) {
-    List(Int) k = k512_limb_at(i);
-    return (((UInt(64)) k[0]) << ((UInt(64)) 32)) | ((UInt(64)) k[1]);
+    List(Int) ks = k512_limbs();
+    return (((UInt(64)) ks[i * 2]) << ((UInt(64)) 32)) | ((UInt(64)) ks[i * 2 + 1]);
 }
 
 /// Big-endian 64-bit word `j` of the block at byte offset `base` in `m`.
@@ -1680,15 +1683,21 @@ pub type W512 = { UInt(64) a; UInt(64) b; UInt(64) c; UInt(64) d; UInt(64) e; UI
 /// running rounds `i`..79 with working state `a`..`h` and the schedule
 /// window `w0`..`w15` in scalar parameters.
 pub W512 sha512_blk(List(Int) m, Int base, Int i, W512 h0, UInt(64) a, UInt(64) b, UInt(64) c, UInt(64) d, UInt(64) e, UInt(64) f, UInt(64) g, UInt(64) h, UInt(64) w0, UInt(64) w1, UInt(64) w2, UInt(64) w3, UInt(64) w4, UInt(64) w5, UInt(64) w6, UInt(64) w7, UInt(64) w8, UInt(64) w9, UInt(64) w10, UInt(64) w11, UInt(64) w12, UInt(64) w13, UInt(64) w14, UInt(64) w15) {
+    return s5_blk(m, base, k512_limbs(), i, h0, a, b, c, d, e, f, g, h, w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15);
+}
+
+// sha512_blk with the round constants `ks` (k512_limbs) passed down, so a
+// round reads them without a call that could allocate.
+W512 s5_blk(List(Int) m, Int base, List(Int) ks, Int i, W512 h0, UInt(64) a, UInt(64) b, UInt(64) c, UInt(64) d, UInt(64) e, UInt(64) f, UInt(64) g, UInt(64) h, UInt(64) w0, UInt(64) w1, UInt(64) w2, UInt(64) w3, UInt(64) w4, UInt(64) w5, UInt(64) w6, UInt(64) w7, UInt(64) w8, UInt(64) w9, UInt(64) w10, UInt(64) w11, UInt(64) w12, UInt(64) w13, UInt(64) w14, UInt(64) w15) {
     if (i >= 80) {
         return W512 {.a = wrapping_uadd(h0.a, a), .b = wrapping_uadd(h0.b, b), .c = wrapping_uadd(h0.c, c), .d = wrapping_uadd(h0.d, d),
                      .e = wrapping_uadd(h0.e, e), .f = wrapping_uadd(h0.f, f), .g = wrapping_uadd(h0.g, g), .h = wrapping_uadd(h0.h, h)};
     }
     UInt(64) wi = sched64(m, base, i, w0, w1, w9, w14);
     UInt(64) ch = (e & f) ^ (~e & g);
-    UInt(64) t1 = wrapping_uadd(wrapping_uadd(wrapping_uadd(h, bs1_64(e)), wrapping_uadd(ch, k512_u(i))), wi);
+    UInt(64) t1 = wrapping_uadd(wrapping_uadd(wrapping_uadd(h, bs1_64(e)), wrapping_uadd(ch, ((((UInt(64)) ks[i * 2]) << ((UInt(64)) 32)) | ((UInt(64)) ks[i * 2 + 1])))), wi);
     UInt(64) t2 = wrapping_uadd(bs0_64(a), (a & b) ^ (a & c) ^ (b & c));
-    return sha512_blk(m, base, i + 1, h0, wrapping_uadd(t1, t2), a, b, c, wrapping_uadd(d, t1), e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
+    return s5_blk(m, base, ks, i + 1, h0, wrapping_uadd(t1, t2), a, b, c, wrapping_uadd(d, t1), e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
 }
 
 /// The SHA-512 state `h` after the 128-byte blocks of `m` in [`pos`,
@@ -1697,7 +1706,7 @@ pub W512 sha512_blocks(List(Int) m, Int pos, Int total, W512 h) {
     if (pos >= total) { return h; }
     if (resid_cpu_has_sha512()) { return sha512_hw_blocks(m, pos, total, sha512_hw_state(h)); }
     UInt(64) z = 0;
-    return sha512_blocks(m, pos + 128, total, sha512_blk(m, pos, 0, h, h.a, h.b, h.c, h.d, h.e, h.f, h.g, h.h, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z));
+    return sha512_blocks(m, pos + 128, total, s5_blk(m, pos, k512_limbs(), 0, h, h.a, h.b, h.c, h.d, h.e, h.f, h.g, h.h, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z));
 }
 
 /// The state `h` packed for the SHA512 instructions, word i at bits
