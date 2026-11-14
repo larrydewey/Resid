@@ -31,6 +31,24 @@ Int report(Bool ok, Str what) {
 // `b` with byte `at` flipped.
 List(Int) flip(List(Int) b, Int at) { return b[0..at].concat([b[at] ^ 1]).concat(b[at + 1..b.len()]); }
 
+// ac_check on hostile layouts: each prefix of the image (in 7-byte steps)
+// and each of the first 1024 bytes set to 0xff. Any answer is fine; an
+// abort (out-of-range read) fails the probe.
+Bool hostile_ok(List(Int) img, List(Int) cert, Int i) {
+    if (i >= 1024) { return true; }
+    Str a = ac_check(img[0..(i * 7) % img.len()], cert);
+    Str b = ac_check(img[0..i].concat([255]).concat(img[i + 1..img.len()]), cert);
+    return str_len(a) + str_len(b) >= 0 && hostile_ok(img, cert, i + 1);
+}
+
+// The image a review found: a PE32+ magic in an optional header of two
+// bytes, NumberOfRvaAndSizes past the end of a 90-byte file.
+List(Int) short_opt() {
+    List(Int) z = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    List(Int) dos = [77, 90].concat(z).concat(z).concat(z).concat([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0]);
+    return dos.concat([80, 69, 0, 0, 100, 134, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 34, 0, 11, 2]);
+}
+
 @requires(filesystem, declassify)
 Int image(Str out, Str fixtures, Str name, List(Int) cert, List(Int) other, RsaKey key) {
     List(Int) img = filesystem.read_bytes(fixtures + "/" + name + ".efi");
@@ -43,8 +61,9 @@ Int image(Str out, Str fixtures, Str name, List(Int) cert, List(Int) other, RsaK
     Int e = report(ac_check(signed, other) == "the signature does not verify", f"{name}: another key with the same issuer and serial does not verify it");
     Int f = report(ac_sign(signed, cert, key).len() == 0, f"{name}: a signed image is not signed again");
     Int g = report(ac_check(img, cert) == "not signed", f"{name}: the unsigned image is reported unsigned");
+    Int t = report(hostile_ok(img, cert, 0), f"{name}: every truncation and every header byte set to 0xff is refused or checked, never a crash");
     Int h = report(eq_bytes(ac_digest(signed), ac_digest(img.concat([0, 0, 0, 0, 0, 0, 0, 0][0..(8 - img.len() % 8) % 8]))), f"{name}: the digest ignores the checksum and the certificate table");
-    return a + b + c + d + e + f + g + h;
+    return a + b + c + d + e + f + g + h + t;
 }
 
 @requires(args, filesystem, declassify)
@@ -84,7 +103,8 @@ Int with_loaded(Str out, Str fixtures, RsaKeyParts p, List(Int) cert, List(Int) 
     Int f1 = report(eq_bytes(key.n, p.n) && rsa_key_verify(p.n, p.e, [1, 2, 3], rsa_key_sign(key, [1, 2, 3])), "the key reads back from PKCS#8 PEM and signs");
     Bool refused = match rsa_key_parse(bytes_of("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")) { Some(_) => false, None => true };
     Int f2 = report(refused, "a malformed key file is refused");
-    Int f3 = report(ac_sign([77, 90, 0, 0], cert, key).len() == 0 && ac_check([77, 90], cert) == "not a well-formed PE image", "a malformed image is refused");
+    Int f3 = report(ac_sign([77, 90, 0, 0], cert, key).len() == 0 && ac_check([77, 90], cert) == "not a well-formed PE image"
+        && ac_check(short_opt(), cert) == "not a well-formed PE image", "malformed images are refused, an optional header too short for its directories included");
     Int fails = f0 + f1 + f2 + f3 + image(out, fixtures, "tiny64", cert, other, key) + image(out, fixtures, "tiny32", cert, other, key);
     println(f"SUMMARY fail={fails}");
     return if (fails == 0) { 0 } else { 1 };

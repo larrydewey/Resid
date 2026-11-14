@@ -4,8 +4,9 @@
 // The image digest follows Microsoft's "Windows Authenticode Portable
 // Executable Signature Format" (and EDK2's DxeImageVerificationLib): SHA-256
 // over the headers without the CheckSum field and the certificate-table
-// directory entry, then each section's raw data in file order, then any
-// data after the last section up to the certificate table. The signature
+// directory entry, then each section's raw data in file order, then the
+// data from SizeOfHeaders plus the sections' raw sizes up to the
+// certificate table (what the spec calls the extra data). The signature
 // is a PKCS#7 SignedData (lib/pkcs7.resid) over an SpcIndirectDataContent
 // that carries that digest, in a WIN_CERTIFICATE appended to the image
 // (8-byte aligned) and named by the certificate-table directory entry.
@@ -63,11 +64,13 @@ pub PeLayout pe_layout(List(Int) b) {
     Int magic = ac_u16(b, opt);
     // PE32 (0x10b) and PE32+ (0x20b) differ in where the directories start.
     Int dirs = if (magic == 267) { opt + 96 } else { if (magic == 523) { opt + 112 } else { 0 - 1 } };
-    if (dirs < 0) { return pe_bad(); }
-    Int ndirs = ac_u32(b, dirs - 4);
     Int certdir = dirs + 4 * 8;
-    // The certificate-table entry must exist and lie in the optional header.
-    if (ndirs < 5 || certdir + 8 > opt + optsize) { return pe_bad(); }
+    // The certificate-table entry must lie in the optional header (which
+    // lies in the file) before anything after the magic is read from it:
+    // NumberOfRvaAndSizes, SizeOfHeaders and CheckSum all come before it.
+    if (dirs < 0 || certdir + 8 > opt + optsize) { return pe_bad(); }
+    Int ndirs = ac_u32(b, dirs - 4);
+    if (ndirs < 5) { return pe_bad(); }
     Int headers = ac_u32(b, opt + 60);
     Int sections = opt + optsize;
     if (nsec < 1 || nsec > 96 || sections + nsec * 40 > headers || headers > n) { return pe_bad(); }

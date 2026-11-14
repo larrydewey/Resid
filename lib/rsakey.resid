@@ -6,7 +6,11 @@
 // - Making a key (rsa_keygen) and writing it out (rsa_key_pkcs8) run on
 //   public integers (lib/bignum.resid), in variable time. They run once,
 //   on the machine that will keep the key, and their output is the key
-//   file. Do not make keys where another process can time this one.
+//   file. Do not make keys where another process can time this one. The
+//   starting points of the prime search come from random_bytes, the same
+//   draws (getrandom and the CPU source) random_secret makes for keys:
+//   generation works on public integers, so public bytes are what it
+//   takes, and the key is secret only from the file on.
 // - Reading a key back (rsa_key_parse) treats the file as secret from the
 //   first byte, as lib/tlskey.resid does: the PEM armor and DER framing
 //   are published, the integers are not. Signing (rsa_key_sign) is

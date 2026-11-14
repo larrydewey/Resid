@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""An independent check of what tests/crypto/sbprobe.resid made, with
+"""A second check of what tests/crypto/sbprobe.resid made, with
 pyca/cryptography: the RSA key file loads and matches the certificate, the
 self-signed certificate verifies, and each signed PE image carries a PKCS#7
-Authenticode signature whose digest is the image's (recomputed here from
-the PE headers, following Microsoft's Authenticode PE specification) and
-whose RSA signature over the signed attributes verifies with the
-certificate's key. Prints one line per check and exits 1 on any failure."""
+Authenticode signature whose RSA signature over the signed attributes
+verifies with the certificate's key, and whose digest is the image's. The
+digest is recomputed here by a second implementation of the same rules
+(Microsoft's Authenticode PE specification), so it catches slips, not a
+misreading of the rules; UEFI firmware verifying a signed loader (Hafen's
+suite, under OVMF) is the check of the rules themselves. Prints one line per check and exits 1 on any failure."""
 import hashlib, struct, sys, os
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
