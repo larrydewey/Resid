@@ -143,7 +143,7 @@ pub Int(256) dec_x(List(Int) bs) {
     Int(256) winv = fe_mul(u, fe_inv(v));
     // A candidate square root of winv: the root when x0^2 = winv, else
     // x0 * sqrt(-1) is (when there is one).
-    Int(256) x0 = pow_acc(1, winv, fe_p58(), 254);
+    Int(256) x0 = wrapping_i256(eg_pow_p38(fe_w(winv)));
     Int(256) x1 = if (fe_sq(x0) == winv) { x0 } else { fe_mul(x0, fe_sqrtm1()) };
     return if (wrapping_i64(x1 & 1) != sign) { fe_sub(0, x1) } else { x1 };
 }
@@ -200,9 +200,38 @@ pub Bool verify_sig_bytes(List(Int) mb, List(Int) sig, List(Int) pubk) {
     // as libsodium does.
     if (eg_small_order(a) || eg_small_order(r)) { return false; }
     Int(512) hv = eg_digest_mod_l(sha512_bytes(rb.concat(pubk).concat(mb)));
+    // [S]B == R + [h]A, checked as [S]B + [h](-A) == R.
+    EgPt(Int(512)) na = eg_pt(eg_fsub((Int(512)) 0, a.x), a.y);
+    return ept_eq(ept_n(ev_mul2(fe_w(sv), eg_base(), hv, na)), ept_n(r));
+}
+
+// ── [s]P + [h]Q on public data (verification) ──
+// Verification has no secret: the key, the signature and the message are
+// public, and so are S and h. So its scalar multiplication may take a path
+// that depends on them -- Straus's interleaving with 4-bit windows: one
+// shared doubling chain, and a table point added only for a nonzero
+// window. The formulas are the same complete ones, so the point is the one
+// the constant-time ladder gives. Never use this for a secret scalar.
+
+Int ev_win(Int(512) k, Int i) { return wrapping_i64((k >> (Int(512)) (4 * i)) & (Int(512)) 15); }
+
+EgPt(Int(512)) ev_wadd(EgPt(Int(512)) acc, List(EgPt(Int(512))) t, Int d) {
+    if (d == 0) { return acc; }
+    return eg_add(acc, t[d]);
+}
+
+EgPt(Int(512)) ev_straus(Int(512) s, List(EgPt(Int(512))) tp, Int(512) h, List(EgPt(Int(512))) tq, Int i, EgPt(Int(512)) acc) {
+    if (i < 0) { return acc; }
+    EgPt(Int(512)) d = eg_dbl(eg_dbl(eg_dbl(eg_dbl(acc))));
+    return ev_straus(s, tp, h, tq, i - 1, ev_wadd(ev_wadd(d, tp, ev_win(s, i)), tq, ev_win(h, i)));
+}
+
+// [s]p + [h]q for public scalars 0 <= s, h < 2^256 and public points.
+EgPt(Int(512)) ev_mul2(Int(512) s, EgPt(Int(512)) p, Int(512) h, EgPt(Int(512)) q) {
+    ListBuf(EgPt(Int(512))) bp = ListBuf();
+    ListBuf(EgPt(Int(512))) bq = ListBuf();
     EgPt(Int(512)) o = eg_id();
-    // [S]B == R + [h]A
-    return ept_eq(ept_n(eg_base_mul(fe_w(sv))), ept_n(eg_add(eg_ladder(hv, a, o, 255), r)));
+    return ev_straus(s, eg_ctab(p, p, 0, bp), h, eg_ctab(q, q, 0, bq), 63, o);
 }
 /// Whether `sig` is a valid Ed25519 signature of the text `msg`'s bytes
 /// under `pubk`; see `verify_sig_bytes`.

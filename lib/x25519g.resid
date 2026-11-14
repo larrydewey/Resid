@@ -29,8 +29,6 @@ Int(512) xg_m256() { return ((Int(512)) 1 << (Int(512)) 256) - (Int(512)) 1; }
 // The scalar clamp: bits 0..2 and 255 cleared (bit 254 is set apart).
 Int(512) xg_clamp() { return ((Int(512)) 1 << (Int(512)) 255) - (Int(512)) 8; }
 Int(512) xg_bit254() { return (Int(512)) 1 << (Int(512)) 254; }
-// The inversion exponent p - 2.
-Int(512) xg_pm2() { return ((Int(512)) 1 << (Int(512)) 255) - (Int(512)) 21; }
 
 // ── field arithmetic mod p (inputs and outputs below p) ─────────────
 
@@ -71,22 +69,30 @@ P xg_mul(P a, P b) {
 @needs(Wide512(P, B))
 P xg_sq(P a) { return xg_mul(a, a); }
 
-// res * base^(e's bits i..0) by square and multiply; the exponent is
-// public (p - 2), so its bits may decide.
+// a squared n times (n public).
 @needs(Wide512(P, B))
-P xg_pow(P res, P base, Int(512) e, Int i) {
-    if (i < 0) { return res; }
-    P rs = xg_sq(res);
-    Bool bit = ((e >> (Int(512)) i) & (Int(512)) 1) == (Int(512)) 1;
-    P nr = if (bit) { xg_mul(rs, base) } else { rs };
-    return xg_pow(nr, base, e, i - 1);
+P xg_sqn(P a, Int n) {
+    if (n <= 0) { return a; }
+    return xg_sqn(xg_sq(a), n - 1);
 }
 
-// a^(p - 2) = 1 / a (0 for a = 0).
+// a^(p - 2) = 1 / a (0 for a = 0). p - 2 = 2^255 - 21 = (2^250 - 1) * 2^5
+// + 11, by ref10's fixed addition chain (254 squarings, 11 products): the
+// steps do not depend on a.
 @needs(Wide512(P, B))
 P xg_inv(P a) {
-    P one = p_lift((Int(512)) 1);
-    return xg_pow(one, a, xg_pm2(), 254);
+    P a2 = xg_sq(a);
+    P a9 = xg_mul(a, xg_sqn(a2, 2));
+    P a11 = xg_mul(a2, a9);
+    P e5 = xg_mul(a9, xg_sq(a11));
+    P e10 = xg_mul(xg_sqn(e5, 5), e5);
+    P e20 = xg_mul(xg_sqn(e10, 10), e10);
+    P e40 = xg_mul(xg_sqn(e20, 20), e20);
+    P e50 = xg_mul(xg_sqn(e40, 10), e10);
+    P e100 = xg_mul(xg_sqn(e50, 50), e50);
+    P e200 = xg_mul(xg_sqn(e100, 100), e100);
+    P e250 = xg_mul(xg_sqn(e200, 50), e50);
+    return xg_mul(xg_sqn(e250, 5), a11);
 }
 
 // ── decoding ────────────────────────────────────────────────────────
