@@ -1,0 +1,27 @@
+// A confined program gets terminals from a broker forked before it
+// confined itself: it can still read and write them and learn the exit
+// status, but it can no longer execute anything or open files outside
+// what it kept.
+@requires(process, network)
+Int drain_code(Int b, Int m, Int pid, Int spins) {
+    List(Int) ready = resid_tcp_poll([m], [1], 200);
+    List(Int) got = resid_pty_read(m, 4096);
+    if (got.len() > 0) { return drain_code(b, m, pid, spins); }
+    Int code = resid_pty_status(b, pid);
+    if (code >= 0 || spins <= 0) { return code; }
+    return drain_code(b, m, pid, spins - 1);
+}
+
+@requires(process, network, filesystem(readonly))
+Int main() {
+    Int b = resid_pty_broker("false");
+    List(Str) none = [];
+    Int c = resid_sandbox_confine(["@TMP@"], none);
+    List(Int) p = resid_pty_open(b, 24, 80);
+    Int code = drain_code(b, p[0], p[1], 50);
+    List(Int) direct = resid_pty_spawn("true", 24, 80);
+    Bool inside = str_len(filesystem.read_all("@TMP@/in.txt")) > 0;
+    Bool outside = str_len(filesystem.read_all("/etc/passwd")) > 0;
+    println(f"{b >= 0} {c} {p.len()} {code} {direct.len()} {inside} {outside}");
+    return 0;
+}

@@ -493,8 +493,24 @@ pub Int rt_process_run(Int cmd) {
 @export("resid_pty_spawn", "ptr(ptr,i64,i64)")
 pub Int rt_pty_spawn(Int cmd, Int rows, Int cols) {
     if (cmd == 0 || ld8(cmd) == 0) { return xempty_list(); }
+    Int argv = split_argv(cmd);
+    if (argv == 0) { return xempty_list(); }
+    Int out = resid_raw_tls("pty_out", 16);
+    Bool ok = pty_make(argv, rows, cols, out) == 0;
+    _ = free_argv(argv);
+    if (!ok) { return xempty_list(); }
+    Int slots = xmalloc(16);
+    _ = st64(slots, ld64(out) + 18295873486192640) + st64(slots + 8, ld64(out + 8) + 18295873486192640);
+    Int l = c_list_new(2, slots, resid_raw_addr("List"));
+    _ = c_free(slots);
+    return l;
+}
+
+// argv on a new pseudo-terminal of rows x cols: master at out, pid at
+// out + 8; 0, or -1 on failure (nothing left open).
+Int pty_make(Int argv, Int rows, Int cols, Int out) {
     Int m = resid_raw_syscall(257, 0 - 100, resid_raw_addr("/dev/ptmx"), 2 | 256 | 2048 | 524288, 0, 0, 0);   // O_RDWR|O_NOCTTY|O_NONBLOCK|O_CLOEXEC
-    if (m < 0) { return xempty_list(); }
+    if (m < 0) { return 0 - 1; }
     Int blk = xmalloc(160);
     _ = resid_raw_fill(blk, 0, 160);
     // 0 unlock flag / pts number, 8 winsize, 16 empty signal set, 24 sigaction (32 zero bytes), 64 slave path
@@ -503,17 +519,12 @@ pub Int rt_pty_spawn(Int cmd, Int rows, Int cols) {
     _ = if (ok) { pts_path(blk + 64, ld32(blk)) } else { 0 };
     _ = st16(blk + 8, clamp(rows, 1, 4096)) + st16(blk + 10, clamp(cols, 1, 4096));
     _ = if (ok) { resid_raw_syscall(16, m, 21524, blk + 8, 0, 0, 0) } else { 0 };      // TIOCSWINSZ
-    Int argv = if (ok) { split_argv(cmd) } else { 0 };
-    if (argv == 0) { return c_free(blk) * 0 + sys_close(m) * 0 + xempty_list(); }
+    if (!ok) { return c_free(blk) * 0 + sys_close(m) * 0 - 1; }
     Int pid = c_fork();
     if (pid == 0) { return pty_child(blk, argv); }
-    _ = c_free(blk) + free_argv(argv);
-    if (pid < 0) { return sys_close(m) * 0 + xempty_list(); }
-    Int slots = xmalloc(16);
-    _ = st64(slots, m + 18295873486192640) + st64(slots + 8, pid + 18295873486192640);
-    Int out = c_list_new(2, slots, resid_raw_addr("List"));
-    _ = c_free(slots);
-    return out;
+    _ = c_free(blk);
+    if (pid < 0) { return sys_close(m) * 0 - 1; }
+    return st64(out, m) * 0 + st64(out + 8, pid) * 0;
 }
 
 // A little-endian 16-bit field.
@@ -612,6 +623,208 @@ pub Int rt_pty_close(Int fd) {
 Bool pty_master(Int fd) {
     if (fd < 0 || fd > 2147483647) { return false; }
     return resid_raw_syscall(16, fd, 2147767344, resid_raw_tls("pty_n", 8), 0, 0, 0) == 0;
+}
+
+// ─── The PTY broker ────────────────────────────────────────────────────
+// A process that starts one fixed command on pseudo-terminals for a
+// program that then confines itself (resid_sandbox_confine): the program
+// keeps no right to execute anything, and asks the broker, over a
+// SOCK_SEQPACKET pair, for a new terminal (it receives the master
+// descriptor and the pid) or a pid's exit status. The broker is forked
+// before the confinement and runs only this loop; it exits when the
+// program's end of the pair closes. Requests are 16 bytes [op, arg]:
+// op 1 (arg rows << 16 | cols) answers [pid] with the master beside it
+// (pid -1 and no descriptor on failure); op 2 (arg pid) answers [status]
+// as resid_pty_wait gives it.
+@export("resid_pty_broker", "i64(ptr)")
+pub Int rt_pty_broker(Int cmd) {
+    if (cmd == 0 || ld8(cmd) == 0) { return 0 - 1; }
+    Int argv = split_argv(cmd);
+    if (argv == 0) { return 0 - 1; }
+    Int sv = resid_raw_tls("brk_sv", 8);
+    if (resid_raw_syscall(53, 1, 5 | 524288, 0, sv, 0, 0) != 0) { return free_argv(argv) - 1; }   // socketpair(AF_UNIX, SOCK_SEQPACKET|SOCK_CLOEXEC)
+    Int a = ld32(sv);
+    Int b = ld32(sv + 4);
+    Int pid = c_fork();
+    if (pid == 0) {
+        _ = sys_close(a);
+        return resid_raw_syscall(231, broker_loop(b, argv), 0, 0, 0, 0, 0);
+    }
+    _ = sys_close(b) + free_argv(argv);
+    if (pid < 0) { return sys_close(a) * 0 - 1; }
+    return a;
+}
+
+Int broker_loop(Int b, Int argv) {
+    Int req = resid_raw_tls("brk_req", 16);
+    Int r = resid_raw_syscall(0, b, req, 16, 0, 0, 0);
+    if (r != 16) { return 0; }
+    Int op = ld64(req);
+    Int arg = ld64(req + 8);
+    _ = if (op == 1) { broker_spawn(b, argv, (arg >> 16) & 65535, arg & 65535) } else { if (op == 2) { broker_reply(b, rt_pty_wait(arg), 0 - 1) } else { 0 } };
+    return broker_loop(b, argv);
+}
+
+Int broker_spawn(Int b, Int argv, Int rows, Int cols) {
+    Int out = resid_raw_tls("brk_out", 16);
+    Bool ok = pty_make(argv, rows, cols, out) == 0;
+    Int m = ld64(out);
+    _ = broker_reply(b, if (ok) { ld64(out + 8) } else { 0 - 1 }, if (ok) { m } else { 0 - 1 });
+    return if (ok) { sys_close(m) } else { 0 };
+}
+
+// [v] on the pair, with descriptor fd beside it unless fd is -1.
+Int broker_reply(Int b, Int v, Int fd) {
+    Int buf = resid_raw_tls("brk_rep", 8);
+    _ = st64(buf, v);
+    Int m = disp_msg_head(buf, 8, fd >= 0);
+    _ = if (fd >= 0) { disp_set_ctl_fd(fd) } else { 0 };
+    return resid_raw_syscall(46, b, m, 16384, 0, 0, 0);   // sendmsg, MSG_NOSIGNAL
+}
+
+// A pseudo-terminal from the broker: [master, pid], or empty.
+@export("resid_pty_open", "ptr(i64,i64,i64)")
+pub Int rt_pty_open(Int broker, Int rows, Int cols) {
+    Int req = resid_raw_tls("brk_q", 16);
+    _ = st64(req, 1) + st64(req + 8, (clamp(rows, 1, 4096) << 16) | clamp(cols, 1, 4096));
+    if (resid_raw_syscall(1, broker, req, 16, 0, 0, 0) != 16) { return xempty_list(); }
+    Int buf = resid_raw_tls("brk_a", 8);
+    Int ctl = resid_raw_tls("brk_ctl", 64);
+    _ = resid_raw_fill(ctl, 0, 64) + st64(buf, 0 - 1);
+    Int m = disp_msg_head(buf, 8, false);
+    _ = st64(msg_buf() + 48, ctl) + st64(msg_buf() + 56, 64);
+    Int r = resid_raw_syscall(47, broker, m, 1073741824, 0, 0, 0);   // recvmsg, MSG_CMSG_CLOEXEC
+    Int pid = ld64(buf);
+    Bool fd_in = r == 8 && ld64(msg_buf() + 56) >= 20 && ld32(ctl + 8) == 1 && ld32(ctl + 12) == 1;
+    Int fd = if (fd_in) { ld32(ctl + 16) } else { 0 - 1 };
+    if (pid <= 0 || fd < 0) { return (if (fd >= 0) { sys_close(fd) } else { 0 }) * 0 + xempty_list(); }
+    _ = resid_raw_syscall(72, fd, 4, 2 | 2048, 0, 0, 0);   // F_SETFL O_RDWR|O_NONBLOCK
+    Int slots = xmalloc(16);
+    _ = st64(slots, fd + 18295873486192640) + st64(slots + 8, pid + 18295873486192640);
+    Int out = c_list_new(2, slots, resid_raw_addr("List"));
+    _ = c_free(slots);
+    return out;
+}
+
+// A broker child's status: -1 while it runs, else as resid_pty_wait.
+@export("resid_pty_status", "i64(i64,i64)")
+pub Int rt_pty_status(Int broker, Int pid) {
+    Int req = resid_raw_tls("brk_q", 16);
+    _ = st64(req, 2) + st64(req + 8, pid);
+    if (resid_raw_syscall(1, broker, req, 16, 0, 0, 0) != 16) { return 255; }
+    Int buf = resid_raw_tls("brk_a", 8);
+    _ = st64(buf, 255);
+    Int r = resid_raw_syscall(0, broker, buf, 8, 0, 0, 0);
+    return if (r == 8) { ld64(buf) } else { 255 };
+}
+
+// ─── Confinement ───────────────────────────────────────────────────────
+// For a long-running server that reads hostile input (pylond, SPEC 8.4):
+// no new privileges; Landlock, under which the filesystem is reachable
+// only beneath `rw` (every right) and `ro` (reading files and listing
+// directories); then a seccomp filter allowing only the system calls an
+// event loop of sockets, terminals and memory needs. Anything else fails
+// with EPERM (a foreign architecture or x32 call kills the process), so
+// in particular nothing can be executed. 1 when confined; 0 when the
+// kernel has no Landlock and nothing was changed; -1 when confinement
+// failed part-way (the caller must exit).
+//
+// Seccomp filters, Landlock domains and no_new_privs belong to a thread,
+// and the runtime runs main on a thread of its own beside the process's
+// first one; an unconfined thread sharing the confined one's memory would
+// undo the confinement. So the program continues in a forked child, which
+// has the calling thread alone, and only the child is confined. The
+// original process shares no memory with it: it waits for the child and
+// exits with the child's status (it stays the parent a supervisor such as
+// sshd sees). Call this early, before state other threads would need.
+@export("resid_sandbox_confine", "i64(ptr,ptr)")
+pub Int rt_sandbox_confine(Int rw, Int ro) {
+    Int abi = resid_raw_syscall(444, 0, 0, 1, 0, 0, 0);   // landlock_create_ruleset(NULL, 0, VERSION)
+    if (abi < 1) { return 0; }
+    Int pid = c_fork();
+    if (pid < 0) { return 0 - 1; }
+    if (pid > 0) {
+        Int st = wait_pid(pid, 0);
+        Int code = if (st < 0) { 1 } else { if ((st & 127) == 0) { (st >> 8) & 255 } else { 128 + (st & 127) } };
+        return resid_raw_syscall(231, code, 0, 0, 0, 0, 0);
+    }
+    Int all = 8191 | (if (abi >= 2) { 8192 } else { 0 }) | (if (abi >= 3) { 16384 } else { 0 }) | (if (abi >= 5) { 32768 } else { 0 });
+    Int attr = resid_raw_tls("ll_attr", 8);
+    _ = st64(attr, all);
+    Int rs = resid_raw_syscall(444, attr, 8, 0, 0, 0, 0);
+    if (rs < 0) { return 0 - 1; }
+    // ro: LANDLOCK_ACCESS_FS_READ_FILE (4) | READ_DIR (8); never EXECUTE (1).
+    Bool ok = ll_rules(rs, rw, all & (0 - 2)) && ll_rules(rs, ro, 4 | 8)
+        && resid_raw_syscall(157, 38, 1, 0, 0, 0, 0) == 0                     // PR_SET_NO_NEW_PRIVS
+        && resid_raw_syscall(446, rs, 0, 0, 0, 0, 0) == 0;                    // landlock_restrict_self
+    _ = sys_close(rs);
+    if (!ok) { return 0 - 1; }
+    Int prog = sb_filter();
+    Int fprog = resid_raw_tls("sb_fprog", 16);
+    _ = st64(fprog, sb_len()) + st64(fprog + 8, prog);
+    return if (resid_raw_syscall(317, 1, 1, fprog, 0, 0, 0) == 0) { 1 } else { 0 - 1 };   // seccomp(SET_MODE_FILTER, TSYNC)
+}
+
+// One path-beneath rule per directory in the list (a missing one is skipped).
+Bool ll_rules(Int rs, Int l, Int access) {
+    Int n = c_list_len(l);
+    Int items = c_list_to_array(l);
+    Bool ok = ll_each(rs, items, 0, n, access);
+    _ = c_free(items);
+    return ok;
+}
+
+Bool ll_each(Int rs, Int items, Int i, Int n, Int access) {
+    if (i >= n) { return true; }
+    Int fd = sys_open(ld64(items + i * 8), 2097152 | 524288, 0);   // O_PATH | O_CLOEXEC
+    if (fd < 0) { return ll_each(rs, items, i + 1, n, access); }
+    Int pb = resid_raw_tls("ll_pb", 16);
+    _ = resid_raw_fill(pb, 0, 16) + st64(pb, access) + st32(pb + 8, fd);
+    Int r = resid_raw_syscall(445, rs, 1, pb, 0, 0, 0);   // landlock_add_rule(PATH_BENEATH)
+    _ = sys_close(fd);
+    if (r != 0) { return false; }
+    return ll_each(rs, items, i + 1, n, access);
+}
+
+// The allowed system calls (x86-64 numbers; resid_raw_nr maps them).
+Int sb_nrs() {
+    return resid_raw_table([0, 1, 3, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 20, 23, 24, 25, 28, 35, 39, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 54, 55,
+        60, 72, 96, 102, 104, 107, 108, 186, 202, 219, 228, 229, 230, 231, 234, 257, 262, 263, 270, 271, 281, 288, 302, 318, 334]);
+}
+Int sb_count() { return 59; }
+Int sb_len() { return 8 + sb_count(); }
+
+// arch check, nr load, x32 kill, one JEQ per allowed call, then EPERM,
+// allow, kill.
+Int sb_filter() {
+    Int n = sb_count();
+    Int p = xmalloc(sb_len() * 8);
+    Int ld = 32;
+    Int jeq = 21;
+    Int jge = 53;
+    Int ret = 6;
+    Int kill = 2147483648;     // SECCOMP_RET_KILL_PROCESS
+    Int allow = 2147418112;    // SECCOMP_RET_ALLOW
+    Int eperm = 327680 | 1;    // SECCOMP_RET_ERRNO | EPERM
+    _ = bpf(p, 0, ld, 0, 0, 4)
+      + bpf(p, 1, jeq, 1, 0, if (on_a64()) { 3221225655 } else { 3221225534 })
+      + bpf(p, 2, ret, 0, 0, kill)
+      + bpf(p, 3, ld, 0, 0, 0)
+      + bpf(p, 4, jge, n + 2, 0, 1073741824)
+      + sb_jeqs(p, 0, n)
+      + bpf(p, 5 + n, ret, 0, 0, eperm)
+      + bpf(p, 6 + n, ret, 0, 0, allow)
+      + bpf(p, 7 + n, ret, 0, 0, kill);
+    return p;
+}
+
+Int sb_nr(Int n) { return resid_raw_nr(n); }
+
+Int sb_jeqs(Int p, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int nr = sb_nr(ld64(sb_nrs() + i * 8));
+    _ = bpf(p, 5 + i, 21, n - i, 0, if (nr < 0) { 4294967295 } else { nr });
+    return sb_jeqs(p, i + 1, n);
 }
 
 // git rev-parse through sh -c (git provider).

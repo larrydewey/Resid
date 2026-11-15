@@ -282,11 +282,11 @@ pub Int rt_disp_pair() {
 // block: iovec at 0, msghdr at 16 (56 bytes), cmsghdr at 72.
 // msghdr layout (from m+16): msg_name(8) msg_namelen(8) msg_iov(8) msg_iovlen(8)
 // msg_control(8) msg_controllen(8) msg_flags(4) pad(4) = 56 bytes.
-Int msg_buf() { return resid_raw_tls("disp_msg", 96); }
+pub Int msg_buf() { return resid_raw_tls("disp_msg", 96); }
 
 // The msghdr for one buffer of `iov_len` bytes at `base`, with a
 // descriptor to pass when `ctl` is set.
-Int disp_msg_head(Int base, Int iov_len, Bool ctl) {
+pub Int disp_msg_head(Int base, Int iov_len, Bool ctl) {
     Int m = msg_buf();
     _ = resid_raw_fill(m, 0, 96);
     _ = st64(m, base) + st64(m + 8, iov_len);                 // iovec at m+0
@@ -299,7 +299,7 @@ Int disp_msg_head(Int base, Int iov_len, Bool ctl) {
     return m + 16;
 }
 
-Int disp_set_ctl_fd(Int fd) { return st32(msg_buf() + 88, fd); }
+pub Int disp_set_ctl_fd(Int fd) { return st32(msg_buf() + 88, fd); }
 
 // All of `data`, with the descriptor in pass_fd (or none when it is -1)
 // sent beside it. False on any error, and a partial send counts as a
