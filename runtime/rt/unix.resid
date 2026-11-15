@@ -206,6 +206,15 @@ pub Int rt_disp_connect_wayland() {
     return if (sa >= 0) { unix_connect(sa) } else { 0 - 1 };
 }
 
+// A Resid Surface Protocol host shell alone: the descriptor its parent
+// passed in RSP_SOCKET, else -1. The shell started this program and owns
+// the window; resid-gui's docs/rsp.md is the protocol.
+@export("resid_disp_connect_rsp", "i64()")
+pub Int rt_disp_connect_rsp() {
+    Int inh = c_getenv(resid_raw_addr("RSP_SOCKET"));
+    return if (inh != 0) { disp_inherited(inh) } else { 0 - 1 };
+}
+
 // The X server DISPLAY names alone, or -1.
 @export("resid_disp_connect_x11", "i64()")
 pub Int rt_disp_connect_x11() {
@@ -324,7 +333,9 @@ pub Int rt_disp_send(Int fd, Int l, Int pass_fd) {
     _ = disp_bytes_of(l, buf, 0, n);
     Int m = disp_msg_head(buf, n, ctl);
     if (ctl) { _ = disp_set_ctl_fd(pfd); }
-    Int w = resid_raw_syscall(46, fd, m, 0, 0, 0, 0);
+    // MSG_NOSIGNAL: a peer that went away is a false return, never a
+    // SIGPIPE that ends the whole program.
+    Int w = resid_raw_syscall(46, fd, m, 16384, 0, 0, 0);
     _ = c_free(buf);
     _ = if (ctl) { sys_close(pfd) } else { 0 };
     return if (w == n) { 1 } else { 0 };

@@ -1,0 +1,15 @@
+// A display peer that went away is an error the program sees, not a
+// SIGPIPE that ends it: a crashed compositor or host shell must leave the
+// program able to report it and exit cleanly. And a program asked to find
+// a host shell when none named itself gets -1.
+@requires(display)
+Int main() {
+    List(Int) p = resid_disp_pair();
+    if (p.len() != 2) { return 1; }
+    _ = resid_disp_close(p[1]);
+    println(f"send to a closed peer {resid_disp_send(p[0], [1, 2, 3], 0 - 1)}");
+    println(f"and again {resid_disp_send(p[0], [4], 0 - 1)}");
+    _ = resid_disp_close(p[0]);
+    println(f"no shell {resid_disp_connect_rsp()}");
+    return 0;
+}
