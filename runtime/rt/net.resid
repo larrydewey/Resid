@@ -286,6 +286,90 @@ Int listen_ip(Int ip, Int port) {
     return fd;
 }
 
+// ─── UDP ───────────────────────────────────────────────────────────────
+// Datagram sockets (the Pylon protocol, and anything else that roams):
+// open for a client, bound on loopback (a `network` read) or on an
+// interface (a `network` write, as for TCP). Sends and receives never
+// wait: a program polls with resid_tcp_poll first. A received datagram
+// comes back as [a, b, c, d, port_hi, port_lo, data...], the sender's
+// IPv4 address and port first, or empty when none is waiting.
+
+Int udp_sock(Int ip, Int port) {
+    if (port < 0 || port > 65535) { return 0 - 1; }
+    Int sa = resid_raw_tls("sa_udp", 16);
+    _ = resid_raw_fill(sa, 0, 16);
+    _ = st8(sa, 2);                                    // AF_INET
+    _ = st8(sa + 2, port >> 8) + st8(sa + 3, port & 255);
+    _ = st32(sa + 4, ip);
+    Int fd = resid_raw_syscall(41, 2, 2 | 524288, 0, 0, 0, 0);   // SOCK_DGRAM | SOCK_CLOEXEC
+    if (fd < 0) { return 0 - 1; }
+    if (resid_raw_syscall(49, fd, sa, 16, 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }  // bind
+    return fd;
+}
+
+// A client socket on a free port of every interface (replies come back to it).
+@export("resid_udp_open", "i64()")
+pub Int rt_udp_open() { return udp_sock(0, 0); }
+
+// Bound on loopback at `port` (0: any free port).
+@export("resid_udp_bind", "i64(i64)")
+pub Int rt_udp_bind(Int port) { return udp_sock(loopback_v4(), port); }
+
+// Bound on an interface's address literal (`0.0.0.0`: every interface).
+@export("resid_udp_bind_at", "i64(ptr,i64)")
+pub Int rt_udp_bind_at(Int host, Int port) {
+    if (host == 0 || ld8(host) == 0 || !host_ok(host)) { return 0 - 1; }
+    Int ip = if (lower_eq(host, resid_raw_addr("localhost"))) { loopback_v4() } else { parse_ip4(host) };
+    if (ip < 0) { return 0 - 1; }
+    return udp_sock(ip, port);
+}
+
+// The port a UDP socket is bound to, or -1.
+@export("resid_udp_port", "i64(i64)")
+pub Int rt_udp_port(Int fd) {
+    if (!sock_ok(fd)) { return 0 - 1; }
+    Int sa = resid_raw_tls("sa_udp", 16);
+    _ = resid_raw_fill(sa, 0, 16);
+    Int lenp = resid_raw_tls("udp_len", 4);
+    _ = st32(lenp, 16);
+    if (resid_raw_syscall(51, fd, sa, lenp, 0, 0, 0) != 0) { return 0 - 1; }   // getsockname
+    return ld8(sa + 2) * 256 + ld8(sa + 3);
+}
+
+// One datagram to addr (four bytes) : port; true when it was sent whole.
+@export("resid_udp_send_to", "i8(i64,ptr,i64,ptr)")
+pub Int rt_udp_send_to(Int fd, Int addr, Int port, Int data) {
+    Int n = c_list_len(data);
+    if (!sock_ok(fd) || c_list_len(addr) != 4 || port < 1 || port > 65535 || n > 65507) { return 0; }
+    Int sa = resid_raw_tls("sa_udp_to", 16);
+    _ = resid_raw_fill(sa, 0, 16);
+    _ = st8(sa, 2);
+    _ = st8(sa + 2, port >> 8) + st8(sa + 3, port & 255);
+    _ = bytes_of(addr, sa + 4, 0, 4);
+    Int buf = xmalloc(if (n > 0) { n } else { 1 });
+    _ = bytes_of(data, buf, 0, n);
+    Int r = resid_raw_syscall(44, fd, buf, n, 16384 | 64, sa, 16);   // sendto, MSG_NOSIGNAL|MSG_DONTWAIT
+    _ = c_free(buf);
+    return if (r == n) { 1 } else { 0 };
+}
+
+// One waiting datagram (at most `max` bytes of it), as described above.
+@export("resid_udp_recv_from", "ptr(i64,i64)")
+pub Int rt_udp_recv_from(Int fd, Int max0) {
+    Int max = if (sock_ok(fd)) { clamp(max0, 0, 65536) } else { 0 };
+    Int buf = xmalloc(6 + if (max > 0) { max } else { 1 });
+    Int sa = resid_raw_tls("sa_udp_from", 16);
+    _ = resid_raw_fill(sa, 0, 16);
+    Int lenp = resid_raw_tls("udp_from_len", 4);
+    _ = st32(lenp, 16);
+    Int r = if (max > 0) { resid_raw_syscall(45, fd, buf + 6, max, 64, sa, lenp) } else { 0 - 1 };   // MSG_DONTWAIT
+    Bool got = r >= 0 && ld8(sa) == 2;
+    _ = if (got) { mcopy(buf, sa + 4, 4) + st8(buf + 4, ld8(sa + 2)) + st8(buf + 5, ld8(sa + 3)) } else { 0 };
+    Int out = bl_from_bytes(if (got) { r + 6 } else { 0 }, buf);
+    _ = c_free(buf);
+    return out;
+}
+
 // The port a listener actually bound, or -1. Lets `serve` report its own
 // port instead of the caller having to reserve a free one to pass in.
 @export("resid_tcp_bound_port", "i64(i64)")

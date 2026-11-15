@@ -2475,6 +2475,9 @@ Str cg_extern_ret(Str name) {
     if (name == "resid_tcp_listen") { return "Int"; }
     if (name == "resid_tcp_listen_at") { return "Int"; }
     if (name == "resid_tcp_recv_some") { return "List(Int)"; }
+    if (name == "resid_udp_open" || name == "resid_udp_bind" || name == "resid_udp_bind_at" || name == "resid_udp_port") { return "Int"; }
+    if (name == "resid_udp_send_to") { return "Bool"; }
+    if (name == "resid_udp_recv_from") { return "List(Int)"; }
     if (name == "resid_tcp_recv_some_u8") { return "List(UInt(8))"; }
     if (name == "resid_tcp_shutdown") { return "Bool"; }
     if (name == "resid_tcp_deadline") { return "Bool"; }
