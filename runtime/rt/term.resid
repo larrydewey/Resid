@@ -46,6 +46,34 @@ pub Int rt_read_byte() {
     return in_unlock() + c;
 }
 
+// Whatever standard input holds now, at most `max` bytes (1..65536):
+// what the buffer already has, else one read. After resid_tcp_poll has
+// reported descriptor 0 readable the read does not wait, so a program can
+// multiplex the keyboard with sockets (an interactive remote shell).
+// Empty at end of input. The bytes pass through a wiped buffer.
+@export("resid_read_some", "ptr(i64)")
+pub Int rt_read_some(Int max0) {
+    Int max = if (max0 < 1) { 1 } else { if (max0 > 65536) { 65536 } else { max0 } };
+    _ = in_lock();
+    Int p = in_pos();
+    Int have = in_len() - p;
+    if (have > 0) {
+        Int k = if (have < max) { have } else { max };
+        Int b0 = xmalloc(k);
+        _ = mcopy(b0, in_buf() + p, k);
+        _ = st64(in_st(), p + k);
+        return in_unlock() + rnd_list(b0, k, k);
+    }
+    Int b = xmalloc(max);
+    Int r = in_read_once(b, max);
+    return in_unlock() + rnd_list(b, max, if (r > 0) { r } else { 0 });
+}
+
+Int in_read_once(Int b, Int n) {
+    Int r = resid_raw_syscall(0, 0, b, n, 0, 0, 0);
+    return if (r == 0 - 4) { in_read_once(b, n) } else { r };
+}
+
 // One line of standard input with its newline; "" at end of input.
 @export("resid_read_line", "ptr()")
 pub Int rt_read_line() {

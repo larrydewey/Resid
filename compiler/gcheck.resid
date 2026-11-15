@@ -1579,6 +1579,7 @@ GKT gk_call(GK k, Int id, Str exp) {
     if (n == "assumed" && ck_fn_index(k.fs, n) < 0) { return sec_assumed(k, id, exp); }
     if ((n == "secret_split" || n == "secret_join") && ck_fn_index(k.fs, n) < 0) { return sec_shape(k, id, n, exp); }
     if (n == "ct_select" && ck_fn_index(k.fs, n) < 0) { return sec_select(k, id, exp); }
+    if (n == "ct_nonzero" && ck_fn_index(k.fs, n) < 0) { return sec_nonzero(k, id, exp); }
     if (sec_liftable(n) && ck_fn_index(k.fs, n) < 0 && (argn == 2 || argn == 1)) {
         GKA wa = gk_args(k, id, 0, gk_nopts(), 0, "", 0);
         if (wa.err != "") { return gterr(wa.k, wa.err, wa.at); }
@@ -5715,6 +5716,18 @@ Str sec_obs_msg(Str b, List(Str) args) {
     return "E0257: " + b + "(" + list_join(args, 0, ", ", "") + "): " + b + " is never given for a secret, since its result would reveal it; declassify the value first";
 }
 
+// ct_nonzero(x): whether the integer x (at most 64 bits, secret or
+// public) is non-zero, as a Secret(Bool), by arithmetic rather than a
+// comparison: the bridge from secret bytes to ct_select's condition.
+GKT sec_nonzero(GK k, Int id, Str exp) {
+    if (k.g.ns[id].nk != 1) { return gterr(k, "ct_nonzero(x) takes 1 argument", id); }
+    GKT x = gk_expr(k, gk_kid(k, id, 0), "");
+    if (x.err != "") { return x; }
+    Str xt = sec_inner(x.ty);
+    if (!(is_int_ty(xt) && ty_bits(num_norm(xt)) <= 64)) { return gterr(x.k, "ct_nonzero takes an integer of at most 64 bits, got " + x.ty, id); }
+    return gt(x.k, "Secret(Bool)", id);
+}
+
 // ct_select(c, a, b): a where the secret Bool c is true, else b, by masks
 // rather than a branch. a and b are integers of one type (at most 64 bits)
 // or Bools, secret or public; the result is secret.
@@ -6073,7 +6086,7 @@ Bool sec_wide_scan(GK k, List(Int) keys, List(Str) tys, Int i, Str src, Str smap
 }
 
 // Builtin names of secret values that no program may define (E0259).
-Bool sec_reserved(Str n) { return sec_is_wrapper(n) || n == "ct_select"; }
+Bool sec_reserved(Str n) { return sec_is_wrapper(n) || n == "ct_select" || n == "ct_nonzero"; }
 
 // A cast of a secret integer that keeps every value (the same or a wider
 // width of the same signedness, or unsigned to a wider signed type) lowers

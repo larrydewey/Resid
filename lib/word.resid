@@ -142,6 +142,22 @@ pub List(B) w_lift_bytes(List(Int) bs, Int i, ListBuf(B) acc) {
     return w_lift_bytes(bs, i + 1, acc.push(b));
 }
 
+/// `a` where `take` holds, else `b`: a whole byte list chosen byte by byte
+/// with ct_select, so no branch, index or address depends on `take`. The
+/// two lists must have one length (it is public); otherwise the result is
+/// empty. For the key-entropy check (E0270) the result is one of its two
+/// arguments (`@selects`), as unpredictable as the weaker.
+@selects(a, b)
+pub List(Secret(UInt(8))) ct_pick_bytes(Secret(Bool) take, List(Secret(UInt(8))) a, List(Secret(UInt(8))) b) {
+    if (a.len() != b.len()) { ListBuf(Secret(UInt(8))) e = ListBuf(); return e.finish(); }
+    return ct_pick_at(take, a, b, 0, ListBuf());
+}
+
+List(Secret(UInt(8))) ct_pick_at(Secret(Bool) take, List(Secret(UInt(8))) a, List(Secret(UInt(8))) b, Int i, ListBuf(Secret(UInt(8))) out) {
+    if (i >= a.len()) { return out.finish(); }
+    return ct_pick_at(take, a, b, i + 1, out.push(ct_select(take, a[i], b[i])));
+}
+
 /// The Int byte string `bs` as secret bytes.
 /// Each value is reduced to its low eight bits.
 pub List(Secret(UInt(8))) secret_bytes(List(Int) bs) { return secret_bytes_at(bs, 0, ListBuf()); }

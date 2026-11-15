@@ -93,7 +93,12 @@ reduction (`E0270`, a warning while the rule is rolled out):
   constants, bytes from a file, the network, a device or a native module,
   other arithmetic.
 - **Counted once per source.** `r ‖ r` holds `r`'s bytes once, and so does
-  `sha256(r ‖ r)`. A selection holds the smallest count of its arms;
+  `sha256(r ‖ r)`. A selection holds the smallest count of its arms
+  (`ct_select(c, a, b)` is one, whatever its secret condition: the result
+  is exactly `a` or exactly `b`; for whole byte lists use
+  `ct_pick_bytes(c, a, b)` from `lib/word.resid`, marked `@selects(a, b)`,
+  since a list built byte by byte in a loop is not followed; a masked xor
+  such as `a ^ ((a ^ c) & m)` is not a selection, since it can cancel);
   an arm known to be empty (a failure value) is dropped, since every keying
   primitive refuses an empty key at run time.
 - **Disclosure.** A source any copy of which reaches `declassify` counts

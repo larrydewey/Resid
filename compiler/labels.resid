@@ -142,7 +142,7 @@ Int lb_builtin(Str n) {
     if (str_starts_with(n, "resid_chal_")) { return 2; }
     if (n == "resid_tr_read") { return 2; }
     if (n == "resid_tr_note") { return 1; }
-    if (n == "resid_crypto_random_byte" || n == "resid_random_os" || n == "resid_random_cpu" || n == "resid_read_line" || n == "resid_read_byte" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_stack_left") { return 2; }
+    if (n == "resid_crypto_random_byte" || n == "resid_random_os" || n == "resid_random_cpu" || n == "resid_read_line" || n == "resid_read_byte" || n == "resid_read_some" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_stack_left") { return 2; }
     if (n == "print" || n == "println" || n == "eprintln" || n == "print_bytes") { return 2; }
     if (n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_test_run_closure" || n == "resid_test_run") { return 2; }
     if (str_starts_with(n, "str_") || str_starts_with(n, "resid_fmt_") || str_starts_with(n, "checked_") || str_starts_with(n, "wrapping_") || str_starts_with(n, "saturating_")) { return 1; }
@@ -170,7 +170,7 @@ Str lb_builtin_what(Str n) {
     if (str_starts_with(n, "resid_clock_")) { return "clock: " + n; }
     if (str_starts_with(n, "resid_device_")) { return "device: " + n; }
     if (n == "resid_crypto_random_byte" || n == "resid_random_os" || n == "resid_random_cpu") { return "randomness: " + n; }
-    if (n == "resid_read_line" || n == "resid_read_byte") { return "standard input: " + n; }
+    if (n == "resid_read_line" || n == "resid_read_byte" || n == "resid_read_some") { return "standard input: " + n; }
     if (n == "print" || n == "println" || n == "eprintln" || n == "print_bytes") { return "standard output: whether " + n + " wrote"; }
     return "runtime: " + n;
 }

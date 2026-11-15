@@ -2871,6 +2871,10 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (builtin_args(argtys, "Int")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_dbg_f64 expects (Int), got (" + argtys + ")"};
     }
+    if (name == "resid_read_some") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_read_some expects (Int), got (" + argtys + ")"};
+    }
     if (name == "resid_read_line") {
         if (argtys == "") { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_read_line expects no arguments"};
@@ -2973,6 +2977,14 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     if (name == "secret_split" || name == "secret_join") {
         if (argc == 1) { return ERes {.pos = pos, .ty = str_trim(rawtys), .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " takes 1 argument"};
+    }
+    // ct_nonzero(x): whether an integer is non-zero, as a Secret(Bool),
+    // computed without a branch (the condition ct_select takes).
+    if (name == "ct_nonzero") {
+        Str nz = str_trim(rawtys);
+        Str nzv = if (ck_str_starts_with(nz, "Secret(")) { str_trim(str_slice(nz, 7, str_len(nz) - 1)) } else { nz };
+        if (argc == 1 && is_int_ty(nzv) && ty_bits(nzv) <= 64) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "ct_nonzero expects one integer of at most 64 bits, got (" + rawtys + ")"};
     }
     if (name == "ct_select") {
         Str s1 = str_trim(ty_list_at(rawtys, 1));

@@ -13,7 +13,9 @@
 // hkdf(r, "b") is not) and `@agree(p)` (key agreement: unpredictable when
 // p is, never own). Every other operation loses it except moving bytes
 // (slices, concatenation, lists, records, `secret`), and a selection keeps
-// only what every arm keeps.
+// only what every arm keeps. `ct_select(c, a, b)` is a selection too: its
+// result is exactly one of its arms; so is a reviewed function marked
+// `@selects(a, b)` (ct_pick_bytes, the same choice over whole byte lists).
 //
 // A source is disclosed once any copy of it reaches `declassify`; a
 // disclosed source counts zero at every keying site, before or after.
@@ -253,7 +255,10 @@ EkA ek_cat(EkA a, EkA b, EkT t) {
     if (a.alts.len() == 0 && b.alts.len() == 0) { return ek_cat1(a, b, t); }
     List(EkA) xa = ek_alts_of(a);
     List(EkA) xb = ek_alts_of(b);
-    if (xa.len() * xb.len() > 4) { return ek_cat1(ek_collapse(a), ek_collapse(b), t); }
+    // Pairs are formed before giving up: equal pairs merge (A ‖ A is A),
+    // so a value built byte by byte from two arms stays at A, B and A ∪ B.
+    // More than four distinct results meet in ek_from_alts.
+    if (xa.len() * xb.len() > 16) { return ek_cat1(ek_collapse(a), ek_collapse(b), t); }
     return ek_from_alts(ek_cat_pairs(xa, xb, 0, 0, t, []));
 }
 
@@ -344,7 +349,7 @@ Str ek_ann(Str aux, Str name) {
     return str_trim(str_slice(aux, a + str_len(name) + 2, b));
 }
 
-Bool ek_reviewed(Str aux) { return str_contains(aux, "@key(") || str_contains(aux, "@key_from(") || str_contains(aux, "@one_way(") || str_contains(aux, "@agree(") || str_contains(aux, "@key_source(") || str_contains(aux, "@fresh_source(") || str_contains(aux, "@nonce("); }
+Bool ek_reviewed(Str aux) { return str_contains(aux, "@selects(") || str_contains(aux, "@key(") || str_contains(aux, "@key_from(") || str_contains(aux, "@one_way(") || str_contains(aux, "@agree(") || str_contains(aux, "@key_source(") || str_contains(aux, "@fresh_source(") || str_contains(aux, "@nonce("); }
 
 // Index of parameter `name` of f (kids 1..n-2), or -1.
 Int ek_param(EkC c, Int f, Str name, Int i) {
@@ -601,6 +606,10 @@ EkE ek_call(EkC c, Int id, EkT t) {
     if (d == -2 && n.text == "declassify") { return eke(ek_none(), ek_disclose(t1, a0)); }
     if (d == -2 && n.text == "provisioned_key") { return ek_source(t1, 2, 0 - 1, [], -1, f"@{id}", id); }
     if (d == -2 && (n.text == "secret" || n.text == "classify")) { return eke(ek_touch(a0), t1); }
+    // ct_select(c, a, b) is exactly a or exactly b: a selection, holding
+    // the smaller count of its arms (§5.2), like an `if` on a public
+    // condition. Its condition chooses; it adds nothing to either arm.
+    if (d == -2 && n.text == "ct_select" && av.vs.len() == 3) { return eke(ek_arms(av.vs[1], av.vs[2]), t1); }
     if (d >= 0 && c.g.ns[d].kind == "fn") { return ek_apply(c, id, d, av); }
     // A variant constructor (Some, Ok, Err, a sum type's) holds its payload.
     Bool ctor = (d == -2 && (n.text == "Some" || n.text == "Ok" || n.text == "Err")) || (d >= 0 && c.g.ns[d].kind == "variant");
@@ -773,6 +782,16 @@ EkE ek_reviewed_call(EkC c, Int id, Int f, Str aux, EkAV av) {
         Int pos = if (pi >= 0) { ek_arg_pos(c, f, av, pi, 0) } else { -1 };
         Int len = if (pos >= 0) { ek_lit(c, av.nodes[pos]) } else { -1 };
         return ek_source(t1, 1, if (len >= 0) { len } else { 0 }, [], -1, f"@{id}", id);
+    }
+    // `@selects(a, b)`: the result is exactly one of the two arguments
+    // (lib/word.resid's ct_pick_bytes, a branch-free whole-list choice):
+    // a selection, holding the smaller count of the two.
+    Str sel = ek_ann(aux, "selects");
+    if (sel != "") {
+        List(Str) sn = str_split(sel, ",");
+        EkA sa = ek_from_params(c, f, av, [sn[0]], 0, ek_none(), true, t1);
+        EkA sb = if (sn.len() > 1) { ek_from_params(c, f, av, [sn[1]], 0, ek_none(), true, t1) } else { ek_none() };
+        return eke(ek_arms(sa, sb), t1);
     }
     Str kf = ek_ann(aux, "key_from");
     Str ag = ek_ann(aux, "agree");

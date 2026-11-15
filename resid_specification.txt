@@ -3278,13 +3278,16 @@ wrapping_mul; be read at a public index when it is a list;
 be stored in a record field or a list element; be chosen by
 ct_select(c, a, b), a mask selection on a Secret(Bool) c
 between integers of at most 64 bits or Bools. The result is
-secret. A secret list's or text's .len() is public.
+secret. ct_nonzero(x) gives that condition from an integer of
+at most 64 bits, secret or public: a Secret(Bool) that holds
+when x is not zero, computed by arithmetic behind an empty-asm
+barrier, never a comparison or a branch. A secret list's or text's .len() is public.
 lib/crypto.resid's ct_eq compares secret byte lists in
 constant time and publishes the one-bit verdict, so it needs
 the declassify grant.
 
 The builtin names secret, declassify, classify, secret_split,
-secret_join and ct_select are reserved (E0259): a function by
+secret_join, ct_select and ct_nonzero are reserved (E0259): a function by
 one of those names would replace the builtin in every module,
 libraries included.
 

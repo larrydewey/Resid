@@ -3320,6 +3320,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
     if ((n == "ct_secret" || n == "ct_public") && !user_fn) { return lw_ct(w, id, n, env, c); }
     if (n == "ct_hide" && !user_fn) { return lw_ct_hide(w, id, env, c); }
     if (n == "ct_select" && !user_fn) { return lw_ct_select(w, id, env, c); }
+    if (n == "ct_nonzero" && !user_fn) { return lw_ct_nonzero(w, id, env, c); }
     if (n == "resid_test_run_closure" && !user_fn) { return lw_extern(w, id, n, l2s("Void closure()", "Str"), "Int", env, c); }
     if (n == "sort") { return lw_sort(w, id, env, c); }
     if (n == "select" && fn_index(w.fs, n) < 0) { return lv_select(w, id, "", env, c); }
@@ -3432,6 +3433,25 @@ GT lw_ct_hide(LW w, Int id, List(Str) env, GT c) {
     Str lt = ll_ty(a.ty);
     Str r = f"%t{a.tmp + 1}";
     return lw_step(a, r, a.ty, a.lines.concat([r + " = call " + lt + " asm \"\", \"=r,0\"(" + lt + " " + a.val + ")"]), a.tmp + 1);
+}
+
+// ct_nonzero(x): ((x | (0 - x)) >> (bits - 1)) & 1 as an i1, the shifted
+// word passed through an empty asm so the optimizer cannot recognise
+// `x != 0` and turn its use back into a compare-and-branch.
+GT lw_ct_nonzero(LW w, Int id, List(Str) env, GT c) {
+    if (w.g.ns[id].nk != 1) { return lw_gerr("ct_nonzero arity", c); }
+    GT x = lw_expr(w, lw_kid(w, id, 0), env, c);
+    if (x.err != "") { return x; }
+    Str lt = ll_ty(x.ty);
+    Int bits = if (lt == "i8") { 8 } else { if (lt == "i16") { 16 } else { if (lt == "i32") { 32 } else { 64 } } };
+    Int t = x.tmp;
+    Str ng = f"%t{t + 1}";
+    Str o = f"%t{t + 2}";
+    Str s = f"%t{t + 3}";
+    Str h = f"%t{t + 4}";
+    Str r = f"%t{t + 5}";
+    List(Str) body = [ng + " = sub " + lt + " 0, " + x.val, o + " = or " + lt + " " + x.val + ", " + ng, s + " = lshr " + lt + " " + o + ", " + f"{bits - 1}", h + " = call " + lt + " asm \"\", \"=r,0\"(" + lt + " " + s + ")", r + " = trunc " + lt + " " + h + " to i1"];
+    return lw_step(x, r, "Bool", x.lines.concat(body), t + 5);
 }
 
 // ct_select(c, a, b) (spec §48): (a & m) | (b & ~m) with m all ones when c

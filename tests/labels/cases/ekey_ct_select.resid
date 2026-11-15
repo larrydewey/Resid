@@ -1,0 +1,35 @@
+// A constant-time choice is a selection for E0270 (PLAN-labels.md §5.2):
+// ct_pick_bytes (`@selects(a, b)`) returns one of its arguments, so the
+// result holds the smaller count of the two. A masked xor of two secrets
+// is not recognised (it could cancel: a ^ ((a ^ c) & a) is 0 when c is 0).
+import "random.resid";
+import "aesgcmg.resid";
+import "sha256g.resid";
+import "word.resid";
+
+@requires(declassify)
+List(UInt(8)) seal(List(Secret(UInt(8))) k) {
+    List(Secret(UInt(8))) pt = random_secret(4);
+    List(Secret(UInt(8))) ct = aes_gcmg_seal(k, random_bytes(12), pt, []);
+    return [];
+}
+
+List(Secret(UInt(8))) mask_pick(List(Secret(UInt(8))) a, List(Secret(UInt(8))) c, Secret(UInt(8)) m, Int i, ListBuf(Secret(UInt(8))) out) {
+    if (i >= a.len()) { return out.finish(); }
+    return mask_pick(a, c, m, i + 1, out.push(a[i] ^ ((a[i] ^ c[i]) & m)));
+}
+
+@requires(declassify)
+Int main() {
+    List(Secret(UInt(8))) r = random_secret(32);
+    List(Secret(UInt(8))) a = sha256g(r);
+    List(Secret(UInt(8))) c = sha256g(r.concat(r));
+    Secret(Bool) which = ct_nonzero(r[0] & classify((UInt(8)) 1));
+    _ = seal(ct_pick_bytes(which, a, c));                          // either hash: fine
+    List(Secret(UInt(8))) konst = cl([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], 0, ListBuf());
+    _ = seal(ct_pick_bytes(which, a, konst));                      // a constant arm: refused
+    _ = seal(mask_pick(a, c, r[1], 0, ListBuf()));                 // masked xor: refused
+    return 0;
+}
+
+List(Secret(UInt(8))) cl(List(Int) b, Int i, ListBuf(Secret(UInt(8))) acc) { return if (i >= b.len()) { acc.finish() } else { cl(b, i + 1, acc.push(classify((UInt(8)) b[i]))) }; }

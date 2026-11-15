@@ -1,0 +1,5 @@
+Int main() {
+    Secret(UInt(128)) w = secret((UInt(128))(rt 1));
+    Secret(Bool) b = ct_nonzero(w);
+    return 0;
+}

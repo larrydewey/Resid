@@ -59,6 +59,8 @@ Int main() {
 | reading a secret list at a public index | a secret index, range bound or shift amount (`E0255`) |
 | storing it in a record field or list | deciding an `if`, `while`, `match` or ternary (`E0255`) |
 | `ct_select(c, a, b)` with a `Secret(Bool)` `c` | methods, except a secret list's or text's `.len()` (`E0255`) |
+| `ct_nonzero(x)`: a `Secret(Bool)` that holds when the integer `x` (at most 64 bits) is not zero, by arithmetic, never a comparison | |
+| `ct_pick_bytes(c, a, b)` (`lib/word.resid`): one of two equal-length secret byte lists, chosen by `ct_select` byte by byte | |
 | | being a `Map` key or `Set` element in any type (`E0253`) |
 | | a provider argument, including `filesystem.write_secret` (`E0255`) |
 | | a `spawn` region's result (`E0255`) |
@@ -68,7 +70,7 @@ To persist key material, declassify it under the grant and write it with
 `filesystem.write_secret(path, declassify(key, "persist the key"))`.
 
 The builtins `secret`, `declassify`, `classify`, `secret_split`,
-`secret_join` and `ct_select` are reserved: a program cannot define a
+`secret_join`, `ct_select` and `ct_nonzero` are reserved: a program cannot define a
 function by those names (`E0259`), since it would replace the builtin in
 every module, libraries included.
 
