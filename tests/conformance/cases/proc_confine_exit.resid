@@ -1,0 +1,10 @@
+// A program that confines itself (resid_sandbox_confine) still exits with
+// main's result: it continues in a forked child, whose main thread ends
+// the process with the code (a lone thread's exit would report 0).
+@requires(args)
+Int main() {
+    List(Str) none = [];
+    Int c = resid_sandbox_confine(none, none);
+    println(if (c == 1) { "confined" } else { if (c == 0) { "no landlock" } else { "failed" } });
+    return 7;
+}
