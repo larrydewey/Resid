@@ -6968,6 +6968,9 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
     if (str_has_prefix(t, "List(") && !is_list_fixed(t)) {
         Str et = ct_base_of(fs.ctn, fs.ctb, elem_type(t));
         if (struct_index(fs, et) >= 0 && lr_rec_ok(fs, et, seen)) { return "@resid_mv_list_f(ptr %V, ptr @" + lr_rec_fn(et) + ", ptr %C)"; }
+        // A list of lists of words: each element moves as a list of words
+        // does (resid_mv_list, the element mover list writes use too).
+        if (lr_list_word(et)) { return "@resid_mv_list_f(ptr %V, ptr @resid_mv_list, ptr %C)"; }
     }
     return "";
 }
