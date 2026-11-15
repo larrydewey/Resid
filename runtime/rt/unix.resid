@@ -268,7 +268,7 @@ Bool disp_screen_ok(Int e) {
 pub Int rt_disp_pair() {
     Int fds = resid_raw_tls("disp_pair", 8);
     _ = st32(fds, 0) + st32(fds + 4, 0);
-    if (resid_raw_syscall(53, 1, 1 | 524288, 0, fds, 0, 0) != 0) { return xempty(); }
+    if (resid_raw_syscall(53, 1, 1 | 524288, 0, fds, 0, 0) != 0) { return xempty_list(); }
     Int slots = xmalloc(16);
     _ = st64(slots, ld32(fds) + 18295873486192640) + st64(slots + 8, ld32(fds + 4) + 18295873486192640);
     Int out = c_list_new(2, slots, resid_raw_addr("List"));

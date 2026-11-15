@@ -109,6 +109,9 @@ pub Int rt_fs_read_all(Int path) {
     return arena_adopt(p, c_strlen(p));
 }
 
+// An empty List(Int) (xempty is an empty Str).
+pub Int xempty_list() { return c_list_new(0, 0, resid_raw_addr("List")); }
+
 pub Int xempty() {
     Int p = ralloc(1);
     return st8(p, 0) + p;
@@ -476,6 +479,139 @@ pub Int rt_process_run(Int cmd) {
     _ = free_argv(argv);
     if (st < 0) { return 0 - 1; }
     return exit_code(st);
+}
+
+// ─── Pseudo-terminals ──────────────────────────────────────────────────
+// A command on a new pseudo-terminal (pylond's terminal sessions). The
+// command is split on spaces and run by execvp, never by a shell. The child
+// leads a new session with the terminal as its controlling terminal and
+// standard descriptors, every signal unblocked and the job-control and
+// pipe signals at their defaults (what a login shell expects). It runs
+// only system calls on memory prepared here before the fork. The parent
+// keeps the master, non-blocking and close-on-exec: [master_fd, pid], or
+// empty on failure.
+@export("resid_pty_spawn", "ptr(ptr,i64,i64)")
+pub Int rt_pty_spawn(Int cmd, Int rows, Int cols) {
+    if (cmd == 0 || ld8(cmd) == 0) { return xempty_list(); }
+    Int m = resid_raw_syscall(257, 0 - 100, resid_raw_addr("/dev/ptmx"), 2 | 256 | 2048 | 524288, 0, 0, 0);   // O_RDWR|O_NOCTTY|O_NONBLOCK|O_CLOEXEC
+    if (m < 0) { return xempty_list(); }
+    Int blk = xmalloc(160);
+    _ = resid_raw_fill(blk, 0, 160);
+    // 0 unlock flag / pts number, 8 winsize, 16 empty signal set, 24 sigaction (32 zero bytes), 64 slave path
+    Bool ok = resid_raw_syscall(16, m, 1074025521, blk, 0, 0, 0) == 0                  // TIOCSPTLCK 0
+        && resid_raw_syscall(16, m, 2147767344, blk, 0, 0, 0) == 0;                    // TIOCGPTN
+    _ = if (ok) { pts_path(blk + 64, ld32(blk)) } else { 0 };
+    _ = st16(blk + 8, clamp(rows, 1, 4096)) + st16(blk + 10, clamp(cols, 1, 4096));
+    _ = if (ok) { resid_raw_syscall(16, m, 21524, blk + 8, 0, 0, 0) } else { 0 };      // TIOCSWINSZ
+    Int argv = if (ok) { split_argv(cmd) } else { 0 };
+    if (argv == 0) { return c_free(blk) * 0 + sys_close(m) * 0 + xempty_list(); }
+    Int pid = c_fork();
+    if (pid == 0) { return pty_child(blk, argv); }
+    _ = c_free(blk) + free_argv(argv);
+    if (pid < 0) { return sys_close(m) * 0 + xempty_list(); }
+    Int slots = xmalloc(16);
+    _ = st64(slots, m + 18295873486192640) + st64(slots + 8, pid + 18295873486192640);
+    Int out = c_list_new(2, slots, resid_raw_addr("List"));
+    _ = c_free(slots);
+    return out;
+}
+
+// A little-endian 16-bit field.
+Int st16(Int a, Int v) { return st8(a, v & 255) + st8(a + 1, (v >> 8) & 255); }
+
+// "/dev/pts/N" at p.
+Int pts_path(Int p, Int n) {
+    _ = mcopy(p, resid_raw_addr("/dev/pts/"), 9);
+    Int len = digits_at(p + 9, n);
+    return st8(p + 9 + len, 0);
+}
+
+Int digits_at(Int p, Int n) {
+    if (n < 10) { return st8(p, 48 + n) * 0 + 1; }
+    Int k = digits_at(p, n / 10);
+    return st8(p + k, 48 + n % 10) * 0 + k + 1;
+}
+
+Int pty_child(Int blk, Int argv) {
+    _ = resid_raw_syscall(14, 2, blk + 16, 0, 8, 0, 0);                                // rt_sigprocmask(SIG_SETMASK, {})
+    _ = pty_default_signals(blk + 24, 1);
+    _ = resid_raw_syscall(112, 0, 0, 0, 0, 0, 0);                                      // setsid
+    Int s = resid_raw_syscall(257, 0 - 100, blk + 64, 2, 0, 0, 0);                     // O_RDWR: the controlling terminal
+    if (s < 0) { return resid_raw_syscall(231, 127, 0, 0, 0, 0, 0); }
+    _ = resid_raw_syscall(16, s, 21518, 0, 0, 0, 0);                                   // TIOCSCTTY
+    _ = sys_dup2(s, 0) + sys_dup2(s, 1) + sys_dup2(s, 2);
+    _ = if (s > 2) { sys_close(s) } else { 0 };
+    _ = c_execvp(ld64(argv), argv);
+    return resid_raw_syscall(231, 127, 0, 0, 0, 0, 0);
+}
+
+// SIG_DFL for signals 1..31 (handlers are reset by execve; ignored ones are not).
+Int pty_default_signals(Int sa, Int sig) {
+    if (sig > 31) { return 0; }
+    _ = if (sig == 9 || sig == 19) { 0 } else { resid_raw_syscall(13, sig, sa, 0, 8, 0, 0) };
+    return pty_default_signals(sa, sig + 1);
+}
+
+// The terminal's size as the program sees it (it gets SIGWINCH).
+@export("resid_pty_resize", "i8(i64,i64,i64)")
+pub Int rt_pty_resize(Int fd, Int rows, Int cols) {
+    if (!pty_master(fd)) { return 0; }
+    Int w = resid_raw_tls("pty_ws", 8);
+    _ = st64(w, 0) + st16(w, clamp(rows, 1, 4096)) + st16(w + 2, clamp(cols, 1, 4096));
+    return if (resid_raw_syscall(16, fd, 21524, w, 0, 0, 0) == 0) { 1 } else { 0 };
+}
+
+// What the program wrote, without waiting (poll first); empty when
+// nothing is waiting or the terminal closed (see resid_pty_wait).
+@export("resid_pty_read", "ptr(i64,i64)")
+pub Int rt_pty_read(Int fd, Int max0) {
+    Int max = if (pty_master(fd)) { clamp(max0, 0, 1048576) } else { 0 };
+    Int buf = xmalloc(if (max > 0) { max } else { 1 });
+    Int r = if (max > 0) { resid_raw_syscall(0, fd, buf, max, 0, 0, 0) } else { 0 };
+    Int n = if (r > 0) { r } else { 0 };
+    Int out = bl_from_bytes(n, buf);
+    _ = c_free_prefix(buf, n);
+    return out;
+}
+
+// Input for the program, without waiting: bytes taken, 0 when the
+// terminal's buffer is full, -1 on error.
+@export("resid_pty_write", "i64(i64,ptr)")
+pub Int rt_pty_write(Int fd, Int l) {
+    Int n0 = c_list_len(l);
+    if (!pty_master(fd)) { return 0 - 1; }
+    Int n = if (n0 > 1048576) { 1048576 } else { n0 };
+    if (n <= 0) { return 0; }
+    Int buf = xmalloc(n);
+    _ = bytes_of(l, buf, 0, n);
+    Int w = resid_raw_syscall(1, fd, buf, n, 0, 0, 0);
+    _ = c_free(buf);
+    return if (w >= 0) { w } else { if (w == 0 - 11) { 0 } else { 0 - 1 } };
+}
+
+// -1 while pid runs; then its exit code, or 128 + the signal that ended it.
+@export("resid_pty_wait", "i64(i64)")
+pub Int rt_pty_wait(Int pid) {
+    if (pid <= 0) { return 0 - 1; }
+    Int stp = resid_raw_tls("pty_status", 8);
+    _ = st64(stp, 0);
+    Int r = resid_raw_syscall(61, pid, stp, 1, 0, 0, 0);                               // wait4(WNOHANG)
+    if (r <= 0) { return if (r == 0) { 0 - 1 } else { 255 }; }
+    Int st = ld32(stp);
+    return if ((st & 127) == 0) { (st >> 8) & 255 } else { 128 + (st & 127) };
+}
+
+// Closes the master: the session's processes get SIGHUP.
+@export("resid_pty_close", "i8(i64)")
+pub Int rt_pty_close(Int fd) {
+    if (!pty_master(fd)) { return 0; }
+    return if (sys_close(fd) == 0) { 1 } else { 0 };
+}
+
+// A pseudo-terminal master made here (TIOCGPTN answers only on a master).
+Bool pty_master(Int fd) {
+    if (fd < 0 || fd > 2147483647) { return false; }
+    return resid_raw_syscall(16, fd, 2147767344, resid_raw_tls("pty_n", 8), 0, 0, 0) == 0;
 }
 
 // git rev-parse through sh -c (git provider).

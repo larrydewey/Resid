@@ -2822,6 +2822,31 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_crypto_random_byte expects no arguments"};
     }
+    // Pseudo-terminals (pylond's terminal sessions).
+    if (name == "resid_pty_spawn") {
+        if (builtin_args(argtys, "Str,Int,Int")) { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_pty_spawn expects (Str, Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_pty_resize") {
+        if (builtin_args(argtys, "Int,Int,Int")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_pty_resize expects (Int, Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_pty_read") {
+        if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_pty_read expects (Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_pty_write") {
+        if (builtin_args(argtys, "Int,List(Int)")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_pty_write expects (Int, List(Int)), got (" + argtys + ")"};
+    }
+    if (name == "resid_pty_wait") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_pty_wait expects (Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_pty_close") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_pty_close expects (Int), got (" + argtys + ")"};
+    }
     // Native debugging (resid-debug's ptrace backend).
     if (name == "resid_dbg_spawn") {
         if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }

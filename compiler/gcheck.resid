@@ -4338,7 +4338,7 @@ Str gk_builtin_family(Str n) {
     if (n == "assumed") { return "assume"; }
     if (str_starts_with(n, "resid_disp_")) { return "display"; }
     if (str_starts_with(n, "resid_tcp_") || str_starts_with(n, "resid_unix_") || str_starts_with(n, "resid_udp_")) { return "network"; }
-    if (str_starts_with(n, "resid_dbg_")) { return "process"; }
+    if (str_starts_with(n, "resid_dbg_") || str_starts_with(n, "resid_pty_")) { return "process"; }
     if (str_starts_with(n, "resid_term_")) { return "terminal"; }
     if (str_starts_with(n, "resid_clock_")) { return "clock"; }
     if (n == "resid_device_call" || n == "resid_device_call_w" || n == "resid_device_secret") { return "device"; }

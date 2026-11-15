@@ -1,0 +1,38 @@
+// A command on a pseudo-terminal: its output arrives through the master
+// with the terminal's newline translation, its size is what the master
+// set, input written to the master reaches it, and its exit code is
+// reported once it ends.
+type Done = { List(Int) out; Int code; };
+
+// Output until the program has exited and nothing is left; its exit code
+// (reported once: the wait reaps it).
+@requires(process, network)
+Done drain(Int m, Int pid, List(Int) acc, Int spins) {
+    List(Int) ready = resid_tcp_poll([m], [1], 200);
+    List(Int) got = resid_pty_read(m, 4096);
+    if (got.len() > 0) { return drain(m, pid, acc.concat(got), spins); }
+    Int code = resid_pty_wait(pid);
+    if (code >= 0 || spins <= 0) { return Done {.out = acc, .code = code}; }
+    return drain(m, pid, acc, spins - 1);
+}
+
+Str text(List(Int) b) { return text_at(b, 0, ""); }
+
+Str text_at(List(Int) b, Int i, Str acc) { if (i >= b.len()) { return acc; } return text_at(b, i + 1, acc + str_from_code(b[i])); }
+
+@requires(process, network)
+Int main() {
+    List(Int) p = resid_pty_spawn("stty size", 33, 101);
+    Done d = drain(p[0], p[1], [], 50);
+    List(Int) out = d.out;
+    Int code = d.code;
+    List(Int) q = resid_pty_spawn("head -c 6", 24, 80);
+    Int took = resid_pty_write(q[0], [104, 101, 108, 108, 111, 10]);
+    List(Int) echo = drain(q[0], q[1], [], 50).out;
+    Bool closed = resid_pty_close(p[0]) && resid_pty_close(q[0]);
+    List(Int) none = resid_pty_spawn("", 24, 80);
+    Bool echoed = str_contains(text(echo), "hello");
+    Int bad = resid_pty_read(-1, 10).len();
+    println(f"{p.len()} {str_trim(text(out))} {code} {took} {echoed} {closed} {none.len()} {bad}");
+    return 0;
+}
