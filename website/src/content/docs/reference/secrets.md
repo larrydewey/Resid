@@ -198,6 +198,19 @@ List(Int) sig = ecdsag_sign(P256, Sha256, d, msg);           // published: needs
 List(Secret(UInt(8))) z = ecdhg(P384, d384, peer_public_key); // stays secret
 ```
 
+`lib/keccakg.resid` is SHA3-256, SHA3-512, SHAKE128 and SHAKE256 (FIPS 202),
+generic over `Word64(W, B)` with the 25-lane state in a record.
+`lib/mlkem.resid` is ML-KEM-768 (FIPS 203) on `Secret(Int(32))`
+coefficients: the encapsulation key and ciphertexts are published, and
+decapsulation's implicit rejection chooses its key with `ct_pick_bytes`
+on a secret condition, so whether a ciphertext was valid stays secret.
+
+```text
+MlkemKeys keys = mlkem768_keygen();                         // ek public, dk secret
+MlkemEncaps e = mlkem768_encaps(keys.ek);                   // e.ct public, e.k secret
+List(Secret(UInt(8))) k = mlkem768_decaps(keys.dk, e.ct);   // equal to e.k
+```
+
 `lib/ed25519g.resid` is Ed25519 key generation and signing (RFC 8032),
 generic over `Wide512(P, B)` (field elements and scalars) and
 `Word64(W, B)` (SHA-512 of the seed); `lib/ed25519.resid`'s API,

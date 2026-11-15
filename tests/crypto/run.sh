@@ -170,6 +170,16 @@ else
     fail=$((fail + 1)); echo "FAIL rsasign: $(grep -m3 -E 'error|expected|actual' "$W/rsasign.log" | tr '\n' ' ')"
 fi
 
+# SHA-3 / SHAKE (lib/keccakg.resid) against hashlib, and ML-KEM-768
+# (lib/mlkem.resid) against OpenSSL through cryptography (gen_sha3_mlkem.py).
+for t in sha3 mlkem; do
+    if (cd "$ROOT" && "$COMPILER" test tests/crypto/${t}_test.resid) > "$W/$t.log" 2>&1 && grep -q "Failures: 0 " "$W/$t.log"; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL $t: $(grep -m3 -E 'error|expected|actual' "$W/$t.log" | tr '\n' ' ')"
+    fi
+done
+
 # CTAP2 and CBOR values (lib/ctap2.resid, lib/cborv.resid) against
 # python-fido2 and an authenticator written from the specification
 # (tools/gen_ctap2_ref.py).

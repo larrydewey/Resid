@@ -1,0 +1,412 @@
+// mlkem.resid — ML-KEM-768 (FIPS 203): key generation, encapsulation and
+// decapsulation.
+//
+// The arithmetic follows the Kyber reference implementation (Montgomery
+// and Barrett reduction, the NTT, the compression formulas), the key
+// schedule FIPS 203 (G(d || k), no hashing of m, implicit rejection with
+// J(z || c)). Every coefficient that depends on a secret is a
+// Secret(Int(32)), and secret bytes are Secret(UInt(8)): the compiler
+// checks that nothing branches on, indexes by or publishes them. Public
+// inputs (the matrix A, a ciphertext) are lifted into the secret domain.
+// What becomes public is named: the encapsulation key and a ciphertext.
+// Decapsulation's re-encryption check stays secret: the two candidate
+// keys are chosen with ct_pick_bytes on a secret condition, so whether a
+// ciphertext was valid is never revealed (the comparison timing is what
+// FO-transform attacks exploit).
+//
+// Sizes: ek 1184 bytes, dk 2400, ciphertext 1088, shared secret 32.
+
+import "word.resid";
+import "keccakg.resid";
+import "random.resid";
+
+pub type MlkemKeys = { List(Int) ek; List(Secret(UInt(8))) dk; };
+pub type MlkemEncaps = { List(Int) ct; List(Secret(UInt(8))) k; };
+
+Int mk_k() { return 3; }
+
+List(Int) mk_zetas() { return [-1044, -758, -359, -1517, 1493, 1422, 287, 202, -171, 622, 1577, 182, 962, -1202, -1474, 1468, 573, -1325, 264, 383, -829, 1458, -1602, -130, -681, 1017, 732, 608, -1542, 411, -205, -1571, 1223, 652, -552, 1015, -1293, 1491, -282, -1544, 516, -8, -320, -666, -1618, -1162, 126, 1469, -853, -90, -271, 830, 107, -1421, -247, -951, -398, 961, -1508, -725, 448, -1065, 677, -1275, -1103, 430, 555, 843, -1251, 871, 1550, 105, 422, 587, 177, -235, -291, -460, 1574, 1653, -246, 778, 1159, -147, -777, 1483, -602, 1119, -1590, 644, -872, 349, 418, 329, -156, -75, 817, 1097, 603, 610, 1322, -1285, -1465, 384, -1215, -136, 1218, -1335, -874, 220, -1187, -1659, -1185, -1530, -1278, 794, -1510, -854, -870, 478, -108, -308, 996, 991, 958, -1460, 1522, 1628]; }
+
+// ─── Reduction ───────────────────────────────────────────────────────
+
+// a * 2^-16 mod q, for |a| < q * 2^15 (Montgomery).
+Secret(Int(32)) mk_mont(Secret(Int(32)) a) {
+    Secret(Int(32)) u = wrapping_mul(a, (Int(32)) -3327);
+    Secret(Int(32)) t = wrapping_mul(u, (Int(32)) 65536) >> (Int(32)) 16;
+    return wrapping_sub(a, wrapping_mul(t, (Int(32)) 3329)) >> (Int(32)) 16;
+}
+
+Secret(Int(32)) mk_fqmul(Secret(Int(32)) a, Secret(Int(32)) b) { return mk_mont(wrapping_mul(a, b)); }
+
+// The centred representative mod q, for |a| < 2^15 (Barrett).
+Secret(Int(32)) mk_barrett(Secret(Int(32)) a) {
+    Secret(Int(32)) t = wrapping_add(wrapping_mul(a, (Int(32)) 20159), (Int(32)) 33554432) >> (Int(32)) 26;
+    return wrapping_sub(a, wrapping_mul(t, (Int(32)) 3329));
+}
+
+// From (-q, q) to [0, q), with a sign mask.
+Secret(Int(32)) mk_cano(Secret(Int(32)) a) { return wrapping_add(a, (a >> (Int(32)) 31) & (Int(32)) 3329); }
+
+Secret(Int(32)) mk_c(Int v) { return classify(wrapping_i32(v)); }
+
+// ─── Polynomials (256 coefficients) ──────────────────────────────────
+
+List(Secret(Int(32))) mk_map_barrett(List(Secret(Int(32))) a, Int i, ListBuf(Secret(Int(32))) out) {
+    if (i >= 256) { return out.finish(); }
+    return mk_map_barrett(a, i + 1, out.push(mk_barrett(a[i])));
+}
+
+List(Secret(Int(32))) mk_reduce(List(Secret(Int(32))) a) { return mk_map_barrett(a, 0, ListBuf()); }
+
+List(Secret(Int(32))) mk_add(List(Secret(Int(32))) a, List(Secret(Int(32))) b, Int i, ListBuf(Secret(Int(32))) out) {
+    if (i >= 256) { return out.finish(); }
+    return mk_add(a, b, i + 1, out.push(wrapping_add(a[i], b[i])));
+}
+
+List(Secret(Int(32))) mk_sub(List(Secret(Int(32))) a, List(Secret(Int(32))) b, Int i, ListBuf(Secret(Int(32))) out) {
+    if (i >= 256) { return out.finish(); }
+    return mk_sub(a, b, i + 1, out.push(wrapping_sub(a[i], b[i])));
+}
+
+// One forward NTT layer: blocks of 2 * len, zeta index 128 / len + block.
+List(Secret(Int(32))) mk_ntt_layer(List(Secret(Int(32))) r, Int len, List(Int) z, Int j, ListBuf(Secret(Int(32))) out) {
+    if (j >= 256) { return out.finish(); }
+    Secret(Int(32)) zeta = mk_c(z[128 / len + j / (2 * len)]);
+    Bool low = j % (2 * len) < len;
+    Secret(Int(32)) v = if (low) { wrapping_add(r[j], mk_fqmul(zeta, r[j + len])) } else { wrapping_sub(r[j - len], mk_fqmul(zeta, r[j])) };
+    return mk_ntt_layer(r, len, z, j + 1, out.push(v));
+}
+
+List(Secret(Int(32))) mk_ntt_from(List(Secret(Int(32))) r, Int len, List(Int) z) {
+    if (len < 2) { return r; }
+    return mk_ntt_from(mk_ntt_layer(r, len, z, 0, ListBuf()), len / 2, z);
+}
+
+List(Secret(Int(32))) mk_ntt(List(Secret(Int(32))) r) { return mk_reduce(mk_ntt_from(r, 128, mk_zetas())); }
+
+// One inverse layer: zeta index 256 / len - 1 - block.
+List(Secret(Int(32))) mk_inv_layer(List(Secret(Int(32))) r, Int len, List(Int) z, Int j, ListBuf(Secret(Int(32))) out) {
+    if (j >= 256) { return out.finish(); }
+    Secret(Int(32)) zeta = mk_c(z[256 / len - 1 - j / (2 * len)]);
+    Bool low = j % (2 * len) < len;
+    Secret(Int(32)) v = if (low) { mk_barrett(wrapping_add(r[j], r[j + len])) } else { mk_fqmul(zeta, wrapping_sub(r[j], r[j - len])) };
+    return mk_inv_layer(r, len, z, j + 1, out.push(v));
+}
+
+List(Secret(Int(32))) mk_inv_from(List(Secret(Int(32))) r, Int len, List(Int) z) {
+    if (len > 128) { return r; }
+    return mk_inv_from(mk_inv_layer(r, len, z, 0, ListBuf()), len * 2, z);
+}
+
+List(Secret(Int(32))) mk_scale(List(Secret(Int(32))) a, Secret(Int(32)) f, Int i, ListBuf(Secret(Int(32))) out) {
+    if (i >= 256) { return out.finish(); }
+    return mk_scale(a, f, i + 1, out.push(mk_fqmul(a[i], f)));
+}
+
+// The inverse NTT, multiplied by the Montgomery factor (reference
+// invntt_tomont: f = mont^2 / 128).
+List(Secret(Int(32))) mk_invntt(List(Secret(Int(32))) r) { return mk_scale(mk_inv_from(r, 2, mk_zetas()), mk_c(1441), 0, ListBuf()); }
+
+// Multiply into the Montgomery domain (reference poly_tomont).
+List(Secret(Int(32))) mk_tomont(List(Secret(Int(32))) a) { return mk_scale(a, mk_c(1353), 0, ListBuf()); }
+
+// Products in the NTT domain: pairs (a0 + a1 X)(b0 + b1 X) mod X^2 - zeta.
+List(Secret(Int(32))) mk_basemul(List(Secret(Int(32))) a, List(Secret(Int(32))) b, List(Int) z, Int j, ListBuf(Secret(Int(32))) out) {
+    if (j >= 256) { return out.finish(); }
+    Int p = j - j % 2;
+    Int zi = z[64 + j / 4];
+    Secret(Int(32)) zeta = mk_c(if (j % 4 < 2) { zi } else { 0 - zi });
+    Secret(Int(32)) v = if (j % 2 == 0) {
+        wrapping_add(mk_fqmul(mk_fqmul(a[p + 1], b[p + 1]), zeta), mk_fqmul(a[p], b[p]))
+    } else {
+        wrapping_add(mk_fqmul(a[p], b[p + 1]), mk_fqmul(a[p + 1], b[p]))
+    };
+    return mk_basemul(a, b, z, j + 1, out.push(v));
+}
+
+// Sum over i of a[i] * b[i] in the NTT domain, reduced.
+List(Secret(Int(32))) mk_dot(List(List(Secret(Int(32)))) a, List(List(Secret(Int(32)))) b) {
+    List(Int) z = mk_zetas();
+    List(Secret(Int(32))) p0 = mk_basemul(a[0], b[0], z, 0, ListBuf());
+    List(Secret(Int(32))) p1 = mk_add(p0, mk_basemul(a[1], b[1], z, 0, ListBuf()), 0, ListBuf());
+    List(Secret(Int(32))) p2 = mk_add(p1, mk_basemul(a[2], b[2], z, 0, ListBuf()), 0, ListBuf());
+    return mk_reduce(p2);
+}
+
+// ─── Sampling ────────────────────────────────────────────────────────
+
+// SampleNTT: rejection sampling from SHAKE128(rho || x || y), public.
+List(Int) mk_sample(List(Int) rho, Int x, Int y, Int n) {
+    List(Int) s = shake128g(rho.concat([x, y]), n);
+    List(Int) r = mk_rej(s, 0, []);
+    if (r.len() >= 256) { return r[0..256]; }
+    return mk_sample(rho, x, y, n * 2);
+}
+
+List(Int) mk_rej(List(Int) s, Int i, List(Int) acc) {
+    if (acc.len() >= 256 || i + 3 > s.len()) { return acc; }
+    Int d1 = s[i] + 256 * (s[i + 1] % 16);
+    Int d2 = s[i + 1] / 16 + 16 * s[i + 2];
+    List(Int) a1 = if (d1 < 3329) { acc.concat([d1]) } else { acc };
+    List(Int) a2 = if (d2 < 3329 && a1.len() < 256) { a1.concat([d2]) } else { a1 };
+    return mk_rej(s, i + 3, a2);
+}
+
+List(Secret(Int(32))) mk_lift_poly(List(Int) p, Int i, ListBuf(Secret(Int(32))) out) {
+    if (i >= 256) { return out.finish(); }
+    return mk_lift_poly(p, i + 1, out.push(mk_c(p[i])));
+}
+
+// Row-major A-hat: entry (i, j) from rho || j || i; the transpose swaps.
+List(List(Secret(Int(32)))) mk_row(List(Int) rho, Int i, Bool transposed) {
+    List(Secret(Int(32))) e0 = mk_lift_poly(if (transposed) { mk_sample(rho, i, 0, 840) } else { mk_sample(rho, 0, i, 840) }, 0, ListBuf());
+    List(Secret(Int(32))) e1 = mk_lift_poly(if (transposed) { mk_sample(rho, i, 1, 840) } else { mk_sample(rho, 1, i, 840) }, 0, ListBuf());
+    List(Secret(Int(32))) e2 = mk_lift_poly(if (transposed) { mk_sample(rho, i, 2, 840) } else { mk_sample(rho, 2, i, 840) }, 0, ListBuf());
+    return [e0, e1, e2];
+}
+
+// CBD with eta = 2 from PRF(sigma, n) = SHAKE256(sigma || n, 128).
+List(Secret(Int(32))) mk_cbd(List(Secret(UInt(8))) sigma, Int n) {
+    List(Secret(UInt(8))) buf = shake256g(sigma.concat([classify((UInt(8)) n)]), 128);
+    return mk_cbd_at(buf, 0, ListBuf());
+}
+
+List(Secret(Int(32))) mk_cbd_at(List(Secret(UInt(8))) buf, Int i, ListBuf(Secret(Int(32))) out) {
+    if (i >= 32) { return out.finish(); }
+    Secret(UInt(32)) t = (UInt(32)) buf[4 * i] | ((UInt(32)) buf[4 * i + 1] << (UInt(32)) 8) | ((UInt(32)) buf[4 * i + 2] << (UInt(32)) 16) | ((UInt(32)) buf[4 * i + 3] << (UInt(32)) 24);
+    Secret(UInt(32)) d = wrapping_uadd(t & (UInt(32)) 1431655765, (t >> (UInt(32)) 1) & (UInt(32)) 1431655765);
+    return mk_cbd_at(buf, i + 1, mk_cbd8(d, 0, out));
+}
+
+ListBuf(Secret(Int(32))) mk_cbd8(Secret(UInt(32)) d, Int j, ListBuf(Secret(Int(32))) out) {
+    if (j >= 8) { return out; }
+    Secret(Int(32)) a = wrapping_i32((d >> wrapping_u32(4 * j)) & (UInt(32)) 3);
+    Secret(Int(32)) b = wrapping_i32((d >> wrapping_u32(4 * j + 2)) & (UInt(32)) 3);
+    return mk_cbd8(d, j + 1, out.push(wrapping_sub(a, b)));
+}
+
+// ─── Encodings ───────────────────────────────────────────────────────
+
+ListBuf(Secret(UInt(8))) mk_enc12(List(Secret(Int(32))) p, Int i, ListBuf(Secret(UInt(8))) out) {
+    if (i >= 128) { return out; }
+    Secret(Int(32)) a = mk_cano(p[2 * i]);
+    Secret(Int(32)) b = mk_cano(p[2 * i + 1]);
+    ListBuf(Secret(UInt(8))) o1 = out.push(wrapping_u8(a));
+    ListBuf(Secret(UInt(8))) o2 = o1.push(wrapping_u8((a >> (Int(32)) 8) | ((b & (Int(32)) 15) << (Int(32)) 4)));
+    return mk_enc12(p, i + 1, o2.push(wrapping_u8(b >> (Int(32)) 4)));
+}
+
+List(Secret(UInt(8))) mk_enc12v(List(List(Secret(Int(32)))) v) {
+    ListBuf(Secret(UInt(8))) b0 = ListBuf();
+    return mk_enc12(v[2], 0, mk_enc12(v[1], 0, mk_enc12(v[0], 0, b0))).finish();
+}
+
+List(Secret(Int(32))) mk_dec12s(List(Secret(UInt(8))) b, Int off, Int i, ListBuf(Secret(Int(32))) out) {
+    if (i >= 128) { return out.finish(); }
+    Secret(Int(32)) b0 = (Int(32)) b[off + 3 * i];
+    Secret(Int(32)) b1 = (Int(32)) b[off + 3 * i + 1];
+    Secret(Int(32)) b2 = (Int(32)) b[off + 3 * i + 2];
+    Secret(Int(32)) x = b0 | ((b1 & (Int(32)) 15) << (Int(32)) 8);
+    Secret(Int(32)) y = (b1 >> (Int(32)) 4) | (b2 << (Int(32)) 4);
+    return mk_dec12s(b, off, i + 1, out.push(x).push(y));
+}
+
+List(Int) mk_dec12p(List(Int) b, Int off, Int i, List(Int) acc) {
+    if (i >= 128) { return acc; }
+    Int b0 = b[off + 3 * i];
+    Int b1 = b[off + 3 * i + 1];
+    Int b2 = b[off + 3 * i + 2];
+    return mk_dec12p(b, off, i + 1, acc.concat([b0 + 256 * (b1 % 16), b1 / 16 + 16 * b2]));
+}
+
+// Compress_10 of a polynomial vector: four coefficients per five bytes.
+ListBuf(Secret(UInt(8))) mk_comp10(List(Secret(Int(32))) p, Int i, ListBuf(Secret(UInt(8))) out) {
+    if (i >= 64) { return out; }
+    Secret(Int(32)) t0 = mk_c10(p[4 * i]);
+    Secret(Int(32)) t1 = mk_c10(p[4 * i + 1]);
+    Secret(Int(32)) t2 = mk_c10(p[4 * i + 2]);
+    Secret(Int(32)) t3 = mk_c10(p[4 * i + 3]);
+    ListBuf(Secret(UInt(8))) o = out.push(wrapping_u8(t0)).push(wrapping_u8((t0 >> (Int(32)) 8) | (t1 << (Int(32)) 2)))
+        .push(wrapping_u8((t1 >> (Int(32)) 6) | (t2 << (Int(32)) 4))).push(wrapping_u8((t2 >> (Int(32)) 4) | (t3 << (Int(32)) 6))).push(wrapping_u8(t3 >> (Int(32)) 2));
+    return mk_comp10(p, i + 1, o);
+}
+
+Secret(Int(32)) mk_c10(Secret(Int(32)) c) {
+    Secret(Int(64)) d = (Int(64)) mk_cano(c);
+    Secret(Int(64)) e = wrapping_mul(wrapping_add(wrapping_mul(d, (Int(64)) 1024), (Int(64)) 1665), (Int(64)) 1290167) >> (Int(64)) 32;
+    return wrapping_i32(e & (Int(64)) 1023);
+}
+
+ListBuf(Secret(UInt(8))) mk_comp4(List(Secret(Int(32))) p, Int i, ListBuf(Secret(UInt(8))) out) {
+    if (i >= 128) { return out; }
+    return mk_comp4(p, i + 1, out.push(wrapping_u8(mk_c4(p[2 * i]) | (mk_c4(p[2 * i + 1]) << (Int(32)) 4))));
+}
+
+Secret(Int(32)) mk_c4(Secret(Int(32)) c) {
+    Secret(Int(64)) d = (Int(64)) mk_cano(c);
+    Secret(Int(64)) e = wrapping_mul(wrapping_add(wrapping_mul(d, (Int(64)) 16), (Int(64)) 1665), (Int(64)) 80635) >> (Int(64)) 28;
+    return wrapping_i32(e & (Int(64)) 15);
+}
+
+// Decompress from public ciphertext bytes.
+List(Int) mk_dec10(List(Int) c, Int off, Int i, List(Int) acc) {
+    if (i >= 64) { return acc; }
+    Int o = off + 5 * i;
+    Int t0 = (c[o] + 256 * c[o + 1]) % 1024;
+    Int t1 = (c[o + 1] / 4 + 64 * c[o + 2]) % 1024;
+    Int t2 = (c[o + 2] / 16 + 16 * c[o + 3]) % 1024;
+    Int t3 = (c[o + 3] / 64 + 4 * c[o + 4]) % 1024;
+    return mk_dec10(c, off, i + 1, acc.concat([(t0 * 3329 + 512) / 1024, (t1 * 3329 + 512) / 1024, (t2 * 3329 + 512) / 1024, (t3 * 3329 + 512) / 1024]));
+}
+
+List(Int) mk_dec4(List(Int) c, Int off, Int i, List(Int) acc) {
+    if (i >= 128) { return acc; }
+    Int b = c[off + i];
+    return mk_dec4(c, off, i + 1, acc.concat([((b % 16) * 3329 + 8) / 16, ((b / 16) * 3329 + 8) / 16]));
+}
+
+// The message as a polynomial: each bit to 0 or (q + 1) / 2, by a mask.
+List(Secret(Int(32))) mk_frommsg(List(Secret(UInt(8))) m, Int i, ListBuf(Secret(Int(32))) out) {
+    if (i >= 256) { return out.finish(); }
+    Secret(Int(32)) bit = (Int(32)) ((m[i / 8] >> wrapping_u8(i % 8)) & (UInt(8)) 1);
+    return mk_frommsg(m, i + 1, out.push(wrapping_sub((Int(32)) 0, bit) & (Int(32)) 1665));
+}
+
+List(Secret(UInt(8))) mk_tomsg(List(Secret(Int(32))) p, Int i, ListBuf(Secret(UInt(8))) out) {
+    if (i >= 32) { return out.finish(); }
+    return mk_tomsg(p, i + 1, out.push(mk_tobyte(p, i, 0, classify((UInt(8)) 0))));
+}
+
+Secret(UInt(8)) mk_tobyte(List(Secret(Int(32))) p, Int i, Int j, Secret(UInt(8)) acc) {
+    if (j >= 8) { return acc; }
+    Secret(Int(64)) d = (Int(64)) mk_cano(p[8 * i + j]);
+    Secret(Int(64)) e = (wrapping_mul(wrapping_add(wrapping_mul(d, (Int(64)) 2), (Int(64)) 1665), (Int(64)) 80635) >> (Int(64)) 28) & (Int(64)) 1;
+    return mk_tobyte(p, i, j + 1, acc | (wrapping_u8(e) << wrapping_u8(j)));
+}
+
+// ─── K-PKE ───────────────────────────────────────────────────────────
+
+List(List(Secret(Int(32)))) mk_vec(List(Secret(UInt(8))) seed, Int n0) {
+    return [mk_cbd(seed, n0), mk_cbd(seed, n0 + 1), mk_cbd(seed, n0 + 2)];
+}
+
+List(List(Secret(Int(32)))) mk_vntt(List(List(Secret(Int(32)))) v) { return [mk_ntt(v[0]), mk_ntt(v[1]), mk_ntt(v[2])]; }
+
+// Encrypt the 32-byte message m with coins r under ek; the ciphertext
+// stays secret (decapsulation compares it before anything is published).
+List(Secret(UInt(8))) mk_encrypt(List(Int) ek, List(Secret(UInt(8))) m, List(Secret(UInt(8))) r) {
+    List(Int) rho = ek[1152..1184];
+    List(List(Secret(Int(32)))) t = [mk_lift_poly(mk_dec12p(ek, 0, 0, []), 0, ListBuf()), mk_lift_poly(mk_dec12p(ek, 384, 0, []), 0, ListBuf()), mk_lift_poly(mk_dec12p(ek, 768, 0, []), 0, ListBuf())];
+    List(List(Secret(Int(32)))) y = mk_vntt(mk_vec(r, 0));
+    List(List(Secret(Int(32)))) e1 = mk_vec(r, 3);
+    List(Secret(Int(32))) e2 = mk_cbd(r, 6);
+    List(Secret(Int(32))) u0 = mk_reduce(mk_add(mk_invntt(mk_dot(mk_row(rho, 0, true), y)), e1[0], 0, ListBuf()));
+    List(Secret(Int(32))) u1 = mk_reduce(mk_add(mk_invntt(mk_dot(mk_row(rho, 1, true), y)), e1[1], 0, ListBuf()));
+    List(Secret(Int(32))) u2 = mk_reduce(mk_add(mk_invntt(mk_dot(mk_row(rho, 2, true), y)), e1[2], 0, ListBuf()));
+    List(Secret(Int(32))) v0 = mk_add(mk_add(mk_invntt(mk_dot(t, y)), e2, 0, ListBuf()), mk_frommsg(m, 0, ListBuf()), 0, ListBuf());
+    List(Secret(Int(32))) v = mk_reduce(v0);
+    ListBuf(Secret(UInt(8))) b0 = ListBuf();
+    return mk_comp4(v, 0, mk_comp10(u2, 0, mk_comp10(u1, 0, mk_comp10(u0, 0, b0)))).finish();
+}
+
+List(Secret(UInt(8))) mk_decrypt(List(Secret(UInt(8))) dk, List(Int) c) {
+    List(List(Secret(Int(32)))) s = [mk_dec12s(dk, 0, 0, ListBuf()), mk_dec12s(dk, 384, 0, ListBuf()), mk_dec12s(dk, 768, 0, ListBuf())];
+    List(List(Secret(Int(32)))) u = mk_vntt([mk_lift_poly(mk_dec10(c, 0, 0, []), 0, ListBuf()), mk_lift_poly(mk_dec10(c, 320, 0, []), 0, ListBuf()), mk_lift_poly(mk_dec10(c, 640, 0, []), 0, ListBuf())]);
+    List(Secret(Int(32))) v = mk_lift_poly(mk_dec4(c, 960, 0, []), 0, ListBuf());
+    List(Secret(Int(32))) w = mk_reduce(mk_sub(v, mk_invntt(mk_dot(s, u)), 0, ListBuf()));
+    return mk_tomsg(w, 0, ListBuf());
+}
+
+// ─── ML-KEM ──────────────────────────────────────────────────────────
+
+@requires(declassify)
+List(Int) mk_pub(List(Secret(UInt(8))) b) { return mk_ints(declassify(secret_join(b), "ML-KEM encapsulation key or ciphertext: public by design"), 0, ListBuf()); }
+
+List(Int) mk_ints(List(UInt(8)) b, Int i, ListBuf(Int) out) {
+    if (i >= b.len()) { return out.finish(); }
+    // Published: defined again for tests/ct's valgrind run (ct_public).
+    return mk_ints(b, i + 1, out.push(ct_public((Int) b[i])));
+}
+
+List(Secret(UInt(8))) mk_lift_bytes(List(Int) b, Int i, ListBuf(Secret(UInt(8))) out) {
+    if (i >= b.len()) { return out.finish(); }
+    return mk_lift_bytes(b, i + 1, out.push(classify(wrapping_u8(b[i]))));
+}
+
+/// ML-KEM-768 key generation from the seeds d and z (32 bytes each), as
+/// FIPS 203 ML-KEM.KeyGen_internal: for known-answer tests; use
+/// mlkem768_keygen() otherwise.
+@requires(declassify)
+pub MlkemKeys mlkem768_keygen_internal(List(Secret(UInt(8))) d, List(Secret(UInt(8))) z) {
+    List(Secret(UInt(8))) g = sha3_512g(d.concat([classify((UInt(8)) 3)]));
+    List(Int) rho = mk_pub(g[0..32]);
+    List(Secret(UInt(8))) sigma = g[32..64];
+    List(List(Secret(Int(32)))) s = mk_vntt(mk_vec(sigma, 0));
+    List(List(Secret(Int(32)))) e = mk_vntt(mk_vec(sigma, 3));
+    List(Secret(Int(32))) t0 = mk_reduce(mk_add(mk_tomont(mk_dot(mk_row(rho, 0, false), s)), e[0], 0, ListBuf()));
+    List(Secret(Int(32))) t1 = mk_reduce(mk_add(mk_tomont(mk_dot(mk_row(rho, 1, false), s)), e[1], 0, ListBuf()));
+    List(Secret(Int(32))) t2 = mk_reduce(mk_add(mk_tomont(mk_dot(mk_row(rho, 2, false), s)), e[2], 0, ListBuf()));
+    List(Int) ek = mk_pub(mk_enc12v([t0, t1, t2])).concat(rho);
+    List(Secret(UInt(8))) ekb = mk_lift_bytes(ek, 0, ListBuf());
+    List(Secret(UInt(8))) dk = mk_enc12v(s).concat(ekb).concat(sha3_256g(ekb)).concat(z);
+    return MlkemKeys {.ek = ek, .dk = dk};
+}
+
+/// A fresh ML-KEM-768 key pair.
+@requires(declassify)
+pub MlkemKeys mlkem768_keygen() { return mlkem768_keygen_internal(random_secret(32), random_secret(32)); }
+
+// FIPS 203 7.2 input check: ek decodes to coefficients below q.
+Bool mk_ek_ok(List(Int) ek) {
+    if (ek.len() != 1184) { return false; }
+    return mk_below_q(mk_dec12p(ek, 0, 0, []).concat(mk_dec12p(ek, 384, 0, [])).concat(mk_dec12p(ek, 768, 0, [])), 0);
+}
+
+Bool mk_below_q(List(Int) xs, Int i) {
+    if (i >= xs.len()) { return true; }
+    if (xs[i] >= 3329) { return false; }
+    return mk_below_q(xs, i + 1);
+}
+
+/// Encapsulation with the message m (32 bytes), as FIPS 203
+/// ML-KEM.Encaps_internal: for known-answer tests. The ciphertext is
+/// empty when ek fails the input check.
+@requires(declassify)
+pub MlkemEncaps mlkem768_encaps_internal(List(Int) ek, List(Secret(UInt(8))) m) {
+    List(Secret(UInt(8))) none = [];
+    if (!mk_ek_ok(ek)) { return MlkemEncaps {.ct = [], .k = none}; }
+    List(Secret(UInt(8))) ekb = mk_lift_bytes(ek, 0, ListBuf());
+    List(Secret(UInt(8))) g = sha3_512g(m.concat(sha3_256g(ekb)));
+    List(Secret(UInt(8))) c = mk_encrypt(ek, m, g[32..64]);
+    return MlkemEncaps {.ct = mk_pub(c), .k = g[0..32]};
+}
+
+/// Encapsulate a fresh shared secret to ek.
+@requires(declassify)
+pub MlkemEncaps mlkem768_encaps(List(Int) ek) { return mlkem768_encaps_internal(ek, random_secret(32)); }
+
+// 0 when the secret byte lists are equal, else non-zero, with no branch.
+Secret(UInt(8)) mk_diff(List(Secret(UInt(8))) a, List(Secret(UInt(8))) b, Int i, Secret(UInt(8)) acc) {
+    if (i >= a.len()) { return acc; }
+    return mk_diff(a, b, i + 1, acc | (a[i] ^ b[i]));
+}
+
+/// The 32-byte shared secret for ciphertext c under the decapsulation
+/// key dk (implicit rejection: a ciphertext that does not re-encrypt to
+/// itself yields J(z || c), and which one was chosen is never revealed).
+/// Empty for a ciphertext or key of the wrong length.
+@requires(declassify)
+pub List(Secret(UInt(8))) mlkem768_decaps(List(Secret(UInt(8))) dk, List(Int) c) {
+    List(Secret(UInt(8))) none = [];
+    if (dk.len() != 2400 || c.len() != 1088) { return none; }
+    List(Int) ek = mk_pub(dk[1152..2336]);
+    List(Secret(UInt(8))) h = dk[2336..2368];
+    List(Secret(UInt(8))) z = dk[2368..2400];
+    List(Secret(UInt(8))) m = mk_decrypt(dk[0..1152], c);
+    List(Secret(UInt(8))) g = sha3_512g(m.concat(h));
+    List(Secret(UInt(8))) cb = mk_lift_bytes(c, 0, ListBuf());
+    List(Secret(UInt(8))) kbar = shake256g(z.concat(cb), 32);
+    List(Secret(UInt(8))) c2 = mk_encrypt(ek, m, g[32..64]);
+    Secret(Bool) differs = ct_nonzero(mk_diff(c2, cb, 0, classify((UInt(8)) 0)));
+    return ct_pick_bytes(differs, kbar, g[0..32]);
+}
