@@ -1,0 +1,7 @@
+// `accessibility` has no modes: the bus is reached in full or not at all,
+// so `accessibility(readonly)` is refused (spec §20).
+@requires(accessibility(readonly))
+Int main() {
+    Int fd = resid_a11y_connect();
+    return if (fd >= 0) { 0 } else { 1 };
+}

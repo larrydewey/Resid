@@ -4054,6 +4054,7 @@ Str gk_caps_err(Str ty) {
     Str nm = gk_native_moded(str_split(r.ty, ","), 0);
     if (nm != "") { return "`" + nm + "` has no modes: a native module is reached in full or not at all (spec §47)"; }
     if (gk_display_moded(str_split(r.ty, ","), 0)) { return "`display` has no modes: a program reaches the window server in full or not at all (spec §20)"; }
+    if (gk_a11y_moded(str_split(r.ty, ","), 0)) { return "`accessibility` has no modes: the accessibility bus is reached in full or not at all (spec §20)"; }
     if (sec_declassify_moded(str_split(r.ty, ","), 0)) { return "`declassify` has no modes: publishing a secret is granted in full or not at all"; }
     if (sec_provision_moded(str_split(r.ty, ","), 0)) { return "`provision` has no modes: relying on a provisioned key is granted in full or not at all"; }
     if (sec_assume_moded(str_split(r.ty, ","), 0)) { return "`assume` has no modes: relying on an assumption is granted in full or not at all"; }
@@ -4065,6 +4066,15 @@ Str gk_native_moded(List(Str) cs, Int i) {
     if (i >= cs.len()) { return ""; }
     if (str_starts_with(cs[i], "native_") && str_ends_with(cs[i], ":ro")) { return str_slice(cs[i], 0, str_len(cs[i]) - 3); }
     return gk_native_moded(cs, i + 1);
+}
+
+// The accessibility family given a mode: refused, like display's (the
+// accessibility bus is reached in full or not at all).
+Bool gk_a11y_moded(List(Str) cs, Int i) {
+    if (i >= cs.len()) { return false; }
+    Str c = str_trim(cs[i]);
+    Bool m = str_starts_with(c, "accessibility:") || str_starts_with(c, "accessibility(");
+    return if (m) { true } else { gk_a11y_moded(cs, i + 1) };
 }
 
 // The display family given a mode (`display:ro` or `display(readonly)`)
@@ -4184,8 +4194,8 @@ Str gk_unknown_family(List(Str) fs, Int i) {
     if (i >= fs.len()) { return ""; }
     Str f = fs[i];
     Bool native = str_starts_with(f, "native_") && gk_module_name_ok(str_slice(f, 7, str_len(f)), 0);
-    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal" || f == "clock" || f == "device" || f == "display" || f == "declassify" || f == "provision" || f == "assume" || native;
-    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal, clock, device, display, declassify, provision, assume, native_<module>)"; }
+    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal" || f == "clock" || f == "device" || f == "display" || f == "accessibility" || f == "declassify" || f == "provision" || f == "assume" || native;
+    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal, clock, device, display, accessibility, declassify, provision, assume, native_<module>)"; }
     return gk_unknown_family(fs, i + 1);
 }
 
@@ -4337,6 +4347,7 @@ Str gk_builtin_family(Str n) {
     if (n == "provisioned_key") { return "provision"; }
     if (n == "assumed") { return "assume"; }
     if (str_starts_with(n, "resid_disp_")) { return "display"; }
+    if (str_starts_with(n, "resid_a11y_")) { return "accessibility"; }
     if (str_starts_with(n, "resid_tcp_") || str_starts_with(n, "resid_unix_") || str_starts_with(n, "resid_udp_")) { return "network"; }
     if (str_starts_with(n, "resid_dbg_") || str_starts_with(n, "resid_pty_")) { return "process"; }
     if (str_starts_with(n, "resid_term_")) { return "terminal"; }

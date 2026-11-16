@@ -1,0 +1,7 @@
+// `display` does not grant the accessibility bus: a program that only
+// draws its own window cannot read other programs' accessibility trees.
+@requires(display)
+Int main() {
+    Int fd = resid_a11y_connect();
+    return if (fd >= 0) { 0 } else { 1 };
+}
