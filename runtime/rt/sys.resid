@@ -1284,8 +1284,19 @@ pub Int rt_dbg_f64(Int bits) { return c_float_to_string(resid_raw_bits_f64(bits)
 
 pub Int main_thread(Int arg) {
     Int f = ld64(arg);
-    return resid_raw_call2(f, 0, 0) & 4294967295;
+    Int code = resid_raw_call2(f, 0, 0) & 4294967295;
+    // main forked meanwhile (resid_sandbox_confine runs the program on in
+    // a child): this thread is that process's only one, and no first
+    // thread waits to exit with the result. It ends the process itself,
+    // or the code would be lost (a lone thread's exit reports 0).
+    if (resid_raw_syscall(39, 0, 0, 0, 0, 0, 0) != ld64(main_pid_w())) {
+        return term_exit() * 0 + resid_raw_syscall(231, code, 0, 0, 0, 0, 0);   // exit_group
+    }
+    return code;
 }
+
+// The process that started main (getpid at resid_run_main).
+Int main_pid_w() { return resid_raw_global("rt_main_pid", 8); }
 
 Int stack_mb() {
     Int env = c_getenv(resid_raw_addr("RESID_STACK_MB"));
@@ -1297,6 +1308,7 @@ Int stack_mb() {
 @export("resid_run_main", "i32(ptr)")
 pub Int rt_run_main(Int f) {
     _ = check_address_space();
+    _ = st64(main_pid_w(), resid_raw_syscall(39, 0, 0, 0, 0, 0, 0));   // getpid
     Int slot = xmalloc(16);
     _ = st64(slot, f);
     Int t = thread_spawn(resid_raw_fn("main_thread"), slot, stack_mb() * 1048576);
