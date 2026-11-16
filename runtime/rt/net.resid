@@ -794,13 +794,52 @@ Bool prefix_ci(Int a, Int b, Int n) {
 // DNS: AAAA and A queries to each "nameserver" line (IPv4 or IPv6) of
 // /etc/resolv.conf in turn (3 s each), until one has an address; answers
 // are read from the reply (CNAMEs are followed by the server's own answer
-// records).
+// records). RESID_RESOLV_CONF, when set, is that file's text in its place:
+// for a system without the file (Android), whose launcher knows the
+// network's servers. A name without a dot is tried under each "search" or
+// "domain" name first, then as given (glibc's ndots:1).
 Int dns_lookup(Int host, Int port, Int l) {
     Int srv = resid_raw_tls("dns_srv", 28);
+    Int env = c_getenv(resid_raw_addr("RESID_RESOLV_CONF"));
+    if (env != 0) { return dns_search(env, host, port, l, srv); }
     Int blk = read_file_all(resid_raw_addr("/etc/resolv.conf"));
     if (blk == 0) { return sa_put4(srv, 16777343, 53) * 0 + dns_both(srv, host, port, l); }
-    Int r = ns_lines(blk, host, port, l, srv);
+    Int r = dns_search(blk, host, port, l, srv);
     return c_free(blk) * 0 + r;
+}
+
+Int dns_search(Int conf, Int host, Int port, Int l, Int srv) {
+    Bool dotted = has_byte(host, host + c_strlen(host), 46);
+    Int r = if (dotted) { 0 } else { search_lines(conf, host, port, l, srv, conf) };
+    if (r > 0) { return r; }
+    return ns_lines(conf, host, port, l, srv);
+}
+
+Int search_lines(Int p, Int host, Int port, Int l, Int srv, Int conf) {
+    if (ld8(p) == 0) { return 0; }
+    Int e = line_end(p);
+    Bool kw = (prefix_ci(p, resid_raw_addr("search"), 6) || prefix_ci(p, resid_raw_addr("domain"), 6)) && p + 6 < e && is_space(ld8(p + 6));
+    Int r = if (kw) { search_words(skip_blank(p + 6, e), e, host, port, l, srv, conf) } else { 0 };
+    if (r > 0) { return r; }
+    return search_lines(if (ld8(e) == 0) { e } else { e + 1 }, host, port, l, srv, conf);
+}
+
+Int search_words(Int p, Int e, Int host, Int port, Int l, Int srv, Int conf) {
+    if (p >= e || ld8(p) == 35) { return 0; }
+    Int w = skip_word(p, e);
+    Int r = under_domain(host, p, w - p, port, l, srv, conf);
+    if (r > 0) { return r; }
+    return search_words(skip_blank(w, e), e, host, port, l, srv, conf);
+}
+
+// host + "." + the n bytes at d, asked of conf's nameservers.
+Int under_domain(Int host, Int d, Int n, Int port, Int l, Int srv, Int conf) {
+    Int hn = c_strlen(host);
+    if (n == 0 || hn + n > 252) { return 0; }
+    Int name = xmalloc(hn + n + 2);
+    _ = mcopy(name, host, hn) + st8(name + hn, 46) + mcopy(name + hn + 1, d, n) + st8(name + hn + 1 + n, 0);
+    Int r = ns_lines(conf, name, port, l, srv);
+    return c_free(name) * 0 + r;
 }
 
 Int ns_lines(Int p, Int host, Int port, Int l, Int srv) {

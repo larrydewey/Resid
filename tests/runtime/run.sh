@@ -115,6 +115,27 @@ printf '@requires(network(readonly))\nInt main() { return resid_unix_listen("/tm
 (cd "$ROOT" && "$COMPILER" "$W/uxro.resid" -o "$W/uxro") > "$W/uxro.log" 2>&1
 grep -q "E0219" "$W/uxro.log" || ux_ok=0
 if [ "$ux_ok" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL unix socket server: $(grep -m1 -i error "$W/uxserve.log" "$W/uxro.log")"; fi
+# Name lookup with RESID_RESOLV_CONF in place of /etc/resolv.conf, and its
+# search domains (dns_search.resid), against dns_fake.py on port 53 of a
+# loopback of its own: a user and network namespace (skipped without one).
+if unshare -rn true 2> /dev/null; then
+    if (cd "$ROOT" && "$COMPILER" tests/runtime/dns_search.resid -o "$W/dns_search") > "$W/dns.log" 2>&1 \
+        && unshare -rn sh -c '
+            ip link set lo up || exit 1
+            python3 -I "$1" 20 > "$2/dns_q.log" 2>&1 & p=$!
+            n=0; until grep -q ready "$2/dns_q.log" || [ $n -ge 50 ]; do sleep 0.1; n=$((n + 1)); done
+            RESID_RESOLV_CONF="$(printf "nameserver 127.0.0.1\nsearch first.test second.test")" timeout 30 "$2/dns_search"
+            r=$?; kill $p 2> /dev/null; exit $r' _ "$PWD/dns_fake.py" "$W" > "$W/dns.out" 2>&1 \
+        && [ "$(cat "$W/dns.out")" = "true true true true" ] \
+        && grep -qx "pylonhost.first.test 1" "$W/dns_q.log" && grep -qx "nohost 1" "$W/dns_q.log" \
+        && ! grep -q "pylonhost.second.first.test" "$W/dns_q.log"; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL RESID_RESOLV_CONF lookup: $(grep -m1 -i error "$W/dns.log") $(tr '\n' ' ' < "$W/dns.out")"
+    fi
+else
+    echo "skip RESID_RESOLV_CONF lookup: no user and network namespace"
+fi
 # With no display named in the environment, connecting is refused rather
 # than guessed at.
 printf '@requires(display)

@@ -1,0 +1,16 @@
+// Name lookup through RESID_RESOLV_CONF, run by run.sh in a network
+// namespace of its own with dns_fake.py on 127.0.0.1:53, which knows only
+// pylonhost.second.test. A dotless name is found under the second search
+// domain, a dotted one as given; a name nothing answers for is refused, and
+// a dotted one is not tried under the search domains.
+@requires(network)
+Int main() {
+    Int lis = resid_tcp_listen(0);
+    Int port = resid_tcp_bound_port(lis);
+    Int bare = resid_tcp_connect("pylonhost", port);
+    Int full = resid_tcp_connect("pylonhost.second.test", port);
+    Int none = resid_tcp_connect("nohost", port);
+    Int dotted = resid_tcp_connect("pylonhost.second", port);
+    println(f"{bare >= 0} {full >= 0} {none < 0} {dotted < 0}");
+    return 0;
+}
