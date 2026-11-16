@@ -72,7 +72,10 @@ if [ -f "$BOOT/aarch64/libclang_rt.builtins.a" ]; then
 fi
 rm -rf "$TARGET/lib"
 mkdir -p "$TARGET/lib"
-cp "$SCRIPT_DIR"/lib/*.resid "$TARGET/lib/"
+# The whole tree, subdirectories too (lib/dev/, lib/verify/): a program
+# that imports "dev/tpm.resid" builds the same with the installed residc as
+# from a checkout. Only modules: nothing a build leaves in lib/.
+(cd "$SCRIPT_DIR/lib" && find . -name '*.resid' -type f -print | tar -cf - -T -) | (cd "$TARGET/lib" && tar -xf -)
 
 cat > "$TARGET/bin/residc" <<WRAPPER
 #!/usr/bin/env bash

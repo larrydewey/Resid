@@ -31,9 +31,11 @@ pub Int sys_stat(Int path, Int b) { return sc4(262, 0 - 100, path, b, 0); }     
 pub Int sys_dup2(Int a, Int b) { return if (a == b) { b } else { resid_raw_syscall(292, a, b, 0, 0, 0, 0) }; }   // dup3
 pub Int sys_close(Int fd) { return resid_raw_syscall(3, fd, 0, 0, 0, 0, 0); }
 
-// A stat buffer: st_mode (u32) at 24 on x86-64 and 16 on AArch64,
-// st_size at 48 on both.
+// A stat buffer: st_mode (u32) at 24 on x86-64 and 16 on AArch64, st_uid
+// (u32) at 28 and 24 (x86-64 has a 64-bit st_nlink before st_mode, AArch64
+// a 32-bit one after it), st_size at 48 on both.
 pub Int st_mode_at() { return if (on_a64()) { 16 } else { 24 }; }
+pub Int st_uid_at() { return if (on_a64()) { 24 } else { 28 }; }
 Int stat_buf() { return resid_raw_tls("stat_buf", 144); }
 Bool mode_dir(Int mode) { return (mode & 61440) == 16384; }
 Bool mode_reg(Int mode) { return (mode & 61440) == 32768; }

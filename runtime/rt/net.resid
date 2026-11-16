@@ -1147,7 +1147,7 @@ Int ux_lstat(Int path) {
     Int r = resid_raw_syscall(262, 0 - 100, path, b, 256, 0, 0);   // newfstatat(AT_FDCWD, ..., AT_SYMLINK_NOFOLLOW)
     if (r == 0 - 2) { return 0 - 1; }
     if (r != 0) { return 0 - 2; }
-    return (ld32(b + st_mode_at() + 4) << 32) | ld32(b + st_mode_at());
+    return (ld32(b + st_uid_at()) << 32) | ld32(b + st_mode_at());
 }
 
 Bool ux_owned(Int st, Int kind) { return st >= 0 && (st & 61440) == kind && (st >> 32) == sys_getuid(); }

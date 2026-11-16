@@ -98,6 +98,23 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/unixsock.resid -o "$W/unixsock") > "
 else
     fail=$((fail + 1)); echo "FAIL unix sockets: $(grep -m1 -i error "$W/unixsock.log") $(diff "$W/unixsock.out" unixsock.out 2>/dev/null | head -3 | tr '\n' ' ')"
 fi
+# The same on AArch64, under qemu-user (skipped without it): the runtime
+# reads stat buffers by architecture, and a wrong offset there refuses every
+# directory (the owner was read from st_nlink, so Android could not listen).
+if command -v qemu-aarch64 > /dev/null; then
+    rm -rf "$W/ux" "$W/uxloose"; mkdir -m 700 "$W/ux"; mkdir -m 755 "$W/uxloose"; touch "$W/ux/plain"
+    python3 -I -c "import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])" "$W/ux/stale.sock"
+    if (cd "$ROOT" && "$COMPILER" tests/runtime/unixsock.resid --target aarch64 -o "$W/unixsock-a64") > "$W/unixsock-a64.log" 2>&1 \
+        && UX_DIR="$W/ux" UX_LOOSE="$W/uxloose" timeout 60 qemu-aarch64 "$W/unixsock-a64" > "$W/unixsock-a64.out" 2>&1 && cmp -s "$W/unixsock-a64.out" unixsock.out; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL unix sockets on aarch64: $(grep -m1 -i error "$W/unixsock-a64.log") $(diff "$W/unixsock-a64.out" unixsock.out 2>/dev/null | head -3 | tr '\n' ' ')"
+    fi
+    rm -rf "$W/ux" "$W/uxloose"; mkdir -m 700 "$W/ux"; mkdir -m 755 "$W/uxloose"; touch "$W/ux/plain"
+    python3 -I -c "import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])" "$W/ux/stale.sock"
+else
+    echo "skip unix sockets on aarch64: no qemu-aarch64"
+fi
 ux_ok=0
 if (cd "$ROOT" && "$COMPILER" tests/runtime/unixsock_serve.resid -o "$W/uxserve") > "$W/uxserve.log" 2>&1; then
     mkfifo "$W/uxready"
