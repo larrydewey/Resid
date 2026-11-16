@@ -9,6 +9,9 @@ Int drain_code(Int b, Int m, Int pid, Int spins) {
     if (got.len() > 0) { return drain_code(b, m, pid, spins); }
     Int code = resid_pty_status(b, pid);
     if (code >= 0 || spins <= 0) { return code; }
+    // A hung-up master polls ready at once: pause so the child can be reaped.
+    List(Int) no = [];
+    List(Int) pause = resid_tcp_poll(no, no, 100);
     return drain_code(b, m, pid, spins - 1);
 }
 

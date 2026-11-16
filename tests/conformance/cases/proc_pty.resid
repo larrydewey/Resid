@@ -13,6 +13,9 @@ Done drain(Int m, Int pid, List(Int) acc, Int spins) {
     if (got.len() > 0) { return drain(m, pid, acc.concat(got), spins); }
     Int code = resid_pty_wait(pid);
     if (code >= 0 || spins <= 0) { return Done {.out = acc, .code = code}; }
+    // A hung-up master polls ready at once: pause so the child can be reaped.
+    List(Int) no = [];
+    List(Int) pause = resid_tcp_poll(no, no, 100);
     return drain(m, pid, acc, spins - 1);
 }
 
