@@ -1301,6 +1301,8 @@ Families:
                connection to a window server, the bytes and
                descriptors on it, a shared mapping, and
                waiting on it; with no modes
+  accessibility  the accessibility (AT-SPI) bus
+               (resid_a11y_connect); with no modes
   native_<m>   a call into native module m (§47); one
                family per module, with no modes
   declassify   publishing a secret: declassify(s, "reason")
@@ -1325,6 +1327,20 @@ display alone; a program that waits on display and TCP
 descriptors together needs both families. Nothing outside
 this machine's own session is reachable through it: a DISPLAY
 naming another host is refused.
+
+accessibility has no modes (accessibility(readonly) is
+refused, E0213). resid_a11y_connect returns the
+accessibility bus, connected and authenticated (SASL
+EXTERNAL), or -1: the address AT_SPI_BUS_ADDRESS names,
+else the one the session bus answers to
+org.a11y.Bus.GetAddress. The session bus itself never
+reaches the program; only Unix-domain addresses
+(unix:path=, unix:abstract=) are accepted. It is a family
+of its own, not part of display, because anything on that
+bus can read every other program's accessibility tree: a
+program that is accessible to screen readers says so. The
+descriptor is a Unix-domain socket, so the display verbs
+send, receive and wait on it.
 
 The display verbs act only on Unix-domain sockets. A shared
 mapping is an opaque handle (a table index and a

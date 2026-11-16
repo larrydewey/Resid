@@ -1,0 +1,8 @@
+// Reaching the accessibility (AT-SPI) bus says so: the bus lets a program
+// read other programs' accessibility trees, so it is a capability of its
+// own (E0219, spec §20).
+Int main() {
+    Int fd = resid_a11y_connect();
+    println(f"{fd}");
+    return 0;
+}

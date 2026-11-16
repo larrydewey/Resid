@@ -138,7 +138,7 @@ Int lb_builtin(Str n) {
         return if (op == "arch" || op == "nr" || op == "bits_f64" || op == "bits_f128" || op == "f128_bits" || op == "popcount") { 1 } else { 2 };
     }
     if (str_starts_with(n, "resid_cpu_has_")) { return 3; }
-    if (str_starts_with(n, "resid_tcp_") || str_starts_with(n, "resid_udp_") || str_starts_with(n, "resid_unix_") || str_starts_with(n, "resid_term_") || str_starts_with(n, "resid_dbg_") || str_starts_with(n, "resid_pty_") || str_starts_with(n, "resid_disp_") || str_starts_with(n, "resid_clock_") || str_starts_with(n, "resid_device_")) { return 2; }
+    if (str_starts_with(n, "resid_tcp_") || str_starts_with(n, "resid_udp_") || str_starts_with(n, "resid_unix_") || str_starts_with(n, "resid_term_") || str_starts_with(n, "resid_dbg_") || str_starts_with(n, "resid_pty_") || str_starts_with(n, "resid_disp_") || str_starts_with(n, "resid_a11y_") || str_starts_with(n, "resid_clock_") || str_starts_with(n, "resid_device_")) { return 2; }
     if (str_starts_with(n, "resid_chal_")) { return 2; }
     if (n == "resid_tr_read" || n == "resid_sandbox_confine") { return 2; }
     if (n == "resid_tr_note") { return 1; }
@@ -168,6 +168,7 @@ Str lb_builtin_what(Str n) {
     if (str_starts_with(n, "resid_dbg_")) { return "process (ptrace): " + n; }
     if (str_starts_with(n, "resid_pty_")) { return "process (pseudo-terminal): " + n; }
     if (str_starts_with(n, "resid_disp_")) { return "display: " + n; }
+    if (str_starts_with(n, "resid_a11y_")) { return "accessibility: " + n; }
     if (str_starts_with(n, "resid_clock_")) { return "clock: " + n; }
     if (str_starts_with(n, "resid_device_")) { return "device: " + n; }
     if (n == "resid_crypto_random_byte" || n == "resid_random_os" || n == "resid_random_cpu") { return "randomness: " + n; }

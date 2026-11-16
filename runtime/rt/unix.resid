@@ -215,6 +215,201 @@ pub Int rt_disp_connect_rsp() {
     return if (inh != 0) { disp_inherited(inh) } else { 0 - 1 };
 }
 
+// The accessibility bus (AT-SPI), connected and authenticated, or -1.
+// AT_SPI_BUS_ADDRESS names it directly; otherwise the session bus is asked
+// (org.a11y.Bus.GetAddress) and closed again. The session bus never
+// reaches the program: the `accessibility` capability grants the
+// accessibility bus and nothing else on the session. Only Unix-domain
+// addresses are accepted (unix:path=, unix:abstract=); TCP and other
+// transports are refused.
+@export("resid_a11y_connect", "i64()")
+pub Int rt_a11y_connect() {
+    Int env = c_getenv(resid_raw_addr("AT_SPI_BUS_ADDRESS"));
+    if (env != 0 && ld8(env) != 0) { return bus_open(env); }
+    Int sess = c_getenv(resid_raw_addr("DBUS_SESSION_BUS_ADDRESS"));
+    if (sess == 0 || ld8(sess) == 0) { return 0 - 1; }
+    Int sfd = bus_open(sess);
+    if (sfd < 0) { return 0 - 1; }
+    Int addr = bus_a11y_address(sfd);
+    _ = sys_close(sfd);
+    return if (addr == 0) { 0 - 1 } else { bus_open(addr) };
+}
+
+// A D-Bus address list's first Unix-domain entry, connected and through
+// SASL EXTERNAL, or -1.
+Int bus_open(Int a) {
+    Int fd = bus_connect_at(a);
+    if (fd < 0) { return 0 - 1; }
+    return if (bus_auth(fd)) { fd } else { sys_close(fd) * 0 - 1 };
+}
+
+Int bus_connect_at(Int a) {
+    if (ld8(a) == 0) { return 0 - 1; }
+    Int e = bus_entry_end(a);
+    Int fd = bus_entry_connect(a, e);
+    if (fd >= 0 || ld8(e) == 0) { return fd; }
+    return bus_connect_at(e + 1);
+}
+
+// The end of one address entry: its `;` or the terminating NUL.
+Int bus_entry_end(Int p) { return if (ld8(p) == 0 || ld8(p) == 59) { p } else { bus_entry_end(p + 1) }; }
+
+// `unix:path=P` or `unix:abstract=N` between a and e (other keys, such as
+// guid=, after a comma, ignored), connected; -1 for any other transport.
+Int bus_entry_connect(Int a, Int e) {
+    if (e - a < 5 || c_strncmp(a, resid_raw_addr("unix:"), 5) != 0) { return 0 - 1; }
+    Int path = bus_key(a + 5, e, resid_raw_addr("path="), 5);
+    if (path >= 0) { return unix_connect(sa_path(path, bus_value_end(path, e) - path)); }
+    Int abs = bus_key(a + 5, e, resid_raw_addr("abstract="), 9);
+    if (abs >= 0) { return unix_connect(sa_abstract(abs, bus_value_end(abs, e) - abs)); }
+    return 0 - 1;
+}
+
+// Where the value of key `k` (n bytes, `=` included) starts, or -1.
+Int bus_key(Int p, Int e, Int k, Int n) {
+    if (p + n > e) { return 0 - 1; }
+    if (c_strncmp(p, k, n) == 0) { return p + n; }
+    Int c = bus_value_end(p, e);
+    return if (c >= e) { 0 - 1 } else { bus_key(c + 1, e, k, n) };
+}
+
+Int bus_value_end(Int p, Int e) { return if (p >= e || ld8(p) == 44) { p } else { bus_value_end(p + 1, e) }; }
+
+// SASL EXTERNAL with this process's uid, then BEGIN.
+Bool bus_auth(Int fd) {
+    Int b = resid_raw_tls("bus_line", 128);
+    Int n = bus_auth_line(b);
+    if (resid_raw_syscall(44, fd, b, n, 16384, 0, 0) != n) { return false; }
+    Int r = bus_read_line(fd, b, 0, 127);
+    if (r < 3 || c_strncmp(b, resid_raw_addr("OK "), 3) != 0) { return false; }
+    return resid_raw_syscall(44, fd, resid_raw_addr("BEGIN\r\n"), 7, 16384, 0, 0) == 7;
+}
+
+// `\0AUTH EXTERNAL <hex of the decimal uid>\r\n` into b; its length.
+Int bus_auth_line(Int b) {
+    _ = st8(b, 0);
+    _ = mcopy(b + 1, resid_raw_addr("AUTH EXTERNAL "), 14);
+    Int d = resid_raw_tls("bus_uid", 24);
+    Int nd = bus_decimal(resid_raw_syscall(102, 0, 0, 0, 0, 0, 0), d, 0);   // getuid
+    Int end = bus_hex(d, nd, b + 15, 0);
+    _ = st8(end, 13) + st8(end + 1, 10);
+    return end + 2 - b;
+}
+
+// The decimal digits of v at d, most significant first; their count.
+Int bus_decimal(Int v, Int d, Int n) {
+    Int k = if (v >= 10) { bus_decimal(v / 10, d, n) } else { n };
+    _ = st8(d + k, 48 + v % 10);
+    return k + 1;
+}
+
+Int bus_hex(Int d, Int n, Int out, Int i) {
+    if (i >= n) { return out; }
+    Int c = ld8(d + i);
+    _ = st8(out, bus_nibble(c / 16)) + st8(out + 1, bus_nibble(c % 16));
+    return bus_hex(d, n, out + 2, i + 1);
+}
+
+Int bus_nibble(Int v) { return if (v < 10) { 48 + v } else { 87 + v }; }
+
+// One line (to its \n) into b, at most max bytes, two seconds at most.
+Int bus_read_line(Int fd, Int b, Int n, Int max) {
+    if (n >= max) { return n; }
+    if (n > 0 && ld8(b + n - 1) == 10) { return n; }
+    if (bus_wait(fd, 2000) == 0) { return n; }
+    Int r = resid_raw_syscall(0, fd, b + n, 1, 0, 0, 0);
+    return if (r <= 0) { n } else { bus_read_line(fd, b, n + 1, max) };
+}
+
+Int bus_wait(Int fd, Int ms) {
+    Int pf = resid_raw_tls("bus_pfd", 8);
+    _ = st32(pf, fd) + st32(pf + 4, 1);
+    Int ts = resid_raw_tls("bus_ts", 16);
+    _ = st64(ts, ms / 1000) + st64(ts + 8, (ms % 1000) * 1000000);
+    Int r = resid_raw_syscall(271, pf, 1, ts, 0, 8, 0);   // ppoll
+    return if (r > 0) { 1 } else { 0 };
+}
+
+// Hello (serial 1), then org.a11y.Bus.GetAddress (serial 2), as fixed
+// little-endian messages.
+Int bus_hello_hex() { return resid_raw_addr("6c01000100000000010000006d00000001016f00150000002f6f72672f667265656465736b746f702f4442757300000002017300140000006f72672e667265656465736b746f702e4442757300000000030173000500000048656c6c6f00000006017300140000006f72672e667265656465736b746f702e4442757300000000"); }
+Int bus_getaddr_hex() { return resid_raw_addr("6c01000100000000020000005d00000001016f000d0000002f6f72672f613131792f627573000000020173000c0000006f72672e613131792e42757300000000030173000a00000047657441646472657373000000000000060173000c0000006f72672e613131792e42757300000000"); }
+
+Int bus_unhex(Int h, Int out, Int i) {
+    if (ld8(h + 2 * i) == 0) { return i; }
+    _ = st8(out + i, bus_digit(ld8(h + 2 * i)) * 16 + bus_digit(ld8(h + 2 * i + 1)));
+    return bus_unhex(h, out, i + 1);
+}
+
+Int bus_digit(Int c) { return if (c >= 97) { c - 87 } else { c - 48 }; }
+
+// The address GetAddress answers, NUL-terminated in a buffer of its own,
+// or 0. Only the method return whose REPLY_SERIAL is 2 and whose body is
+// one string starting `unix:` is taken.
+Int bus_a11y_address(Int fd) {
+    Int out = resid_raw_tls("bus_out", 256);
+    Int n1 = bus_unhex(bus_hello_hex(), out, 0);
+    Int n2 = bus_unhex(bus_getaddr_hex(), out + n1, 0);
+    if (resid_raw_syscall(44, fd, out, n1 + n2, 16384, 0, 0) != n1 + n2) { return 0; }
+    Int buf = resid_raw_tls("bus_in", 8192);
+    return bus_scan(fd, buf, 0, 0, 16);
+}
+
+// Read into buf (n bytes so far, `at` where the next message starts)
+// until the answer is found, the buffer is full, or reads run out.
+Int bus_scan(Int fd, Int buf, Int n, Int at, Int left) {
+    Int found = bus_find(buf, n, at);
+    if (found > 0) { return found; }
+    if (found == 0) { return 0; }
+    Int next = 0 - found - 2;
+    if (left <= 0 || n >= 8192 || bus_wait(fd, 2000) == 0) { return 0; }
+    Int r = resid_raw_syscall(0, fd, buf + n, 8192 - n, 0, 0, 0);
+    if (r <= 0) { return 0; }
+    return bus_scan(fd, buf, n + r, next, left - 1);
+}
+
+Int pad8(Int x) { return (x + 7) / 8 * 8; }
+
+// Walk whole messages from `at` (messages follow one another with no
+// padding between them; alignment inside one is from its own start). The
+// address (a pointer) when found; 0 when the answer is malformed or the
+// stream is not D-Bus; -(at + 2) when more bytes are needed from `at`.
+Int bus_find(Int buf, Int n, Int at) {
+    if (at + 16 > n) { return 0 - at - 2; }
+    if (ld8(buf + at) != 108) { return 0; }
+    Int body = ld32(buf + at + 4);
+    Int flen = ld32(buf + at + 12);
+    if (body < 0 || body > 4096 || flen < 0 || flen > 4096) { return 0; }
+    Int bstart = at + pad8(16 + flen);
+    Int end = bstart + body;
+    if (end > n) { return 0 - at - 2; }
+    Bool is_reply = ld8(buf + at + 1) == 2 && bus_reply_serial(buf + at, 16, 16 + flen) == 2;
+    if (!is_reply) { return bus_find(buf, n, end); }
+    if (body < 5) { return 0; }
+    Int len = ld32(buf + bstart);
+    Bool ok = len >= 5 && len < 240 && 4 + len < body && c_strncmp(buf + bstart + 4, resid_raw_addr("unix:"), 5) == 0;
+    if (!ok) { return 0; }
+    Int dst = resid_raw_tls("bus_addr", 256);
+    _ = mcopy(dst, buf + bstart + 4, len);
+    _ = st8(dst + len, 0);
+    return dst;
+}
+
+// The REPLY_SERIAL header field (code 5) of the message at m, its fields
+// from offset p to e, or 0. Fields are 8-aligned (yv) pairs.
+Int bus_reply_serial(Int m, Int p0, Int e) {
+    Int p = pad8(p0);
+    if (p + 8 > e) { return 0; }
+    Int code = ld8(m + p);
+    Int slen = ld8(m + p + 1);
+    Int t = ld8(m + p + 2);
+    if (slen != 1) { return 0; }
+    Int v = p + 4;
+    if (code == 5 && t == 117) { return ld32(m + v); }
+    Int vend = if (t == 117 || t == 104) { v + 4 } else { if (t == 115 || t == 111) { v + 4 + ld32(m + v) + 1 } else { if (t == 103) { v + 1 + ld8(m + v) + 1 } else { e } } };
+    return bus_reply_serial(m, vend, e);
+}
+
 // The X server DISPLAY names alone, or -1.
 @export("resid_disp_connect_x11", "i64()")
 pub Int rt_disp_connect_x11() {
