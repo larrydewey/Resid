@@ -1,0 +1,34 @@
+// IPv6 on loopback (::1): UDP with 16-byte addresses both ways, a TCP
+// listener on an IPv6 literal reached by address and by bracketed
+// address, and resid_tcp_peer naming the peer ([n, address, port]).
+@requires(network)
+Int main() {
+    List(Int) lo6 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+    Int srv = resid_udp_bind_at("::1", 0);
+    Int port = resid_udp_port(srv);
+    Int cli = resid_udp_open();
+    Bool sent = resid_udp_send_to(cli, lo6, port, [7, 8]);
+    List(Int) r1 = resid_tcp_poll([srv], [1], 2000);
+    List(Int) got = resid_udp_recv_from(srv, 100);
+    Bool from6 = got.len() == 21 && got[0] == 16 && got[16] == 1 && got[1] == 0;
+    Bool reply = resid_udp_send_to(srv, got[1..17], got[17] * 256 + got[18], [5]);
+    List(Int) r2 = resid_tcp_poll([cli], [1], 2000);
+    List(Int) back = resid_udp_recv_from(cli, 100);
+    Int lis = resid_tcp_listen_at("::1", 0);
+    Int lport = resid_tcp_bound_port(lis);
+    Int c1 = resid_tcp_connect("::1", lport);
+    Int a1 = resid_tcp_accept(lis);
+    Int c2 = resid_tcp_connect("[::1]", lport);
+    Int a2 = resid_tcp_accept(lis);
+    List(Int) peer = resid_tcp_peer(c1);
+    Bool ok_peer = peer.len() == 19 && peer[0] == 16 && peer[16] == 1 && peer[17] * 256 + peer[18] == lport;
+    Int v4l = resid_tcp_listen(0);
+    Int v4p = resid_tcp_bound_port(v4l);
+    Int c3 = resid_tcp_connect("127.0.0.1", v4p);
+    List(Int) peer4 = resid_tcp_peer(c3);
+    List(Int) nopeer = resid_tcp_peer(0 - 1);
+    Bool bad = resid_udp_bind_at("::1::2", 0) < 0 && resid_udp_bind_at("[::1", 0) < 0 && resid_udp_bind_at("1:2:3:4:5:6:7:8:9", 0) < 0;
+    println(f"{port > 0} {sent} {r1[0] & 1} {from6} {got[19..21]} {reply} {r2[0] & 1} {back.len()} {back[0]} {back[19]}");
+    println(f"{lport > 0} {c1 >= 0} {a1 >= 0} {c2 >= 0} {a2 >= 0} {ok_peer} {peer4[0..5]} {nopeer.len()} {bad}");
+    return 0;
+}

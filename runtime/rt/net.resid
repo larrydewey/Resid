@@ -130,25 +130,31 @@ pub Int rt_index_abort(Int idx, Int len, Int at) {
 Bool host_ok(Int p) {
     Int c = ld8(p);
     if (c == 0) { return true; }
-    Bool ok = (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 45 || c == 46 || c == 58;
+    Bool ok = (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 45 || c == 46 || c == 58 || c == 91 || c == 93;
     return ok && host_ok(p + 1);
 }
 
-// A connected stream socket (IPv4, 30 s receive timeout), or -1.
+// A connected stream socket (IPv6 or IPv4, 30 s receive timeout), or -1.
+// host is an address literal (IPv6 with or without brackets) or a name,
+// whose addresses are tried in turn, IPv6 first.
 @export("resid_tcp_connect", "i64(ptr,i64)")
 pub Int rt_tcp_connect(Int host, Int port) {
     if (host == 0 || ld8(host) == 0 || !host_ok(host)) { return 0 - 1; }
     if (port <= 0 || port > 65535) { return 0 - 1; }
-    Int ip = resolve4(host);
-    if (ip < 0) { return 0 - 1; }
-    Int sa = resid_raw_tls("sa_in", 16);
-    _ = resid_raw_fill(sa, 0, 16);
-    _ = st8(sa, 2);                                   // AF_INET
-    _ = st8(sa + 2, port >> 8) + st8(sa + 3, port & 255);
-    _ = st32(sa + 4, ip);                             // network order
-    Int fd = resid_raw_syscall(41, 2, 1, 0, 0, 0, 0);      // SOCK_STREAM
-    if (fd < 0) { return 0 - 1; }
-    if (!connect_within(fd, sa, 30000)) { return sys_close(fd) * 0 - 1; }
+    Int n = resolve(host, port);
+    if (n == 0) { return 0 - 1; }
+    return connect_any(ra_list(), 0, n);
+}
+
+// The addresses from i on, in turn. Every attempt but the last gives up
+// after 5 s, so a route that swallows packets (an IPv6 one, typically)
+// costs that and not the whole timeout.
+Int connect_any(Int l, Int i, Int n) {
+    if (i >= n) { return 0 - 1; }
+    Int sa = l + 28 * i;
+    Int fd = resid_raw_syscall(41, ld8(sa), 1 | 524288, 0, 0, 0, 0);   // SOCK_STREAM | SOCK_CLOEXEC
+    Bool ok = fd >= 0 && connect_within(fd, sa, if (i + 1 < n) { 5000 } else { 30000 });
+    if (!ok) { return (if (fd >= 0) { sys_close(fd) } else { 0 }) * 0 + connect_any(l, i + 1, n); }
     _ = base_timeouts(fd);
     _ = no_delay(fd);
     _ = dl_set(fd, 0);
@@ -161,7 +167,7 @@ Bool connect_within(Int fd, Int sa, Int ms) {
     Int fl = resid_raw_syscall(72, fd, 3, 0, 0, 0, 0);                      // F_GETFL
     if (fl < 0) { return false; }
     _ = resid_raw_syscall(72, fd, 4, fl | 2048, 0, 0, 0);                   // O_NONBLOCK
-    Int cr = resid_raw_syscall(42, fd, sa, 16, 0, 0, 0);
+    Int cr = resid_raw_syscall(42, fd, sa, sa_len(sa), 0, 0, 0);
     Bool now = cr == 0;
     Bool waiting = cr == 0 - 115;                                           // EINPROGRESS
     Bool ready = now || (waiting && (poll_one(fd, 4, ms) & 4) != 0);
@@ -239,7 +245,7 @@ Bool listener_ok(Int fd) {
 
 // 127.0.0.1, the address `resid_tcp_listen` binds. The value is
 // what `st32(sa + 4, ...)` wants — the network-order bytes 7F 00 00 01 read
-// as a u32 — which is the same shape `resolve4` returns, so `bind` and
+// as a u32 — which is the shape `parse_ip4` returns, so `bind` and
 // `connect` write the same four bytes here.
 Int loopback_v4() { return 16777343; }
 
@@ -261,8 +267,14 @@ pub Int rt_tcp_listen(Int port) { return listen_ip(loopback_v4(), port); }
 pub Int rt_tcp_listen_at(Int host, Int port) {
     if (host == 0 || ld8(host) == 0 || !host_ok(host)) { return 0 - 1; }
     Int ip = if (lower_eq(host, resid_raw_addr("localhost"))) { loopback_v4() } else { parse_ip4(host) };
-    if (ip < 0) { return 0 - 1; }
-    return listen_ip(ip, port);
+    if (ip >= 0) { return listen_ip(ip, port); }
+    // An IPv6 literal: `::` is every interface, IPv6 and IPv4; another
+    // address only itself.
+    Int a6 = resid_raw_tls("listen_a6", 16);
+    if (!parse_ip6(host, a6) || port < 0 || port > 65535) { return 0 - 1; }
+    Int sa = resid_raw_tls("sa_listen", 28);
+    _ = sa_put6(sa, a6, port);
+    return listen_sa(sa, !all_zero(a6, 16));
 }
 
 // bind + listen on `ip` (network-order bytes as a u32), SO_REUSEADDR set so
@@ -271,17 +283,19 @@ Int listen_ip(Int ip, Int port) {
     // Port 0 means "any free port", which is what `serve --port 0` wants:
     // the bound port is then read back with resid_tcp_bound_port.
     if (port < 0 || port > 65535) { return 0 - 1; }
-    Int sa = resid_raw_tls("sa_in", 16);
-    _ = resid_raw_fill(sa, 0, 16);
-    _ = st8(sa, 2);                                   // AF_INET
-    _ = st8(sa + 2, port >> 8) + st8(sa + 3, port & 255);
-    _ = st32(sa + 4, ip);
-    Int fd = resid_raw_syscall(41, 2, 1, 0, 0, 0, 0); // socket
+    Int sa = resid_raw_tls("sa_listen", 28);
+    _ = sa_put4(sa, ip, port);
+    return listen_sa(sa, false);
+}
+
+Int listen_sa(Int sa, Bool v6only) {
+    Int fd = resid_raw_syscall(41, ld8(sa), 1, 0, 0, 0, 0); // socket
     if (fd < 0) { return 0 - 1; }
     Int one = resid_raw_tls("ai_one", 4);
     _ = st32(one, 1);
     if (resid_raw_syscall(54, fd, 1, 2, one, 4, 0) != 0) { return sys_close(fd) * 0 - 1; }
-    if (resid_raw_syscall(49, fd, sa, 16, 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }  // bind
+    if (ld8(sa) == 10 && !set_v6only(fd, v6only)) { return sys_close(fd) * 0 - 1; }
+    if (resid_raw_syscall(49, fd, sa, sa_len(sa), 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }  // bind
     if (resid_raw_syscall(50, fd, 128, 0, 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }   // listen
     return fd;
 }
@@ -290,65 +304,96 @@ Int listen_ip(Int ip, Int port) {
 // Datagram sockets (the Pylon protocol, and anything else that roams):
 // open for a client, bound on loopback (a `network` read) or on an
 // interface (a `network` write, as for TCP). Sends and receives never
-// wait: a program polls with resid_tcp_poll first. A received datagram
-// comes back as [a, b, c, d, port_hi, port_lo, data...], the sender's
-// IPv4 address and port first, or empty when none is waiting.
+// wait: a program polls with resid_tcp_poll first. An address is 4 bytes
+// (IPv4) or 16 (IPv6). A received datagram comes back as
+// [n, address (n bytes), port_hi, port_lo, data...], the sender first, or
+// empty when none is waiting; an IPv4 sender is always 4 bytes, also when
+// it reached an IPv6 socket.
 
-Int udp_sock(Int ip, Int port) {
-    if (port < 0 || port > 65535) { return 0 - 1; }
-    Int sa = resid_raw_tls("sa_udp", 16);
-    _ = resid_raw_fill(sa, 0, 16);
-    _ = st8(sa, 2);                                    // AF_INET
-    _ = st8(sa + 2, port >> 8) + st8(sa + 3, port & 255);
-    _ = st32(sa + 4, ip);
-    Int fd = resid_raw_syscall(41, 2, 2 | 524288, 0, 0, 0, 0);   // SOCK_DGRAM | SOCK_CLOEXEC
+Int udp_sock(Int sa, Bool v6only) {
+    Int fd = resid_raw_syscall(41, ld8(sa), 2 | 524288, 0, 0, 0, 0);   // SOCK_DGRAM | SOCK_CLOEXEC
     if (fd < 0) { return 0 - 1; }
-    if (resid_raw_syscall(49, fd, sa, 16, 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }  // bind
+    Bool opt = ld8(sa) != 10 || set_v6only(fd, v6only);
+    if (!opt || resid_raw_syscall(49, fd, sa, sa_len(sa), 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }  // bind
     return fd;
 }
 
-// A client socket on a free port of every interface (replies come back to it).
+// IPV6_V6ONLY: off, an IPv6 socket also carries IPv4 (as ::ffff:a.b.c.d).
+Bool set_v6only(Int fd, Bool on) {
+    Int v = resid_raw_tls("v6only", 4);
+    _ = st32(v, if (on) { 1 } else { 0 });
+    return resid_raw_syscall(54, fd, 41, 26, v, 4, 0) == 0;      // IPPROTO_IPV6
+}
+
+// A client socket on a free port of every interface (replies come back to
+// it): IPv6 taking IPv4 too, or IPv4 alone where the system has no IPv6.
 @export("resid_udp_open", "i64()")
-pub Int rt_udp_open() { return udp_sock(0, 0); }
+pub Int rt_udp_open() {
+    Int sa = resid_raw_tls("sa_udp", 28);
+    _ = sa_put6(sa, zero16(), 0);
+    Int fd = udp_sock(sa, false);
+    if (fd >= 0) { return fd; }
+    _ = sa_put4(sa, 0, 0);
+    return udp_sock(sa, false);
+}
 
 // Bound on loopback at `port` (0: any free port).
 @export("resid_udp_bind", "i64(i64)")
-pub Int rt_udp_bind(Int port) { return udp_sock(loopback_v4(), port); }
+pub Int rt_udp_bind(Int port) {
+    if (port < 0 || port > 65535) { return 0 - 1; }
+    Int sa = resid_raw_tls("sa_udp", 28);
+    _ = sa_put4(sa, loopback_v4(), port);
+    return udp_sock(sa, false);
+}
 
-// Bound on an interface's address literal (`0.0.0.0`: every interface).
+// Bound on an interface's address literal: `0.0.0.0` is every IPv4
+// interface, `::` every interface (IPv6 and IPv4), another IPv6 address
+// only itself.
 @export("resid_udp_bind_at", "i64(ptr,i64)")
 pub Int rt_udp_bind_at(Int host, Int port) {
     if (host == 0 || ld8(host) == 0 || !host_ok(host)) { return 0 - 1; }
+    if (port < 0 || port > 65535) { return 0 - 1; }
+    Int sa = resid_raw_tls("sa_udp", 28);
     Int ip = if (lower_eq(host, resid_raw_addr("localhost"))) { loopback_v4() } else { parse_ip4(host) };
-    if (ip < 0) { return 0 - 1; }
-    return udp_sock(ip, port);
+    if (ip >= 0) { return sa_put4(sa, ip, port) * 0 + udp_sock(sa, false); }
+    Int a6 = resid_raw_tls("udp_bind_a6", 16);
+    if (!parse_ip6(host, a6)) { return 0 - 1; }
+    // ::ffff:a.b.c.d is an IPv4 address in IPv6 form: bound as IPv4.
+    if (is_mapped(a6)) { return sa_put4(sa, ld32(a6 + 12), port) * 0 + udp_sock(sa, false); }
+    _ = sa_put6(sa, a6, port);
+    return udp_sock(sa, !all_zero(a6, 16));
 }
 
 // The port a UDP socket is bound to, or -1.
 @export("resid_udp_port", "i64(i64)")
 pub Int rt_udp_port(Int fd) {
     if (!sock_ok(fd)) { return 0 - 1; }
-    Int sa = resid_raw_tls("sa_udp", 16);
-    _ = resid_raw_fill(sa, 0, 16);
+    Int sa = resid_raw_tls("sa_udp", 28);
+    _ = resid_raw_fill(sa, 0, 28);
     Int lenp = resid_raw_tls("udp_len", 4);
-    _ = st32(lenp, 16);
+    _ = st32(lenp, 28);
     if (resid_raw_syscall(51, fd, sa, lenp, 0, 0, 0) != 0) { return 0 - 1; }   // getsockname
     return ld8(sa + 2) * 256 + ld8(sa + 3);
 }
 
-// One datagram to addr (four bytes) : port; true when it was sent whole.
+// One datagram to addr (4 or 16 bytes) : port; true when it was sent
+// whole. An IPv4 address goes out of an IPv6 socket as ::ffff:a.b.c.d; an
+// IPv6 one cannot leave an IPv4 socket (unless it is such a mapped one).
 @export("resid_udp_send_to", "i8(i64,ptr,i64,ptr)")
 pub Int rt_udp_send_to(Int fd, Int addr, Int port, Int data) {
     Int n = c_list_len(data);
-    if (!sock_ok(fd) || c_list_len(addr) != 4 || port < 1 || port > 65535 || n > 65507) { return 0; }
-    Int sa = resid_raw_tls("sa_udp_to", 16);
-    _ = resid_raw_fill(sa, 0, 16);
-    _ = st8(sa, 2);
-    _ = st8(sa + 2, port >> 8) + st8(sa + 3, port & 255);
-    _ = bytes_of(addr, sa + 4, 0, 4);
+    Int an = c_list_len(addr);
+    if (!sock_ok(fd) || (an != 4 && an != 16) || port < 1 || port > 65535 || n > 65507) { return 0; }
+    Int a = resid_raw_tls("udp_to_a", 16);
+    _ = bytes_of(addr, a, 0, an);
+    Int sa = resid_raw_tls("sa_udp_to", 28);
+    Bool v6 = sock_domain(fd) == 10;
+    Bool put = if (v6) { (if (an == 16) { sa_put6(sa, a, port) } else { sa_put6(sa, mapped(ld32(a)), port) }) * 0 == 0 }
+               else { if (an == 4) { sa_put4(sa, ld32(a), port) * 0 == 0 } else { is_mapped(a) && sa_put4(sa, ld32(a + 12), port) * 0 == 0 } };
+    if (!put) { return 0; }
     Int buf = xmalloc(if (n > 0) { n } else { 1 });
     _ = bytes_of(data, buf, 0, n);
-    Int r = resid_raw_syscall(44, fd, buf, n, 16384 | 64, sa, 16);   // sendto, MSG_NOSIGNAL|MSG_DONTWAIT
+    Int r = resid_raw_syscall(44, fd, buf, n, 16384 | 64, sa, sa_len(sa));   // sendto, MSG_NOSIGNAL|MSG_DONTWAIT
     _ = c_free(buf);
     return if (r == n) { 1 } else { 0 };
 }
@@ -357,18 +402,83 @@ pub Int rt_udp_send_to(Int fd, Int addr, Int port, Int data) {
 @export("resid_udp_recv_from", "ptr(i64,i64)")
 pub Int rt_udp_recv_from(Int fd, Int max0) {
     Int max = if (sock_ok(fd)) { clamp(max0, 0, 65536) } else { 0 };
-    Int buf = xmalloc(6 + if (max > 0) { max } else { 1 });
-    Int sa = resid_raw_tls("sa_udp_from", 16);
-    _ = resid_raw_fill(sa, 0, 16);
+    Int buf = xmalloc(19 + if (max > 0) { max } else { 1 });
+    Int sa = resid_raw_tls("sa_udp_from", 28);
+    _ = resid_raw_fill(sa, 0, 28);
     Int lenp = resid_raw_tls("udp_from_len", 4);
-    _ = st32(lenp, 16);
-    Int r = if (max > 0) { resid_raw_syscall(45, fd, buf + 6, max, 64, sa, lenp) } else { 0 - 1 };   // MSG_DONTWAIT
-    Bool got = r >= 0 && ld8(sa) == 2;
-    _ = if (got) { mcopy(buf, sa + 4, 4) + st8(buf + 4, ld8(sa + 2)) + st8(buf + 5, ld8(sa + 3)) } else { 0 };
-    Int out = bl_from_bytes(if (got) { r + 6 } else { 0 }, buf);
+    _ = st32(lenp, 28);
+    Int r = if (max > 0) { resid_raw_syscall(45, fd, buf + 19, max, 64, sa, lenp) } else { 0 - 1 };   // MSG_DONTWAIT
+    Int h = if (r >= 0) { sa_header(sa, buf + 19) } else { 0 };
+    Int out = bl_from_bytes(if (h > 0) { r + h } else { 0 }, buf + 19 - h);
     _ = c_free(buf);
     return out;
 }
+
+// The address and port a connected TCP socket's peer has, as a received
+// datagram's header: [n, address (n bytes), port_hi, port_lo]; empty when
+// fd is not a connected socket.
+@export("resid_tcp_peer", "ptr(i64)")
+pub Int rt_tcp_peer(Int fd) {
+    Int buf = resid_raw_tls("peer_out", 20);
+    Int sa = resid_raw_tls("sa_peer", 28);
+    _ = resid_raw_fill(sa, 0, 28);
+    Int lenp = resid_raw_tls("peer_len", 4);
+    _ = st32(lenp, 28);
+    Bool got = sock_ok(fd) && resid_raw_syscall(52, fd, sa, lenp, 0, 0, 0) == 0;   // getpeername
+    Int h = if (got) { sa_header(sa, buf + 19) } else { 0 };
+    return bl_from_bytes(h, buf + 19 - h);
+}
+
+// The [n, address, port_hi, port_lo] header for the sockaddr at sa, written
+// to end just before `at`: its length, or 0 when sa is no IPv4 or IPv6
+// address.
+Int sa_header(Int sa, Int at) {
+    Int fam = ld8(sa);
+    Bool m = fam == 10 && is_mapped(sa + 8);
+    Int an = if (fam == 2 || m) { 4 } else { if (fam == 10) { 16 } else { 0 } };
+    if (an == 0) { return 0; }
+    Int h = 3 + an;
+    Int p = at - h;
+    _ = st8(p, an);
+    _ = mcopy(p + 1, if (fam == 2) { sa + 4 } else { if (m) { sa + 20 } else { sa + 8 } }, an);
+    _ = st8(p + 1 + an, ld8(sa + 2)) + st8(p + 2 + an, ld8(sa + 3));
+    return h;
+}
+
+// ─── Socket addresses ──────────────────────────────────────────────────
+// A slot is 28 bytes: a sockaddr_in6, or a sockaddr_in in its first 16.
+
+Int sa_put4(Int sa, Int ip, Int port) {
+    _ = resid_raw_fill(sa, 0, 28);
+    _ = st8(sa, 2);                                    // AF_INET
+    _ = st8(sa + 2, port >> 8) + st8(sa + 3, port & 255);
+    return st32(sa + 4, ip);                           // network order
+}
+
+Int sa_put6(Int sa, Int a16, Int port) {
+    _ = resid_raw_fill(sa, 0, 28);
+    _ = st8(sa, 10);                                   // AF_INET6
+    _ = st8(sa + 2, port >> 8) + st8(sa + 3, port & 255);
+    return mcopy(sa + 8, a16, 16);
+}
+
+Int sa_len(Int sa) { return if (ld8(sa) == 10) { 28 } else { 16 }; }
+
+Int zero16() {
+    Int z = resid_raw_tls("zero16", 16);
+    return resid_raw_fill(z, 0, 16) * 0 + z;
+}
+
+// ::ffff:a.b.c.d for the IPv4 address ip (network order, read as a u32).
+Int mapped(Int ip) {
+    Int m = resid_raw_tls("mapped16", 16);
+    _ = resid_raw_fill(m, 0, 10) + st8(m + 10, 255) + st8(m + 11, 255);
+    return st32(m + 12, ip) * 0 + m;
+}
+
+Bool is_mapped(Int a) { return all_zero(a, 10) && ld8(a + 10) == 255 && ld8(a + 11) == 255; }
+
+Bool all_zero(Int p, Int n) { return n <= 0 || (ld8(p) == 0 && all_zero(p + 1, n - 1)); }
 
 // The port a listener actually bound, or -1. Lets `serve` report its own
 // port instead of the caller having to reserve a free one to pass in.
@@ -535,17 +645,23 @@ pub Int rt_tcp_send_some_at(Int fd, Int l, Int from, Int n0) {
     return if (w >= 0) { w } else { if (w == 0 - 11 || w == 0 - 4) { 0 } else { 0 - 1 } };
 }
 
-// ─── IPv4 name lookup: a literal, localhost, /etc/hosts, then DNS ──────
-// Addresses are the 4 bytes in network order, read as a u32; -1 when not
-// found.
+// ─── Name lookup: a literal, localhost, /etc/hosts, then DNS ───────────
+// The addresses go into a per-thread list of at most two socket address
+// slots with `port` (ra_list), IPv6 first; the count comes back, 0 when
+// the name has none.
 
-Int resolve4(Int host) {
+Int ra_list() { return resid_raw_tls("ra_list", 56); }
+
+Int resolve(Int host, Int port) {
+    Int l = ra_list();
     Int lit = parse_ip4(host);
-    if (lit >= 0) { return lit; }
-    if (lower_eq(host, resid_raw_addr("localhost"))) { return loopback_v4(); }
-    Int h = hosts_lookup(host);
-    if (h >= 0) { return h; }
-    return dns_lookup(host);
+    if (lit >= 0) { return sa_put4(l, lit, port) * 0 + 1; }
+    Int a6 = resid_raw_tls("ra_a6", 16);
+    if (parse_ip6(host, a6)) { return sa_put6(l, a6, port) * 0 + 1; }
+    if (lower_eq(host, resid_raw_addr("localhost"))) { return sa_put4(l, loopback_v4(), port) * 0 + 1; }
+    Int h = hosts_lookup(host, port, l);
+    if (h > 0) { return h; }
+    return dns_lookup(host, port, l);
 }
 
 // a.b.c.d with each part 0..255.
@@ -566,6 +682,62 @@ Int ip4_part(Int p, Int k, Int acc, Int shift) {
 Int digits_end(Int p) { return if (ld8(p) >= 48 && ld8(p) <= 57) { digits_end(p + 1) } else { p }; }
 Int dec_value(Int p, Int e, Int acc) { return if (p >= e) { acc } else { dec_value(p + 1, e, acc * 10 + ld8(p) - 48) }; }
 
+// An IPv6 address in text (RFC 4291 2.2: up to eight hex groups, one "::"
+// for a run of zeros, a dotted IPv4 tail), optionally in brackets, ending
+// at the string's end or a space, into 16 bytes at out. No zone ("%eth0").
+pub Bool parse_ip6(Int p0, Int out) {
+    Bool br = ld8(p0) == 91;
+    Int p = if (br) { p0 + 1 } else { p0 };
+    Int te = tok_end(p0);
+    // Brackets: both or neither, and the closing one last.
+    Bool shape = if (br) { te - p0 >= 4 && ld8(te - 1) == 93 && !has_byte(p0, te - 1, 93) } else { !has_byte(p0, te, 93) };
+    if (!shape) { return false; }
+    Int tmp = resid_raw_tls("ip6_tmp", 16);
+    _ = resid_raw_fill(tmp, 0, 16);
+    Bool lead = ld8(p) == 58 && ld8(p + 1) == 58;
+    Int r = if (lead) { if (ip6_end(ld8(p + 2))) { 16 } else { ip6_at(p + 2, tmp, 0, 0) } } else { ip6_at(p, tmp, 0, 0 - 1) };
+    if (r < 0) { return false; }
+    Int k = r % 16;
+    Int gap = r / 16 - 1;
+    if ((gap < 0 && k != 8) || (gap >= 0 && k > 7)) { return false; }
+    _ = resid_raw_fill(out, 0, 16);
+    if (gap < 0) { return mcopy(out, tmp, 16) * 0 == 0; }
+    _ = mcopy(out, tmp, 2 * gap);
+    return mcopy(out + 16 - 2 * (k - gap), tmp + 2 * gap, 2 * (k - gap)) * 0 == 0;
+}
+
+// Groups from p: k already at tmp (two bytes each, big endian), gap the
+// count of groups before "::" (-1: none yet). The result packs the final
+// k and gap as k + 16 * (gap + 1), or -1 when the text is no address.
+Int ip6_at(Int p, Int tmp, Int k, Int gap) {
+    if (k >= 8) { return 0 - 1; }
+    Int e = hex_end(p);
+    Int c = ld8(e);
+    if (c == 46) {                                     // a dotted IPv4 tail
+        Int v4 = parse_ip4(p);
+        if (v4 < 0 || k > 6) { return 0 - 1; }
+        return st32(tmp + 2 * k, v4) * 0 + k + 2 + 16 * (gap + 1);
+    }
+    if (e == p || e - p > 4) { return 0 - 1; }
+    Int v = hex_value(p, e, 0);
+    _ = st8(tmp + 2 * k, v >> 8) + st8(tmp + 2 * k + 1, v & 255);
+    if (ip6_end(c)) { return k + 1 + 16 * (gap + 1); }
+    if (c != 58) { return 0 - 1; }
+    if (ld8(e + 1) == 58) {
+        if (gap >= 0) { return 0 - 1; }
+        if (ip6_end(ld8(e + 2))) { return k + 1 + 16 * (k + 2); }
+        return ip6_at(e + 2, tmp, k + 1, k + 1);
+    }
+    return ip6_at(e + 1, tmp, k + 1, gap);
+}
+
+Bool ip6_end(Int c) { return c == 0 || c == 93 || is_space(c); }
+Int hexv(Int c) { return if (c >= 48 && c <= 57) { c - 48 } else { if (c >= 97 && c <= 102) { c - 87 } else { if (c >= 65 && c <= 70) { c - 55 } else { 0 - 1 } } }; }
+Int hex_end(Int p) { return if (hexv(ld8(p)) >= 0) { hex_end(p + 1) } else { p }; }
+Int hex_value(Int p, Int e, Int acc) { return if (p >= e) { acc } else { hex_value(p + 1, e, acc * 16 + hexv(ld8(p))) }; }
+Int tok_end(Int p) { return if (ld8(p) == 0 || is_space(ld8(p))) { p } else { tok_end(p + 1) }; }
+Bool has_byte(Int p, Int e, Int b) { return p < e && (ld8(p) == b || has_byte(p + 1, e, b)); }
+
 Bool lower_eq(Int a, Int b) {
     Int x = lower(ld8(a));
     if (x != lower(ld8(b))) { return false; }
@@ -573,21 +745,33 @@ Bool lower_eq(Int a, Int b) {
     return lower_eq(a + 1, b + 1);
 }
 
-// /etc/hosts: "address name alias..." lines; the first IPv4 match.
-Int hosts_lookup(Int host) {
+// /etc/hosts: "address name alias..." lines; the first IPv6 and the first
+// IPv4 match, into l.
+Int hosts_lookup(Int host, Int port, Int l) {
     Int blk = read_file_all(resid_raw_addr("/etc/hosts"));
-    if (blk == 0) { return 0 - 1; }
-    Int r = hosts_lines(blk, host);
-    return c_free(blk) * 0 + r;
+    if (blk == 0) { return 0; }
+    Int a6 = resid_raw_tls("hosts_a6", 16);
+    Bool h6 = hosts_v6(blk, host, a6);
+    Int h4 = hosts_v4(blk, host);
+    Int n6 = if (h6) { sa_put6(l, a6, port) * 0 + 1 } else { 0 };
+    Int n = if (h4 >= 0) { sa_put4(l + 28 * n6, h4, port) * 0 + n6 + 1 } else { n6 };
+    return c_free(blk) * 0 + n;
 }
 
-Int hosts_lines(Int p, Int host) {
+Int hosts_v4(Int p, Int host) {
     if (ld8(p) == 0) { return 0 - 1; }
     Int e = line_end(p);
     Int ip = if (ld8(p) != 35) { parse_ip4(p) } else { 0 - 1 };
-    Bool hit = ip >= 0 && line_has_name(skip_word(p, e), e, host);
-    if (hit) { return ip; }
-    return hosts_lines(if (ld8(e) == 0) { e } else { e + 1 }, host);
+    if (ip >= 0 && line_has_name(skip_word(p, e), e, host)) { return ip; }
+    return hosts_v4(if (ld8(e) == 0) { e } else { e + 1 }, host);
+}
+
+Bool hosts_v6(Int p, Int host, Int out) {
+    if (ld8(p) == 0) { return false; }
+    Int e = line_end(p);
+    Bool hit = ld8(p) != 35 && parse_ip6(p, out) && line_has_name(skip_word(p, e), e, host);
+    if (hit) { return true; }
+    return hosts_v6(if (ld8(e) == 0) { e } else { e + 1 }, host, out);
 }
 
 Int line_end(Int p) { return if (ld8(p) == 0 || ld8(p) == 10) { p } else { line_end(p + 1) }; }
@@ -607,54 +791,66 @@ Bool prefix_ci(Int a, Int b, Int n) {
     return lower(ld8(a)) == lower(ld8(b)) && prefix_ci(a + 1, b + 1, n - 1);
 }
 
-// DNS: an A query to each "nameserver" IPv4 line of /etc/resolv.conf in
-// turn (3 s each), answers read from the reply (CNAMEs are followed by
-// the server's own answer records).
-Int dns_lookup(Int host) {
+// DNS: AAAA and A queries to each "nameserver" line (IPv4 or IPv6) of
+// /etc/resolv.conf in turn (3 s each), until one has an address; answers
+// are read from the reply (CNAMEs are followed by the server's own answer
+// records).
+Int dns_lookup(Int host, Int port, Int l) {
+    Int srv = resid_raw_tls("dns_srv", 28);
     Int blk = read_file_all(resid_raw_addr("/etc/resolv.conf"));
-    if (blk == 0) { return dns_ask(16777343, host); }
-    Int r = ns_lines(blk, host);
+    if (blk == 0) { return sa_put4(srv, 16777343, 53) * 0 + dns_both(srv, host, port, l); }
+    Int r = ns_lines(blk, host, port, l, srv);
     return c_free(blk) * 0 + r;
 }
 
-Int ns_lines(Int p, Int host) {
-    if (ld8(p) == 0) { return 0 - 1; }
+Int ns_lines(Int p, Int host, Int port, Int l, Int srv) {
+    if (ld8(p) == 0) { return 0; }
     Int e = line_end(p);
     Bool ns = prefix_ci(p, resid_raw_addr("nameserver"), 10) && is_space(ld8(p + 10));
-    Int ip = if (ns) { parse_ip4(skip_blank(p + 10, e)) } else { 0 - 1 };
-    Int r = if (ip >= 0) { dns_ask(ip, host) } else { 0 - 1 };
-    if (r >= 0) { return r; }
-    return ns_lines(if (ld8(e) == 0) { e } else { e + 1 }, host);
+    Int a = if (ns) { skip_blank(p + 10, e) } else { p };
+    Int ip = if (ns) { parse_ip4(a) } else { 0 - 1 };
+    Int a6 = resid_raw_tls("ns_a6", 16);
+    Bool v6 = ns && ip < 0 && parse_ip6(a, a6);
+    Int at = if (ip >= 0) { sa_put4(srv, ip, 53) * 0 + 1 } else { if (v6) { sa_put6(srv, a6, 53) * 0 + 1 } else { 0 } };
+    Int r = if (at == 1) { dns_both(srv, host, port, l) } else { 0 };
+    if (r > 0) { return r; }
+    return ns_lines(if (ld8(e) == 0) { e } else { e + 1 }, host, port, l, srv);
 }
 
-Int dns_ask(Int server, Int host) {
+Int dns_both(Int srv, Int host, Int port, Int l) {
+    Int a6 = resid_raw_tls("dns_a6", 16);
+    Int a4 = resid_raw_tls("dns_a4", 4);
+    Int n6 = if (dns_ask(srv, host, 28, a6) == 1) { sa_put6(l, a6, port) * 0 + 1 } else { 0 };
+    return if (dns_ask(srv, host, 1, a4) == 1) { sa_put4(l + 28 * n6, ld32(a4), port) * 0 + n6 + 1 } else { n6 };
+}
+
+// One query of type qtype (1: A, 28: AAAA): 1 with the address at out, 0
+// when the server answered without one, -1 when it did not answer.
+Int dns_ask(Int srv, Int host, Int qtype, Int out) {
     Int q = xmalloc(600);
-    Int qn = dns_query(q, host);
+    Int qn = dns_query(q, host, qtype);
     if (qn < 0) { return c_free(q) * 0 - 1; }
-    Int fd = resid_raw_syscall(41, 2, 2, 0, 0, 0, 0);    // SOCK_DGRAM
+    Int fd = resid_raw_syscall(41, ld8(srv), 2 | 524288, 0, 0, 0, 0);    // SOCK_DGRAM, the server's family
     if (fd < 0) { return c_free(q) * 0 - 1; }
     _ = set_timeout(fd, 3);
-    Int sa = resid_raw_tls("sa_dns", 16);
-    _ = resid_raw_fill(sa, 0, 16);
-    _ = st8(sa, 2) + st8(sa + 2, 0) + st8(sa + 3, 53) + st32(sa + 4, server);
     // Connected: the kernel drops replies from any other address.
-    Int cn = resid_raw_syscall(42, fd, sa, 16, 0, 0, 0);
+    Int cn = resid_raw_syscall(42, fd, srv, sa_len(srv), 0, 0, 0);
     Int sent = if (cn == 0) { resid_raw_syscall(44, fd, q, qn, 16384, 0, 0) } else { 0 - 1 };
     Int resp = xmalloc(1500);
     Int n = if (sent == qn) { resid_raw_syscall(45, fd, resp, 1500, 0, 0, 0) } else { 0 - 1 };
     _ = sys_close(fd);
-    Int r = if (n >= 12 && ld8(resp) == ld8(q) && ld8(resp + 1) == ld8(q + 1)) { dns_answer(resp, n) } else { 0 - 1 };
+    Int r = if (n >= 12 && ld8(resp) == ld8(q) && ld8(resp + 1) == ld8(q + 1)) { dns_answer(resp, n, qtype, out) } else { 0 - 1 };
     return c_free(q) * 0 + c_free(resp) * 0 + r;
 }
 
-// A standard query for host's A record: its length, or -1.
-Int dns_query(Int q, Int host) {
+// A standard query for host's qtype record: its length, or -1.
+Int dns_query(Int q, Int host, Int qtype) {
     Int id = rt_crypto_random_byte() * 256 + rt_crypto_random_byte();
     _ = st8(q, id >> 8) + st8(q + 1, id & 255) + st8(q + 2, 1) + st8(q + 3, 0);
     _ = st8(q + 4, 0) + st8(q + 5, 1) + resid_raw_fill(q + 6, 0, 6);
     Int k = dns_name(q, 12, host, host);
     if (k < 0) { return 0 - 1; }
-    _ = st8(q + k, 0) + st8(q + k + 1, 1) + st8(q + k + 2, 0) + st8(q + k + 3, 1);
+    _ = st8(q + k, 0) + st8(q + k + 1, qtype) + st8(q + k + 2, 0) + st8(q + k + 3, 1);
     return k + 4;
 }
 
@@ -674,13 +870,13 @@ Int label_end(Int p) { return if (ld8(p) == 0 || ld8(p) == 46) { p } else { labe
 
 Int be16(Int p) { return (ld8(p) << 8) | ld8(p + 1); }
 
-// The first A record among the answers, or -1.
-Int dns_answer(Int r, Int n) {
-    if ((ld8(r + 3) & 15) != 0) { return 0 - 1; }         // rcode
+// The first qtype record among the answers into out: 1, else 0.
+Int dns_answer(Int r, Int n, Int qtype, Int out) {
+    if ((ld8(r + 3) & 15) != 0) { return 0; }         // rcode
     Int qd = be16(r + 4);
     Int an = be16(r + 6);
     Int p = skip_questions(r, n, 12, qd);
-    return answers(r, n, p, an);
+    return answers(r, n, p, an, qtype, out);
 }
 
 Int skip_questions(Int r, Int n, Int p, Int k) {
@@ -698,14 +894,15 @@ Int skip_name(Int r, Int n, Int p) {
     return skip_name(r, n, p + 1 + c);
 }
 
-Int answers(Int r, Int n, Int p, Int k) {
-    if (k == 0 || p < 0) { return 0 - 1; }
+Int answers(Int r, Int n, Int p, Int k, Int qtype, Int out) {
+    if (k == 0 || p < 0) { return 0; }
     Int e = skip_name(r, n, p);
-    if (e < 0 || e + 10 > n) { return 0 - 1; }
+    if (e < 0 || e + 10 > n) { return 0; }
     Int ty = be16(r + e);
     Int len = be16(r + e + 8);
-    if (ty == 1 && len == 4 && e + 14 <= n) { return ld32(r + e + 10); }
-    return answers(r, n, e + 10 + len, k - 1);
+    Int want = if (qtype == 28) { 16 } else { 4 };
+    if (ty == qtype && len == want && e + 10 + len <= n) { return mcopy(out, r + e + 10, len) * 0 + 1; }
+    return answers(r, n, e + 10 + len, k - 1, qtype, out);
 }
 // Write all n bytes at p (MSG_NOSIGNAL); false on error.
 Bool send_all(Int fd, Int p, Int n) {
@@ -726,12 +923,17 @@ Bool sock_ok(Int fd) {
 
 // An AF_INET or AF_INET6 socket: a network grant cannot reach a display (AF_UNIX) socket.
 Bool inet_sock(Int fd) {
+    Int d = sock_domain(fd);
+    return d == 2 || d == 10;
+}
+
+// A socket's address family (SO_DOMAIN), or -1.
+Int sock_domain(Int fd) {
     Int dom = resid_raw_tls("sock_dom", 8);
     Int lenp = resid_raw_tls("sock_dom_len", 4);
     _ = st32(dom, 0) + st32(lenp, 4);
-    if (resid_raw_syscall(55, fd, 1, 39, dom, lenp, 0) != 0) { return false; }   // SOL_SOCKET, SO_DOMAIN
-    Int d = ld32(dom);
-    return d == 2 || d == 10;
+    if (resid_raw_syscall(55, fd, 1, 39, dom, lenp, 0) != 0) { return 0 - 1; }   // SOL_SOCKET, SO_DOMAIN
+    return ld32(dom);
 }
 
 @export("resid_tcp_send", "i8(i64,ptr)")

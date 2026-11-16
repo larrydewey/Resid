@@ -57,13 +57,13 @@ inherited.
 
 | Builtin | Returns | Mode |
 |---|---|---|
-| `resid_tcp_connect(host, port)` | a connected socket, or -1 | read |
+| `resid_tcp_connect(host, port)` | a connected socket, or -1; `host` is an IPv4 or IPv6 literal (brackets allowed) or a name, whose IPv6 and IPv4 addresses are tried in turn | read |
 | `resid_tcp_send(fd, s)`, `resid_tcp_send_bin(fd, bytes)` | `Bool`; at most 1 MB of bytes per call | read |
 | `resid_tcp_recv_all(fd)` | `Str`: everything until the peer closes, at most 4 MB | read |
 | `resid_tcp_recv_bin(fd, n)` | `List(Int)`: exactly `n` bytes, zero-filled past EOF | read |
 | `resid_tcp_recv_some(fd, max)` | `List(Int)`: what one receive returns, empty at EOF or timeout | read |
 | `resid_tcp_listen(port)` | a listener on 127.0.0.1 (`0` = any free port), or -1 | read |
-| `resid_tcp_listen_at(host, port)` | a listener on an interface address such as `"0.0.0.0"`, or -1 | write |
+| `resid_tcp_listen_at(host, port)` | a listener on an interface address such as `"0.0.0.0"`, `"::"` (IPv6 and IPv4) or one IPv6 address, or -1 | write |
 | `resid_tcp_bound_port(lfd)` | the port a listener bound | read |
 | `resid_tcp_accept(lfd)` | an accepted connection, or -1 | read |
 | `resid_tcp_shutdown(fd)` | `Bool`: no more sends; receives end 2 s from now | read |
@@ -71,10 +71,17 @@ inherited.
 | `resid_tcp_accept_now(lfd)` | a waiting connection, -2 when none is, -1 on failure; makes the listener non-blocking | read |
 | `resid_tcp_poll(fds, wants, ms)` | `List(Int)`: per socket 1 readable, 2 writable, 4 deadline passed, 8 not a socket; waits at most `ms` (-1 no bound) and never past the nearest deadline | read |
 | `resid_tcp_send_some(fd, bytes)` | `Int`: bytes sent without waiting, 0 when the buffer is full, -1 on error | read |
+| `resid_tcp_peer(fd)` | `List(Int)`: the peer as `[n, address (n bytes), port_hi, port_lo]`, `n` 4 for IPv4 and 16 for IPv6; empty when `fd` is not a connected socket | read |
 | `resid_tcp_close(fd)` | `Bool` | read |
+| `resid_udp_open()` | a client UDP socket on every interface (IPv6 carrying IPv4 too, or IPv4 alone without IPv6), or -1 | read |
+| `resid_udp_bind(port)`, `resid_udp_bind_at(host, port)` | a UDP socket on 127.0.0.1, or on an interface address (`"0.0.0.0"`, `"::"`, one address), or -1 | read, write |
+| `resid_udp_send_to(fd, addr, port, bytes)` | `Bool`: one datagram to `addr` (4 or 16 bytes) | read |
+| `resid_udp_recv_from(fd, max)` | `List(Int)`: one waiting datagram as `[n, address (n bytes), port_hi, port_lo, data...]` (an IPv4 sender is 4 bytes, also on an IPv6 socket), empty when none is waiting | read |
 
 Sockets have a 30 s timeout on any one receive or blocked send, and a
-connect gives up after 30 s. `network(readonly)` grants every row
+connect gives up after 30 s (5 s for an address of a name when another
+is left to try). Names are looked up in `/etc/hosts`, then with AAAA
+and A queries to the nameservers of `/etc/resolv.conf` (IPv4 or IPv6). `network(readonly)` grants every row
 marked read: exposing a port to other machines is the only write.
 `lib/http.resid`, `lib/httpserv.resid` and `lib/tls.resid` are built on
 these builtins.
