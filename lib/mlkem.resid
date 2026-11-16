@@ -20,7 +20,11 @@ import "word.resid";
 import "keccakg.resid";
 import "random.resid";
 
+/// An ML-KEM-768 key pair: the public encapsulation key `ek` (1184 bytes)
+/// and the secret decapsulation key `dk` (2400 bytes).
 pub type MlkemKeys = { List(Int) ek; List(Secret(UInt(8))) dk; };
+/// An encapsulation's result: the public ciphertext `ct` (1088 bytes) and
+/// the secret shared key `k` (32 bytes).
 pub type MlkemEncaps = { List(Int) ct; List(Secret(UInt(8))) k; };
 
 Int mk_k() { return 3; }

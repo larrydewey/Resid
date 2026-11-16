@@ -6,6 +6,7 @@
 
 import "word.resid";
 
+/// The Keccak-f[1600] state: 25 lanes, lane x + 5y in field a(x + 5y).
 type K25(W) = { W a0; W a1; W a2; W a3; W a4; W a5; W a6; W a7; W a8; W a9; W a10; W a11; W a12; W a13; W a14; W a15; W a16; W a17; W a18; W a19; W a20; W a21; W a22; W a23; W a24; };
 
 /// The 24 round constants of Keccak-f[1600] (FIPS 202 §3.2.5).

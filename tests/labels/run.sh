@@ -33,7 +33,7 @@ missing=""
 for n in $names; do
     if ! grep -q "\"$n\"" "$ROOT/compiler/labels.resid"; then
         case "$n" in
-            str_*|resid_fmt_*|resid_chal_*|resid_tcp_*|resid_udp_*|resid_unix_*|resid_term_*|resid_dbg_*|resid_pty_*|resid_sandbox_*|resid_disp_*|resid_clock_*|resid_device_*|resid_cpu_has_*|ct_*|aesni_*|checked_*|wrapping_*|saturating_*) ;;
+            str_*|resid_fmt_*|resid_chal_*|resid_tcp_*|resid_udp_*|resid_unix_*|resid_term_*|resid_dbg_*|resid_pty_*|resid_sandbox_*|resid_disp_*|resid_a11y_*|resid_clock_*|resid_device_*|resid_cpu_has_*|ct_*|aesni_*|checked_*|wrapping_*|saturating_*) ;;
             *) missing="$missing $n" ;;
         esac
     fi
