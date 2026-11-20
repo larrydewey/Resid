@@ -320,10 +320,10 @@ if command -v python3 > /dev/null; then
 fi
 # Large objects (region.resid): a 64 MB list made inside a loop and carried
 # through its compactions is adopted, not copied, so the loop stays within
-# a budget of under three times what it holds (a copy at each compaction
-# peaks near 260 MB here).
+# 220 MB. Measured: the adopting runtime needs 175-200 MB depending on the
+# machine (200 on a 16-core desktop), the copying one (v0.10.1) 260-300.
 if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/large_carry.resid -o "$W/large_carry") > "$W/large_carry.log" 2>&1 \
-    && RESID_MEM_LIMIT=180 timeout 120 "$W/large_carry" > "$W/large_carry.out" 2>&1 \
+    && RESID_MEM_LIMIT=220 timeout 120 "$W/large_carry" > "$W/large_carry.out" 2>&1 \
     && [ "$(cat "$W/large_carry.out")" = "30244212908" ]; then
     pass=$((pass + 1))
 else

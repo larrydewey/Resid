@@ -1,9 +1,9 @@
 // A large list made inside a loop and carried on while each iteration
 // makes garbage (the shape of a file transfer holding its whole file):
 // the loop's compactions adopt the list's buffer rather than copying it,
-// so the loop fits a budget of about twice what it holds (run.sh sets
+// so the loop fits about three times what it holds (run.sh sets
 // RESID_MEM_LIMIT). A runtime that copies it at each compaction needs
-// three times as much, and copies it every few iterations.
+// four to five times as much, and copies it every few iterations.
 
 List(Int) fill(Int n, ListBuf(Int) acc) { if (n <= 0) { return acc.finish(); } return fill(n - 1, acc.push(n * 7 + 1)); }
 
