@@ -27,6 +27,26 @@
   was built on its crates, were deleted on 2026-09-26; both are in git
   history.
 
+### 0zza. Large objects in loop regions; packed file reads (2026-11-20)
+
+Found through Pylon: `pylon put` of a 20 MB file peaked at 1.08 GB (40 MB
+near 2 GB, reported as a pylond blowup; pylond itself held 15-19 MB).
+The client carried a copy of the file (`List(Int)`, 8 bytes a byte) made
+inside its transfer loop; each compaction of the loop's region (when it
+doubled) copied it again: ~257 MB live, 73 compactions, ~18 GB of copying,
+and a peak of three times live.
+
+- **Large-object runs** (`region.resid`, Large objects): blocks of half a
+  page or more get their own page run; a compaction adopts the run
+  (relink, retag) instead of copying. Only from the region the compaction
+  discards, so nothing left behind can reach the block. The unchanged
+  Pylon client: 20 MB put 1080 MB / 70-126 s -> 815 MB / 6 s.
+- **`filesystem.read_bytes_u8`**: a file as `List(UInt(8))`, one byte a
+  byte. `bl_widen` fills the new list directly (a 20 MB `read_bytes`
+  no longer stages a 160 MB array).
+- Test: `tests/runtime/mem/large_carry.resid` (64 MB carried; fits
+  `RESID_MEM_LIMIT=180`, the copying runtime needed ~257 MB).
+
 ### 0zz. Devices, labels, attestation, performance (2026-10-10 → 2026-10-13)
 
 Previously unrecorded here; reconstructed from the commit log at HEAD

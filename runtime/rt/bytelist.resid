@@ -109,14 +109,15 @@ pub Int bl_widen_fill(Int s, Int out, Int i, Int n) {
     return bl_widen_fill(s, out, i + 1, n);
 }
 
-// A byte list as a list of raw slots of kind k.
+// A byte list as a list of raw slots of kind k, widened straight into its
+// flat buffer (eight bytes a byte, once: no staging array to copy from).
 @noinline
 pub Int bl_widen(Int l, Int k) {
     Int n = lcount(l);
     if (n == 0) { return set_list(list_hdr(), 0, 0, 0, k); }
-    Int items = bl_to_array(l);
-    Int out = rt_list_new(n, items, k);
-    return c_free(items) * 0 + out;
+    Int f = flat_new(n);
+    _ = bl_widen_fill(bl_data(l), f + 24, 0, n) + st64(f, n);
+    return set_list(list_hdr(), n, 0 - 1, f, k);
 }
 
 // ─── Appends ───────────────────────────────────────────────────────────
@@ -358,6 +359,7 @@ pub Int bl_move(Int l, Int ctx) {
 
 // A copy of byte buffer f in the move's destination, same capacity.
 pub Int bl_copy_to(Int f, Int n, Int ctx) {
+    if (lg_adopt(f, ctx) != 0) { return f; }
     Int cap = if (ld64(f + 8) > n) { ld64(f + 8) } else { (max(n, 1) + 7) & (0 - 8) };
     Int g = mv_alloc(ctx, 24 + cap);
     _ = st64(g, n) + st64(g + 8, cap) + st64(g + 16, n);

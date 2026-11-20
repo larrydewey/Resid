@@ -318,5 +318,16 @@ if command -v python3 > /dev/null; then
         || { nd_ok=0; nd_why="$nd_why secret_overflow: $(tr '\n' ' ' < "$W/nd_secret_overflow.out")"; }
     if [ "$nd_ok" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL secret mode core dumps:$nd_why"; fi
 fi
+# Large objects (region.resid): a 64 MB list made inside a loop and carried
+# through its compactions is adopted, not copied, so the loop stays within
+# a budget of under three times what it holds (a copy at each compaction
+# peaks near 260 MB here).
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/large_carry.resid -o "$W/large_carry") > "$W/large_carry.log" 2>&1 \
+    && RESID_MEM_LIMIT=180 timeout 120 "$W/large_carry" > "$W/large_carry.out" 2>&1 \
+    && [ "$(cat "$W/large_carry.out")" = "30244212908" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL large objects carried through a loop: $(tail -1 "$W/large_carry.out" "$W/large_carry.log" 2>/dev/null | tr '\n' ' ')"
+fi
 echo "runtime: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

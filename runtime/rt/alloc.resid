@@ -229,7 +229,8 @@ Int scope_pop_slow(Int d) {
 
 Int pop_regions(Int i, Int d, Int n) {
     if (i < d) { return n; }
-    return pop_regions(i - 1, d, pages_free(ld64(rec_at(i) + 8), n, ld64(rec_at(i) + 16)));
+    Int n1 = pages_free(ld64(rec_at(i) + 8), n, ld64(rec_at(i) + 16));
+    return pop_regions(i - 1, d, lg_free(ld64(rec_at(i) + 56), n1));
 }
 
 // The innermost region's bump: the fast path, inlined at each call.

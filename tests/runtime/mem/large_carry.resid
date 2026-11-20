@@ -1,0 +1,22 @@
+// A large list made inside a loop and carried on while each iteration
+// makes garbage (the shape of a file transfer holding its whole file):
+// the loop's compactions adopt the list's buffer rather than copying it,
+// so the loop fits a budget of about twice what it holds (run.sh sets
+// RESID_MEM_LIMIT). A runtime that copies it at each compaction needs
+// three times as much, and copies it every few iterations.
+
+List(Int) fill(Int n, ListBuf(Int) acc) { if (n <= 0) { return acc.finish(); } return fill(n - 1, acc.push(n * 7 + 1)); }
+
+// Carried: the big list (made at step 0), a running checksum.
+Int carry(Int i, Int n, List(Int) big, Int sum) {
+    if (i >= n) { return sum + big.len(); }
+    List(Int) b = if (i == 0) { fill(8388608, ListBuf()) } else { big };
+    // About 2 MB of garbage a step: a slice of the big list, dropped.
+    List(Int) chunk = b[(i * 4096) % 8000000..(i * 4096) % 8000000 + 262144];
+    return carry(i + 1, n, b, sum + chunk[i % 262144] + chunk.len());
+}
+
+Int main() {
+    println(f"{carry(0, 600, [], 0)}");
+    return 0;
+}

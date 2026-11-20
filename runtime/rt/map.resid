@@ -1614,6 +1614,7 @@ Int elem_move_ptr(Int p, Int ctx) {
 
 Int str_move(Int p, Int ctx) {
     if (p == 0 || !mv_src(ctx, p)) { return p; }
+    if (lg_adopt(p, ctx) != 0) { return p; }
     Int n = c_strlen(p) + 1;
     Int q = mv_alloc(ctx, n);
     return mcopy(q, p, n) * 0 + q;
@@ -1676,6 +1677,13 @@ Int flat_move(Int f, Int n, Int ek, Int ctx) {
 // A copy of flat buffer f in the move's destination, its elements moved.
 // Same capacity: the next appends still fit in place.
 Int flat_copy(Int f, Int n, Int ek, Int ctx) {
+    // A large buffer is adopted (region.resid, Large objects): its elements
+    // move where it lies, and every slot below n is then settled.
+    Int a = lg_adopt(f, ctx);
+    if (a != 0) {
+        _ = move_elems(f, f, 0, n, ek, ctx);
+        return st64(f + 16, if (a == 2) { max(ld64(f + 16), n) } else { n }) * 0 + f;
+    }
     Int cap = if (ld64(f + 8) > n) { ld64(f + 8) } else { max(n, 1) };
     Int g = mv_alloc(ctx, 24 + cap * 8);
     _ = st64(g, n) + st64(g + 8, cap) + st64(g + 16, n);

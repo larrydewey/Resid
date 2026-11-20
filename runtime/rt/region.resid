@@ -29,8 +29,8 @@ pub Int rg_pages() { return ld64(rg_g() + 192); }
 
 // Process-wide words: 0 the range's base, 1 the next untouched page, 2 the
 // page table, 3 a lock, 4-22 the free runs of 2^k pages, 23 the last id,
-// 24 the range's size in pages.
-pub Int rg_g() { return resid_raw_global("rt_regions", 200); }
+// 24 the range's size in pages, 25 the large-run table (Large objects).
+pub Int rg_g() { return resid_raw_global("rt_regions", 208); }
 
 Int rg_lock() {
     if (resid_raw_cas(rg_g() + 24, 0, 1)) { return 0; }
@@ -62,12 +62,13 @@ Int rg_map(Int pages) {
     if (pages < 1024) { return 0; }
     Int base = rg_reserve(pages * rg_page());
     if (base == 0) { return rg_map(pages / 4); }
-    Int tab = rg_reserve(pages * 8);
+    // The page table (a word a page), then the large-run table (a byte a page).
+    Int tab = rg_reserve(pages * 9);
     if (tab == 0) {
         _ = resid_raw_syscall(11, base, pages * rg_page(), 0, 0, 0, 0);   // munmap
         return rg_map(pages / 4);
     }
-    _ = st64(rg_g() + 192, pages) + st64(rg_g() + 16, tab) + st64(rg_g() + 8, 0);
+    _ = st64(rg_g() + 192, pages) + st64(rg_g() + 16, tab) + st64(rg_g() + 8, 0) + st64(rg_g() + 200, tab + pages * 8);
     return st64(rg_g(), base) * 0 + 1;
 }
 
@@ -148,7 +149,7 @@ Int run_take(Int k) {
 // `bump` is the bump pointer of the region the page belonged to: on the
 // page that holds it, nothing above it was ever allocated.
 Int pages_give(Int p, Int k, Int bump) {
-    _ = own_set(p, 1 << k, 0);
+    _ = own_set(p, 1 << k, 0) + lg_mark(p, 0);
     Int c = rg_cache();
     Bool cache = k == 0 && ld64(c + 8) < 64;
     // In secret mode a freed page is zeroed before it is cached for reuse:
@@ -236,6 +237,7 @@ pub Int alloc_in(Int r, Int n0) {
 pub Int region_grow(Int r, Int n) {
     // Bounded as malloc's big_max (2^46), so n + 16 cannot wrap.
     if (n < 0 || n > 70368744177664) { return rt_abort("allocation size out of range"); }
+    if (lg_size(n)) { return lg_new(r, n); }
     Int k = order_of(n + 16);
     Int pg = pages_take(k, ld64(r));
     _ = st64(pg, ld64(r + 8)) + st64(pg + 8, k);
@@ -244,6 +246,102 @@ pub Int region_grow(Int r, Int n) {
     Int d = ag_scope_depth();
     _ = if (d > 0 && r == rec_at(d - 1)) { due_sync(d) } else { 0 };
     return pg + 16;
+}
+
+// ─── Large objects ─────────────────────────────────────────────────────
+// A block of half a page or more gets a page run of its own, off the
+// region's page list: record word 7 (+56) heads a doubly linked list of
+// them. A loop's compaction adopts such a run (the move unlinks it,
+// retags its pages and links it into the new region) instead of copying
+// the block, so carrying a large value through a loop costs nothing per
+// compaction, and a region never holds a second copy of a large value.
+// A run is {next, order, prev, spare} then the block (lg_hdr bytes in).
+// Which pages start one is kept in a table of its own (a byte a page,
+// word 25 of rg_g), never in the run, so no stored value can pass for one.
+
+pub Int lg_hdr() { return 32; }
+pub Bool lg_size(Int n) { return n + lg_hdr() > rg_page() / 2; }
+
+Int lg_byte(Int p) { return ld64(rg_g() + 200) + ((p - ld64(rg_g())) >> 20); }
+Int lg_mark(Int p, Int v) { return st8(lg_byte(p), v) * 0; }
+
+// p is the block of a large run (its first byte).
+pub Bool lg_is(Int p) {
+    Int base = ld64(rg_g());
+    Int off = p - base;
+    if (base == 0 || !ult(off, rg_pages() * rg_page()) || (off & (rg_page() - 1)) != lg_hdr()) { return false; }
+    return ld8(lg_byte(p)) == 1;
+}
+
+Int lg_new(Int r, Int n) {
+    Int k = order_of(n + lg_hdr());
+    Int pg = pages_take(k, ld64(r));
+    _ = lg_link(r, pg, k) + st64(r + 32, ld64(r + 32) + (1 << k));
+    Int d = ag_scope_depth();
+    _ = if (d > 0 && r == rec_at(d - 1)) { due_sync(d) } else { 0 };
+    return pg + lg_hdr();
+}
+
+Int lg_link(Int r, Int pg, Int k) {
+    Int head = ld64(r + 56);
+    _ = st64(pg, head) + st64(pg + 8, k) + st64(pg + 16, 0) + st64(pg + 24, 0);
+    _ = if (head != 0) { st64(head + 16, pg) } else { 0 };
+    return st64(r + 56, pg) + lg_mark(pg, 1);
+}
+
+Int lg_unlink(Int r, Int pg) {
+    Int next = ld64(pg);
+    Int prev = ld64(pg + 16);
+    _ = if (prev == 0) { st64(r + 56, next) } else { st64(prev, next) };
+    return if (next != 0) { st64(next + 16, prev) } else { 0 };
+}
+
+// Every run of a list given back; n plus the count of runs.
+pub Int lg_free(Int pg, Int n) {
+    if (pg == 0) { return n; }
+    Int next = ld64(pg);
+    _ = pages_give(pg, ld64(pg + 8), 0);
+    return lg_free(next, n + 1);
+}
+
+// Every run of a list owned by id (still marked large when keep); the last run.
+Int lg_retag(Int pg, Int id, Bool keep) {
+    _ = own_set(pg, 1 << ld64(pg + 8), id) + lg_mark(pg, if (keep) { 1 } else { 0 });
+    Int next = ld64(pg);
+    return if (next == 0) { pg } else { lg_retag(next, id, keep) };
+}
+
+// Region r's large runs become p's.
+Int lg_merge(Int r, Int p) {
+    Int head = ld64(r + 56);
+    if (head == 0) { return 0; }
+    Int last = lg_retag(head, ld64(p), true);
+    Int ph = ld64(p + 56);
+    _ = st64(last, ph) + (if (ph != 0) { st64(ph + 16, last) } else { 0 });
+    return st64(p + 56, head) + st64(r + 56, 0);
+}
+
+// Whether block p moves by adoption rather than by a copy: 1 adopted
+// now, 2 already in the destination, 0 not (copy it). Only a loop's
+// compaction adopts, and only from a region it moves out of (on this
+// thread's stack, in the move's source range), which is freed when the
+// move ends: nothing left behind can still reach the block, and a region
+// that stays live never loses an object to a younger one.
+pub Int lg_adopt(Int p, Int ctx) {
+    if (ld64(resid_raw_tls("rg_compact", 8)) == 0 || !lg_is(p)) { return 0; }
+    Int dst = ld64(ctx + 16);
+    if (dst == 0) { return 0; }
+    Int id = region_of(p);
+    if (id == ld64(dst)) { return 2; }
+    if (!mv_src(ctx, p)) { return 0; }
+    Int src = rec_of(id);
+    if (src == 0) { return 0; }
+    Int pg = p - lg_hdr();
+    Int k = ld64(pg + 8);
+    _ = lg_unlink(src, pg) + st64(src + 32, ld64(src + 32) - (1 << k));
+    _ = own_set(pg, 1 << k, ld64(dst));
+    _ = lg_link(dst, pg, k) + st64(dst + 32, ld64(dst + 32) + (1 << k));
+    return 1;
 }
 
 // ─── Moves ─────────────────────────────────────────────────────────────
@@ -405,7 +503,7 @@ pub Int rt_loop_move(Int l, Int step) {
     _ = st64(resid_raw_tls("rg_compact", 8), 0) + fwd_reset();
     // A closure that could not move still points into L: L's pages join the
     // new region instead of being freed.
-    _ = if (mv_failed()) { region_merge(r, nr) } else { pages_free(ld64(r + 8), 0, rec_bump(r)) };
+    _ = if (mv_failed()) { region_merge(r, nr) } else { pages_free(ld64(r + 8), 0, rec_bump(r)) + lg_free(ld64(r + 56), 0) };
     _ = mcopy(r, nr, 64);
     _ = st64(r + 40, ld64(nr + 32)) + st64(r + 48, 0);
     _ = rec_load(r) + yid_sync() + due_sync(ag_scope_depth());   // r carries a new id
@@ -461,16 +559,17 @@ Int region_keep(Int l) {
 Int region_abandon(Int r) {
     Int top = ld64(r + 8);
     _ = if (top != 0) { retag(top, 0) } else { 0 };
-    return st64(r + 8, 0) + st64(r + 16, 0) + st64(r + 24, 0) + st64(r + 32, 0);
+    _ = if (ld64(r + 56) != 0) { lg_retag(ld64(r + 56), 0, false) } else { 0 };
+    return st64(r + 8, 0) + st64(r + 16, 0) + st64(r + 24, 0) + st64(r + 32, 0) + st64(r + 56, 0);
 }
 
 // Region r's pages become region p's (r is left empty): its values move
 // without a copy. p is the region below r, so nothing older points in.
 pub Int region_merge(Int r, Int p) {
+    _ = lg_merge(r, p);
     Int top = ld64(r + 8);
-    if (top == 0) { return 0; }
-    Int oldest = retag(top, ld64(p));
-    _ = st64(oldest, ld64(p + 8)) + st64(p + 8, top) + st64(p + 32, ld64(p + 32) + ld64(r + 32));
+    _ = if (top != 0) { st64(retag(top, ld64(p)), ld64(p + 8)) + st64(p + 8, top) } else { 0 };
+    _ = st64(p + 32, ld64(p + 32) + ld64(r + 32));
     return st64(r + 8, 0) + st64(r + 16, 0) + st64(r + 24, 0) + st64(r + 32, 0);
 }
 

@@ -3979,7 +3979,7 @@ Str p_sym(Str pname, Str meth) {
         if (meth == "read_handle") { return "resid_fs_read_handle"; }
         if (meth == "close") { return "resid_fs_close"; }
         if (meth == "exists") { return "resid_fs_exists"; }
-        if (meth == "read_bytes") { return "resid_fs_read_bytes"; }
+        if (meth == "read_bytes" || meth == "read_bytes_u8") { return "resid_fs_read_bytes"; }
         if (meth == "write_bytes") { return "resid_fs_write_bytes"; }
         if (meth == "write_secret") { return "resid_fs_write_secret"; }
         if (meth == "sha256") { return "resid_fs_sha256"; }
@@ -4018,6 +4018,7 @@ Str p_rty(Str pname, Str meth) {
         if (meth == "close") { return "Bool"; }
         if (meth == "exists") { return "Bool"; }
         if (meth == "read_bytes") { return "List(Int)"; }
+        if (meth == "read_bytes_u8") { return "List(UInt(8))"; }
         if (meth == "write_bytes" || meth == "write_secret") { return "Bool"; }
         if (meth == "sha256") { return "List(Int)"; }
         if (meth == "append_bytes") { return "Bool"; }
@@ -4047,7 +4048,7 @@ Int p_nargs(Str pname, Str meth) {
         if (meth == "read_handle") { return 1; }
         if (meth == "close") { return 1; }
         if (meth == "exists") { return 1; }
-        if (meth == "read_bytes") { return 1; }
+        if (meth == "read_bytes" || meth == "read_bytes_u8") { return 1; }
         if (meth == "write_bytes" || meth == "write_secret") { return 2; }
         if (meth == "sha256") { return 1; }
         if (meth == "append_bytes") { return 2; }
@@ -8805,7 +8806,7 @@ Bool is_prov_verb_filesystem(Str v) {
     if (v == "open") { return true; }
     if (v == "read_handle") { return true; }
     if (v == "close") { return true; }
-    if (v == "read_bytes") { return true; }
+    if (v == "read_bytes" || v == "read_bytes_u8") { return true; }
     if (v == "sha256") { return true; }
     if (v == "append_bytes") { return true; }
     if (v == "write_hex" || v == "append_hex") { return true; }

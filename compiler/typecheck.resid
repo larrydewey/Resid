@@ -4178,7 +4178,7 @@ Bool is_prov_verb_filesystem(Str v) {
     if (v == "open") { return true; }
     if (v == "read_handle") { return true; }
     if (v == "close") { return true; }
-    if (v == "read_bytes") { return true; }
+    if (v == "read_bytes" || v == "read_bytes_u8") { return true; }
     if (v == "sha256") { return true; }
     if (v == "append_bytes") { return true; }
     if (v == "write_hex" || v == "append_hex") { return true; }
