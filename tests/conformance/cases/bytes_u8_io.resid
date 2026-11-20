@@ -1,0 +1,29 @@
+// Files as packed bytes (filesystem.read_bytes_u8, one byte to a byte),
+// written back packed, and sha256g over a packed message of every length
+// around a block (it hashes the whole blocks in place and pads the tail).
+import "sha256g.resid";
+import "crypto.resid";
+
+List(Int) mk(Int n, Int i, ListBuf(Int) acc) { if (i >= n) { return acc.finish(); } return mk(n, i + 1, acc.push((i * 37 + 11) & 255)); }
+
+Int digests(Int n, Int bad) {
+    if (n > 130) { return bad; }
+    List(Int) m = mk(n, 0, ListBuf());
+    Bool same = hex_encode(bytes_int(sha256g(bytes_u8(m)))) == hex_encode(sha256_bytes(m));
+    return digests(n + 1, if (same) { bad } else { bad + 1 });
+}
+
+@requires(filesystem)
+Int main() {
+    List(UInt(8)) hi = filesystem.read_bytes_u8("@TMP@/in.txt");
+    println(f"{hi.len()} {hi[0]} {hi[1]}");
+    List(UInt(8)) b = bytes_u8([0, 1, 127, 128, 255]);
+    Bool w = filesystem.write_bytes("@TMP@/b.bin", b) && filesystem.append_bytes("@TMP@/b.bin", hi);
+    List(UInt(8)) back = filesystem.read_bytes_u8("@TMP@/b.bin");
+    List(Int) wide = filesystem.read_bytes("@TMP@/b.bin");
+    println(f"{w} {back.len()} {back[3]} {back[4]} {back[6]} {wide[4]}");
+    println(f"digest mismatches {digests(0, 0)}");
+    Bool agree = hex_encode(bytes_int(sha256g(filesystem.read_bytes_u8("@TMP@/b.bin")))) == hex_encode(filesystem.sha256("@TMP@/b.bin"));
+    println(f"file digest agrees {agree}");
+    return 0;
+}

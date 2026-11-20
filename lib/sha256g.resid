@@ -123,8 +123,13 @@ pub List(B) sha256g(List(B) msg) {
     ListBuf(B) b1 = ListBuf();
     ListBuf(W) b2 = ListBuf();
     ListBuf(B) b3 = ListBuf();
-    List(B) padded = msg.concat(w_lift_bytes(sha256g_pad(msg.len()), 0, b1));
-    List(W) h = sha256g_blocks(padded, 0, padded.len(), g_lift_words(sha256g_iv(), 0, b2));
+    // The whole blocks straight from msg; only the last partial block is
+    // copied, with the padding (a copy of the whole message would cost
+    // its size again, and more to move it out of the loop's region).
+    Int full = msg.len() - msg.len() % 64;
+    List(W) h0 = sha256g_blocks(msg, 0, full, g_lift_words(sha256g_iv(), 0, b2));
+    List(B) tail = msg[full..msg.len()].concat(w_lift_bytes(sha256g_pad(msg.len()), 0, b1));
+    List(W) h = sha256g_blocks(tail, 0, tail.len(), h0);
     return g_digest_bytes(h, 0, b3);
 }
 

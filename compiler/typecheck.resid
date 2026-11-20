@@ -3216,7 +3216,7 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
     }
     if (name == "resid_unix_send") {
-        if (builtin_args(argtys, "Int,List(Int)")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        if (builtin_args(argtys, "Int,List(Int)") || builtin_args(argtys, "Int,List(UInt(8))")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects (Int, List(Int)), got (" + argtys + ")"};
     }
     if (name == "resid_unix_recv_some") {

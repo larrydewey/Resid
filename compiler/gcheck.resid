@@ -2642,7 +2642,9 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
     if (a.err != "") { return gterr(a.k, a.err, a.at); }
     GK k = a.k;
     if (str_contains(a.tys, "Secret(")) { return gterr(k, "E0255: " + fam + "." + m + " takes public values, got (" + a.tys + "); declassify the secret first" + (if (m == "write_secret") { " (write_secret keeps the file readable by its owner only)" } else { "" }), id); }
-    Bool fits = want == "?" || a.tys == want || (a.count == wl.len() && params_accept(want, a.tys, a.count));
+    // Bytes to write may be packed, one to a byte (read_bytes_u8).
+    Bool packed = fam == "filesystem" && (m == "write_bytes" || m == "write_secret" || m == "append_bytes") && a.tys == "Str,List(UInt(8))";
+    Bool fits = want == "?" || a.tys == want || packed || (a.count == wl.len() && params_accept(want, a.tys, a.count));
     if (!fits) { return gterr(k, fam + "." + m + " expects (" + want + "), got (" + a.tys + ")", id); }
     if (fam == "environment" && m == "get") { return gt(k, "Str", id); }
     if (fam == "filesystem") {

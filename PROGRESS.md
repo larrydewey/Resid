@@ -46,6 +46,13 @@ and a peak of three times live.
   no longer stages a 160 MB array).
 - Test: `tests/runtime/mem/large_carry.resid` (64 MB carried; fits
   `RESID_MEM_LIMIT=180`, the copying runtime needed ~257 MB).
+- Packed bytes end to end: `write_bytes`, `write_secret`, `append_bytes`
+  and `resid_unix_send` take `List(UInt(8))`; `sha256g` no longer copies
+  the whole message to pad it (it doubled the buffer: 40 MB for a 20 MB
+  file, then moved it out of the loop's region). Test: `bytes_u8_io`.
+  With these, Pylon's 40 MB put peaks at 90 MB in the client (was ~2 GB)
+  and a 40 MB get at 244 MB in pylond (was 1.17 GB) and 170 MB in its file
+  helper (was 2.0 GB).
 
 ### 0zz. Devices, labels, attestation, performance (2026-10-10 → 2026-10-13)
 

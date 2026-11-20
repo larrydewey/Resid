@@ -1999,7 +1999,8 @@ clock (all volatile by default).
 
 filesystem verbs: read_all, write_all, read_bytes, read_bytes_u8
 (the same bytes as a List(UInt(8)), one byte each where read_bytes'
-List(Int) holds eight), write_bytes,
+List(Int) holds eight), write_bytes (write_bytes, write_secret and
+append_bytes take a List(Int) or a List(UInt(8))),
 write_secret (write; owner-only mode 0600, no symlink
 follow), append_bytes (write), write_hex and append_hex (write; the
 bytes a hex string spells), sha256 (a file's SHA-256 as 32 bytes,
