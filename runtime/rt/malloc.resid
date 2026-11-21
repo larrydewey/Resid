@@ -85,6 +85,28 @@ pub Int rt_secret_unlocked() { return ld64(sec_unlocked()); }
 pub Int sec_mode() { return resid_raw_global("rt_secret_mode", 8); }
 pub Bool secret_mode() { return ld64(sec_mode()) != 0; }
 
+// Zero on free is armed once a secret may exist. A compiled program sets
+// the mode lazily before main (resid_secret_mode_lazy: core dumps off,
+// mappings locked and left out of dumps, as resid_secret_mode_set) and
+// arms the wiping at the entry of every function whose own code handles a
+// secret (the compiler's sec_fn_hits, copies included; resid_secret_arm):
+// no secret exists before the first of them runs, so memory freed before
+// then never held one. Once armed it stays armed. resid_secret_mode_set
+// arms at once (a C test, or a program built without the per-function
+// marks).
+pub Int sec_armed() { return resid_raw_global("rt_secret_armed", 8); }
+pub Bool secret_wipe() { return ld64(sec_armed()) != 0; }
+
+@export("resid_secret_arm", "void()")
+@inline
+pub Int rt_secret_arm() {
+    Int a = sec_armed();
+    return if (ld64(a) != 0) { 0 } else { st64(a, 1) * 0 };
+}
+
+@export("resid_secret_mode_lazy", "i8()")
+pub Int rt_secret_mode_lazy() { return sec_mode_on(); }
+
 // The mapping of the most recent TLS block (base, length); the main
 // thread's is mapped before secret mode can be set, so the setter marks it.
 pub Int tls_last() { return resid_raw_global("rt_tls_last", 16); }
@@ -93,6 +115,14 @@ pub Int tls_last() { return resid_raw_global("rt_tls_last", 16); }
 pub Int rt_secret_mode_set(Int on) {
     _ = st64(sec_mode(), on);
     if (on == 0) { return 1; }
+    _ = st64(sec_armed(), 1);
+    return sec_mode_on();
+}
+
+// Secret mode's process-wide part: the TLS block and the initial stack
+// left out of core dumps, no core, not dumpable.
+Int sec_mode_on() {
+    _ = st64(sec_mode(), 1);
     Int t = tls_last();
     _ = if (ld64(t) != 0) { resid_raw_syscall(28, ld64(t), ld64(t + 8), 16, 0, 0, 0) } else { 0 };
     _ = stack_nodump();
@@ -293,7 +323,7 @@ pub Int c_free(Int p) {
     if (h == 63) { return 0; }   // an arena block (bulk_block)
     if (h < 64) {
         Int head = heap_tls() + h * 8;
-        _ = if (secret_mode()) { resid_raw_fill(p, 0, class_size(h)) } else { 0 };
+        _ = if (secret_wipe()) { resid_raw_fill(p, 0, class_size(h)) } else { 0 };
         _ = st64(p, ld64(head));
         return st64(head, p);
     }
@@ -307,7 +337,7 @@ pub Int c_free(Int p) {
 // 300-byte request is not cleared again.
 pub Int c_free_prefix(Int p, Int n) {
     if (p == 0) { return 0; }
-    _ = if (secret_mode() && n > 0) { resid_raw_fill(p, 0, n) } else { 0 };
+    _ = if (secret_wipe() && n > 0) { resid_raw_fill(p, 0, n) } else { 0 };
     Int h = ld64(p - 16);
     if (h == 63) { return 0; }
     if (h < 64) {
@@ -319,7 +349,7 @@ pub Int c_free_prefix(Int p, Int n) {
 }
 
 Int big_free(Int b, Int h) {
-    _ = if (secret_mode()) { resid_raw_fill(b + 16, 0, h - 16) } else { 0 };
+    _ = if (secret_wipe()) { resid_raw_fill(b + 16, 0, h - 16) } else { 0 };
     return big_keep(b, h);
 }
 

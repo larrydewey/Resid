@@ -5654,7 +5654,7 @@ IrSt ir_push(List(Str) rs, Int i, IrSt s) {
 
 // s is a function sec_fn_hits named, or a copy of one (it, then `__`); the
 // user's main is lowered as resid_user_main.
-Bool ir_hit(Str s, Map(Str, Int) hits) {
+pub Bool ir_hit(Str s, Map(Str, Int) hits) {
     if (hits.contains(s) || (s == "resid_user_main" && hits.contains("main"))) { return true; }
     return ir_hit_copy(s, hits, str_index_of(s, "__", 1));
 }

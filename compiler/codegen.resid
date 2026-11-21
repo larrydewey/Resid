@@ -5212,7 +5212,11 @@ List(Str) main_entry_ir(Bool sec) {
     // main runs, its result is the exit status. A program that handles
     // Secret(T) values (spec §48) switches the allocator to secret mode
     // first.
-    return secret_mode_decl(sec).concat(["define i32 @main() {", "entry:"]).concat(secret_mode_call(sec)).concat(["  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}"]).concat(start_entry_ir());
+    // Lazily: the wiping is armed by the functions that handle a secret
+    // (the driver's sec_arm_ir).
+    List(Str) d = if (sec) { ["declare i8 @resid_secret_mode_lazy()"] } else { nil_list() };
+    List(Str) c = if (sec) { ["  %sm = call i8 @resid_secret_mode_lazy()"] } else { nil_list() };
+    return d.concat(["define i32 @main() {", "entry:"]).concat(c).concat(["  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}"]).concat(start_entry_ir());
 }
 
 List(Str) secret_mode_decl(Bool sec) { return if (sec) { ["declare i8 @resid_secret_mode_set(i1)"] } else { nil_list() }; }

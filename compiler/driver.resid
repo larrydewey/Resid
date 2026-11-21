@@ -5212,7 +5212,11 @@ List(Str) main_entry_ir(Bool sec) {
     // main runs, its result is the exit status. A program that handles
     // Secret(T) values (spec §48) switches the allocator to secret mode
     // first.
-    return secret_mode_decl(sec).concat(["define i32 @main() {", "entry:"]).concat(secret_mode_call(sec)).concat(["  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}"]).concat(start_entry_ir());
+    // Lazily: the wiping is armed by the functions that handle a secret
+    // (the driver's sec_arm_ir).
+    List(Str) d = if (sec) { ["declare i8 @resid_secret_mode_lazy()"] } else { nil_list() };
+    List(Str) c = if (sec) { ["  %sm = call i8 @resid_secret_mode_lazy()"] } else { nil_list() };
+    return d.concat(["define i32 @main() {", "entry:"]).concat(c).concat(["  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}"]).concat(start_entry_ir());
 }
 
 List(Str) secret_mode_decl(Bool sec) { return if (sec) { ["declare i8 @resid_secret_mode_set(i1)"] } else { nil_list() }; }
@@ -10883,8 +10887,17 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     List(Str) ol = res.lines;
     List(Str) mid = ol.concat(res.hlines);
     List(Str) all0 = mid.concat(rtg_dedupe(res.glines, 0, [], ListBuf()));
-    Bool secmode = secany && (testmode || sec_ir_live(all0, sechits, secents));
-    List(Str) all1 = if (fn_index(fs, "main") >= 0) { all0.concat(main_entry_ir(secmode)) } else { all0 };
+    Bool secmode0 = secany && (testmode || sec_ir_live(all0, sechits, secents));
+    // A program's main sets secret mode lazily; each function that handles
+    // a secret arms the wiping on entry (resid_secret_arm). A test build
+    // sets it at once (no per-function marks).
+    Bool secmode = secmode0;
+    // Any hit function that cannot take the mark (no `entry:` line of its
+    // own) arms at main's entry instead: as eager as before.
+    Map(Str, Int) armall = {};
+    Map(Str, Int) armat = if (sec_arm_ok(all0, sechits, 0)) { sechits } else { armall.insert("main", 1) };
+    List(Str) all0s = if (secmode && !testmode) { sec_arm_ir(all0, armat, 0, ListBuf()).push("declare void @resid_secret_arm()").finish() } else { all0 };
+    List(Str) all1 = if (fn_index(fs, "main") >= 0) { all0s.concat(main_entry_ir(secmode && !testmode)) } else { all0s };
     List(Str) all2 = if (testmode) { all1.concat(td_main_ir(td.names, td.syms, td_module_name(path), secmode)).concat(start_entry_ir()) } else { all1 };
     List(Str) all3 = if (gdbg) { all2.concat(dbg_unit_ir(gdf.paths)) } else { all2 };
     // Native modules (spec §47): stubs, thunks and the host table, and each
@@ -10991,4 +11004,41 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int prc  =  write_provenance(out, profile, rr.done, grk[0], nkeep[1], redrec, dvkeep[0], nkeep[2], attest_rec, capk[0], deck[0]);
     Int _prov_out = resid_bulk_pop();
     return prc;
+}
+
+// Each function sec_fn_hits names (or a copy of one) arms secret mode's
+// wiping on entry: the call right after its `entry:` label.
+ListBuf(Str) sec_arm_ir(List(Str) ls, Map(Str, Int) hits, Int i, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    Bool def = str_starts_with(l, "define ") && !str_contains(l, "\n") && i + 1 < ls.len() && ls[i + 1] == "entry:";
+    Bool hit = def && ir_hit(sec_arm_sym(l), hits);
+    if (hit) { return sec_arm_ir(ls, hits, i + 2, acc.push(l).push("entry:").push("  call void @resid_secret_arm()")); }
+    return sec_arm_ir(ls, hits, i + 1, acc.push(l));
+}
+
+// A define line's symbol, unquoted.
+Str sec_arm_sym(Str l) {
+    Int a = str_index_of(l, "@", 0) + 1;
+    Bool q = str_char_at(l, a) == 34;
+    Int s = if (q) { a + 1 } else { a };
+    Int e = if (q) { str_index_of(l, "\"", s) } else { str_index_of(l, "(", s) };
+    return if (e > s) { str_slice(l, s, e) } else { "" };
+}
+
+// Every define of a function sec_fn_hits names is a one-line `define`
+// followed by its `entry:` label (where sec_arm_ir puts the call).
+Bool sec_arm_ok(List(Str) ls, Map(Str, Int) hits, Int i) {
+    if (i >= ls.len()) { return true; }
+    Str l = ls[i];
+    Bool multi = str_contains(l, "\n");
+    Bool bad = if (multi) { sec_arm_multi_hit(str_split(l, "\n"), hits, 0) } else { str_starts_with(l, "define ") && ir_hit(sec_arm_sym(l), hits) && !(i + 1 < ls.len() && ls[i + 1] == "entry:") };
+    if (bad) { return false; }
+    return sec_arm_ok(ls, hits, i + 1);
+}
+
+Bool sec_arm_multi_hit(List(Str) ls, Map(Str, Int) hits, Int i) {
+    if (i >= ls.len()) { return false; }
+    if (str_starts_with(ls[i], "define ") && ir_hit(sec_arm_sym(ls[i]), hits)) { return true; }
+    return sec_arm_multi_hit(ls, hits, i + 1);
 }

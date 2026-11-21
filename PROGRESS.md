@@ -67,6 +67,28 @@ the list twice.
   back at every exit. Sieve 34.5 -> 23.7 ms (its builder of 5000 Bools was
   about 14 instructions a push); Havlak, Storage and Queens' fills take it
   too. Test: `listbuf_loop_copy`.
+- **Compile time, measured** (TLS client `tests/tls/client.resid`, 3.8 MB
+  of IR): 21.8 s at -O2 = 13.8 s clang (full LTO: ~3 s of optimization on
+  one thread, ~7.6 s of code generation in the 8 partitions, plus 3.3 s of
+  pre-link compile) and ~8 s in the compiler; `--profile debug` 8.3 s, of
+  which clang 2.4 s. A small program is 0.17 s once the runtime's link
+  cache holds the level (1.9 s the first time), so "2-4 s per program" no
+  longer describes small programs. In the compiler (callgrind, 82.8 G
+  instructions): secret mode's wiping of freed pages 17%, the key-entropy
+  check's warning placement 9.5%, the inliner (`lw_inlined`) 29% inclusive,
+  ownership instances 10%, instantiation 10%.
+- **Secret mode arms its wiping lazily** (SECURITY.md): `main` sets the mode
+  with `resid_secret_mode_lazy`, every function whose own code handles a
+  secret (sec_fn_hits, copies included) calls `resid_secret_arm` on entry,
+  and freed memory is zeroed from the first of them on. No secret exists
+  before then. The compiler signs its provenance at the end, so its whole
+  compile ran with the wipe on: http_server's compile 14.5 G -> 13.4 G
+  instructions (memset 7.6% -> 0.1%). Test: `tests/runtime/secret_lazy.c`.
+- **E0270/E0279 warnings placed by the newline index** (`ek_warn_code_n`):
+  `pos_to_line_col` walked the program's whole merged source for each
+  warning, and `str_find_char` maps each start to a byte offset first; the
+  TLS client's 16 warnings cost ~1 s. With both, its debug compile 8.0 s ->
+  ~6.8 s.
 - **Exact alias entries** (`compiler/own.resid`, PLAN-awfy-close §10): a
   folded or coarsened alias entry is no longer extended by a deeper read,
   which invented locations (`d.cs.cs`); `ow_coarse` keeps a subpath's first

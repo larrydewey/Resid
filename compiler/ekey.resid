@@ -875,7 +875,7 @@ Str ek_nonce_warn(EkC c, EkT t, Int i, Str src, Str smap, StrBuf out) {
     if (i >= t.nch.len()) { return out.finish(); }
     EkN n = t.nch[i];
     Bool bad = n.known && !ek_single_use(t, n) && !ek_in_test_fn(c, n.fn);
-    Str w = if (bad) { ek_warn_code("E0279", "an AEAD nonce that is the same on every run: the nonce of " + n.callee + " is a constant, allowed only under a key drawn for this one sealing call (in this function, outside any loop or closure); use the library's stateful sealer or a fresh random nonce", c.g, n.at, src, smap) } else { "" };
+    Str w = if (bad) { ek_warn_code_n("E0279", "an AEAD nonce that is the same on every run: the nonce of " + n.callee + " is a constant, allowed only under a key drawn for this one sealing call (in this function, outside any loop or closure); use the library's stateful sealer or a fresh random nonce", c.g, n.at, c.nls, smap) } else { "" };
     return ek_nonce_warn(c, t, i + 1, src, smap, out.push(w));
 }
 
@@ -1128,7 +1128,7 @@ EkR ek_check_all(EkC c, EkT t, Int i, Str src, Str smap, StrBuf out, Int n) {
         else { "" };
     if (why == "") { return ek_check_all(c, t, i + 1, src, smap, out, n); }
     Str msg = "key could be known to someone else: the key of " + k.callee + ": " + why;
-    return ek_check_all(c, t, i + 1, src, smap, out.push(ek_warn_text(msg, c.g, k.at, src, smap)), n + 1);
+    return ek_check_all(c, t, i + 1, src, smap, out.push(ek_warn_text(msg, c.g, k.at, c.nls, smap)), n + 1);
 }
 
 type EkR = { Str text; Int n; };
@@ -1143,11 +1143,25 @@ Str ek_dbg_sums(EkC c, EkT t, List(Int) fs, Int i, Str pat, StrBuf acc) {
 }
 
 
-Str ek_warn_text(Str msg, Kg g, Int at, Str src, Str smap) { return ek_warn_code("E0270", msg, g, at, src, smap); }
+Str ek_warn_text(Str msg, Kg g, Int at, List(Int) nls, Str smap) { return ek_warn_code_n("E0270", msg, g, at, nls, smap); }
 
 pub Str ek_warn_code(Str code, Str msg, Kg g, Int at, Str src, Str smap) {
     Int pos = g.ns[at].ep;
-    PosInfo pi = pos_to_line_col(src, pos - 1);
+    return ek_warn_at(code, msg, pos_to_line_col(src, pos - 1), smap);
+}
+
+// The same with the source's newline index (EkC.nls): a binary search, not
+// a walk of the source from its start for every warning (in a program with
+// its libraries that walk cost seconds: str_find_char maps each start to a
+// byte offset first).
+Str ek_warn_code_n(Str code, Str msg, Kg g, Int at, List(Int) nls, Str smap) {
+    Int p = g.ns[at].ep - 1;
+    Int k = gk_line_of(nls, p, 0, nls.len());
+    Int start = if (k > 0) { nls[k - 1] + 1 } else { 0 };
+    return ek_warn_at(code, msg, PosInfo {.line = k + 1, .col = p - start + 1}, smap);
+}
+
+Str ek_warn_at(Str code, Str msg, PosInfo pi, Str smap) {
     DiagAt w = diag_where(gm_smap(smap), pi.line);
     Str loc = if (pi.line > 0 && w.path != "") { "  --> " + w.path + f":{w.line}:{pi.col}\n" } else { "" };
     return "warning[" + code + "]: " + msg + "\n" + loc;
