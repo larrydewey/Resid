@@ -633,3 +633,37 @@ binder's later uses (here `s2.pk.with(work, ..)`, which replaces the slot
 whole) must not reach the kept field. The backward pass kills a binder at
 its binding, so those uses have to be recorded at the call.
 
+## 11. Richards: what the kept-field hole needs (2026-11-21, not landed)
+
+Tried in order on `worker_fn`, each measured on the AWFY harness (an
+experimental patch, kept out of tree):
+
+1. **Moves are not reads.** A returned literal's `.f = p.f` no longer
+   counts as reading `f` (`ow_rdm`); `ow_hole` then accepts a field the
+   callee keeps only when the call's result is bound and none of the
+   binder's later uses reaches the kept location (recorded at the `bind`,
+   under `-1 - call`; arg keys carry the call as `@fk^call`). Effect: the
+   `w.data` write turns in place. Instructions unchanged.
+2. **`^` does not reach what fields point to.** `ow_disturbs` treats a
+   callee that rebuilds an argument's own record as disturbing everything
+   read through it; a field holding a list or a boxed record is another
+   object the rebuild never writes (fixed-capacity fields, stored inline,
+   are the exception, and the experiment did not yet check them). Effect:
+   `set_ab(s, ..)` goes to `set_ab__o`.
+3. **Holes through alias entries.** `ow_wm_not_hole` compared a holder's
+   own location with the written ones, so a hole never applied to a holder
+   that reaches the write through its alias set (`s2.pk` -> `s.pk`); an
+   exact entry translates the write into the holder's view first. Effect:
+   `pkt(w, ..)` goes to `pkt__o`.
+
+Richards then measured +0.3% (no gain): `s2 = set_ab__o(s, ..)` is still
+not owned at its binding. A kept argument must be moved for the result to
+be owned (`ow_args`: `given`), and the move of `s` is refused because `w`
+and `data` still alias `s.pk[work]`; they die at `pkt(w, ..)`, before any
+write through `s2`. Owning `s2` needs ownership judged per write rather
+than decided once at the binding (the judge already checks live aliases at
+every write and every owned call). That relaxes the rule every owned
+instance rests on, so it wants its own design note, the fuzzer
+(`tests/own/fuzz.sh`, three builds compared) and a red-team pass before it
+lands; 1-3 alone change no generated code on AWFY.
+
