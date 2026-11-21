@@ -1,0 +1,42 @@
+// Two owned writes to one list in a row (a swap) run as one runtime call
+// (resid_list_set2_w): in place on an owned list, a copy for a shared one,
+// and an index out of range aborts as the first write that meets it.
+
+type St = { Int count; List(Int) v; };
+
+St swap(St s, Int i, Int j) {
+    Int a = s.v[i];
+    Int b = s.v[j];
+    return St {.count = s.count, .v = s.v.with(i, b).with(j, a)};
+}
+
+St permute(Int n, St s0) {
+    St s = St {.count = s0.count + 1, .v = s0.v};
+    if (n == 0) { return s; }
+    Int n1 = n - 1;
+    return permute_loop(n1, n1, permute(n1, s));
+}
+
+St permute_loop(Int n1, Int i, St s) {
+    if (i < 0) { return s; }
+    St s2 = swap(permute(n1, swap(s, n1, i)), n1, i);
+    return permute_loop(n1, i - 1, s2);
+}
+
+List(Int) swap_list(List(Int) xs, Int i, Int j) {
+    Int a = xs[i];
+    Int b = xs[j];
+    return xs.with(i, b).with(j, a);
+}
+
+Int main() {
+    St r = permute(6, St {.count = 0, .v = [0, 1, 2, 3, 4, 5]});
+    println(f"{r.count} {r.v}");
+    List(Int) shared = [10, 20, 30];
+    List(Int) sw = swap_list(shared, 0, 2);
+    println(f"{sw} {shared}");
+    println(f"{swap_list([1, 2], 1, 1)}");
+    List(Int) bad = swap_list([1, 2, 3], 0, 3);
+    println(f"{bad}");
+    return 0;
+}

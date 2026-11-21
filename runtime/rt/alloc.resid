@@ -557,7 +557,7 @@ pub Int rt_list_const_bool(Int cache, Int n, Int data, Int ty) { return const_li
 pub Int rt_list_const_i64r(Int cache, Int n, Int data) { return const_list(cache, n, data, 1, 3); }
 
 @export("resid_list_const_boolr", "ptr(ptr,i64,ptr)")
-pub Int rt_list_const_boolr(Int cache, Int n, Int data) { return const_list(cache, n, data, 3, 4); }
+pub Int rt_list_const_boolr(Int cache, Int n, Int data) { return const_list(cache, n, data, 5, 4); }
 
 // A byte list literal (bytelist.resid): data is its n bytes.
 @export("resid_list_const_u8", "ptr(ptr,i64,ptr)")

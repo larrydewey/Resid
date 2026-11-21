@@ -1,0 +1,13 @@
+[true, false, true]
+[false, true, false] [true, false, true]
+[true, false, true, false, true, false, false] 7
+334 true true false
+335 334
+[false, true, false]
+[true, false]
+true false true 
+[true, false, true]
+[[true, false, true], [false, true, false]]
+[false, false, true] [true, false, true]
+669
+[false, false, true] [false, true] [true, false]

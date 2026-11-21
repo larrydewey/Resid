@@ -1479,7 +1479,7 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
         if (osingle) {
             Str orest = str_slice(oarg.lines[onl - 1], str_len(oone), str_len(oarg.lines[onl - 1]));
             Str osla = str_slice(orest, 0, str_find(orest, ", ptr "));
-            Str opc = if (lst_bytes(elem_type(strip_owned_cg(base.ty)))) { "@resid_bl_push_own(ptr " + base.val + ", ptr " + oreg + "e)" } else { "@resid_list_push_own(ptr " + base.val + ", ptr " + oreg + f"e, i64 {opk})" };
+            Str opc = if (lst_packed(elem_type(strip_owned_cg(base.ty)))) { "@resid_bl_push_own(ptr " + base.val + ", ptr " + oreg + "e)" } else { "@resid_list_push_own(ptr " + base.val + ", ptr " + oreg + f"e, i64 {opk})" };
             List(Str) ol = oarg.lines[0..onl - 1].concat([oreg + "e = load ptr, ptr " + osla, oreg + " = call ptr " + opc]);
             return lw_step(oarg, oreg, base.ty, ol, ot);
         }
@@ -2346,7 +2346,7 @@ GT lw_builder(LW w, Int id, GT base, Str m, List(Str) env) {
     List(Str) l1 = a.lines.concat(lst_box_lines(et, a.val, t1));
     Int t2 = t1 + 3;
     Str reg = f"%t{t2}";
-    Str pf = if (lst_bytes(et)) { "@resid_bl_buf_push" } else { "@resid_listbuf_push" };
+    Str pf = if (lst_packed(et)) { "@resid_bl_buf_push" } else { "@resid_listbuf_push" };
     return lw_step(a, reg, base.ty, l1.concat([reg + " = call ptr " + pf + "(ptr " + base.val + ", ptr " + bx + ")"]), t2);
 }
 
@@ -2544,7 +2544,7 @@ GT lw_index(LW w, Int id, List(Str) env, GT c) {
     Bool inb = w.facts && lr_has_seg(w.rf.get(0 - id - 1) else { "" }, "inb");
     // A header record read shares itself, unless the read is a borrow
     // written back at the same index (lo_borrows).
-    Str get = if (lw_hdr_elem(w, ety) && !lo_is(w, id, 8)) { if (lo_is(w, id, 2)) { "@resid_list_get_own" } else { "@resid_list_get_sh" } } else { if (lst_bytes(ety)) { if (inb) { "@resid_bl_get_nc" } else { "@resid_bl_get" } } else { if (inb) { "@resid_list_get_nc" } else { "@resid_list_get" } } };
+    Str get = if (lw_hdr_elem(w, ety) && !lo_is(w, id, 8)) { if (lo_is(w, id, 2)) { "@resid_list_get_own" } else { "@resid_list_get_sh" } } else { if (lst_packed(ety)) { if (inb) { "@resid_bl_get_nc" } else { "@resid_bl_get" } } else { if (inb) { "@resid_list_get_nc" } else { "@resid_list_get" } } };
     List(Str) l1 = ixx.lines.concat([slot + " = call ptr " + get + "(ptr " + base.val + ", i64 " + ixx.val + ")"]).concat(lw_check_note(w, id, "bounds", inb));
     List(Str) l2 = lst_read_lines(ety, slot, t2, l1);
     return GT {.pos = 0, .val = ldr, .ty = ety, .cnt = 0, .err = "", .glines = ix.glines, .lines = l2, .tmp = t2 + 1, .lbl = ix.lbl, .tail = false};
@@ -4377,7 +4377,7 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
         Str rmk = if (w.lo.hdr.contains(strip_owned_cg(vty))) { gs2 + f" = call ptr @resid_rec_new(i64 {frw * 8}, i8 0)" } else { gs2 + f" = call ptr @resid_gmalloc(i64 {frw * 8})" };
         List(Str) fcnt = if (frw > 0) { [cnt + " = call i64 @resid_list_elems(ptr " + a.val + f", i64 {frw + 1})"] } else { [cnt + " = call i64 @resid_list_len(ptr " + a.val + ")"] };
         List(Str) fmk = if (lo_is(w, id, 16)) { ne_frame(gs2, frw, false) } else { [rmk] };
-        List(Str) fget = if (frw > 0) { [gs2 + "p = call ptr @resid_list_rec_at(ptr " + a.val + ", i64 " + iv + f", i64 {frw + 1})"].concat(fmk).concat(["call void @llvm.memmove.p0.p0.i64(ptr " + gs2 + ", ptr " + gs2 + f"p, i64 {frw * 8}, i1 false)"]) } else { [gs2 + " = call ptr " + (if (lw_hdr_elem(w, vty)) { "@resid_list_get_sh" } else { if (lst_bytes(vty)) { "@resid_bl_get" } else { "@resid_list_get" } }) + "(ptr " + a.val + ", i64 " + iv + ")"] };
+        List(Str) fget = if (frw > 0) { [gs2 + "p = call ptr @resid_list_rec_at(ptr " + a.val + ", i64 " + iv + f", i64 {frw + 1})"].concat(fmk).concat(["call void @llvm.memmove.p0.p0.i64(ptr " + gs2 + ", ptr " + gs2 + f"p, i64 {frw * 8}, i1 false)"]) } else { [gs2 + " = call ptr " + (if (lw_hdr_elem(w, vty)) { "@resid_list_get_sh" } else { if (lst_packed(vty)) { "@resid_bl_get" } else { "@resid_list_get" } }) + "(ptr " + a.val + ", i64 " + iv + ")"] };
         List(Str) f10 = a.lines.concat([ixa + " = alloca i64", "store i64 0, ptr " + ixa, "br label %" + lbl_b2, lbl_b2 + ":", iv + " = load i64, ptr " + ixa]).concat(fcnt).concat([cc2 + " = icmp slt i64 " + iv + ", " + cnt, "br i1 " + cc2 + ", label %" + lbl_body2 + ", label %" + lbl_d2, lbl_body2 + ":"]).concat(fget);
         List(Str) f11 = lst_read_lines(vty, gs2, tloop, f10);
         ST gb2 = ST {.pos = 0, .dead = false, .err = "", .env = envl, .glines = a.glines, .hlines = g.hlines, .lines = f11, .tmp = tloop, .lbl = nlbl2, .rety = g.rety};
@@ -4713,7 +4713,7 @@ GT lw_list_with(LW w, Int id, GT base, List(Str) env) {
         List(Str) wl = lst_word_lines(ety, xv.val, tb);
         Str wv = if (lst_raw(ety) == 1 && ll_width_of(ety) == 64) { xv.val } else { f"%t{tb}w" };
         List(Str) wl2 = if (lst_raw(ety) == 1 && ll_width_of(ety) == 64) { [] } else { wl };
-        Str swf = if (lst_bytes(ety)) { "@resid_bl_set" } else { "@resid_list_set_w" };
+        Str swf = if (lst_packed(ety)) { "@resid_bl_set" } else { "@resid_list_set_w" };
         List(Str) ls3 = xv.lines.concat(wl2).concat([reg + " = call ptr " + swf + "(ptr " + base.val + ", i8 " + own + ", i64 " + ix.val + ", i64 " + wv + ")"]);
         return GT {.pos = 0, .val = reg, .ty = base.ty, .cnt = 0, .err = "", .glines = xv.glines, .lines = ls3, .tmp = t2, .lbl = xv.lbl, .tail = false};
     }
@@ -5422,7 +5422,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     List(Str) fn_lines_r = if (region) { lr_region(fn_lines0, evs, rev, cmv) } else { fn_lines0 };
     // A loop updating an owned list in place gets an unchecked copy (W3).
     List(Str) fn_lines = if (tco_ok && !resid_rtmod() && !w.dbg) { ol_apply(fn_lines0, fn_lines_r, tyl) } else { fn_lines_r };
-    List(Str) own0 = (if (!resid_rtmod() && !w.dbg) { ls_slot(fn_lines, 0) } else { fn_lines }).concat(["}"]);
+    List(Str) own0 = (if (!resid_rtmod() && !w.dbg) { ls_slot(sw2_apply(fn_lines), 0) } else { fn_lines }).concat(["}"]);
     LDG dg0 = if (w.dbg) { lw_dbg_fn(w, d, name, own0, g.pos, tyl) } else { LDG {.lines = own0, .meta = nil_list(), .next = g.pos} };
     List(Str) wrap = if (split) { pp1.lines.concat(["%sb.r = call " + ll_ty(rbase) + " @" + bname + "(" + pd + ")", "call void @resid_cap_leave()", "ret " + ll_ty(rbase) + " %sb.r", "}"]) } else { nil_list() };
     LDG dg = LDG {.lines = dg0.lines.concat(wrap), .meta = dg0.meta, .next = dg0.next};
@@ -5535,7 +5535,7 @@ Bool lr_call_allocs(LW w, Str f, Str l) {
     // Appending a scalar to a list builds what the loop carries on (moved
     // out at the back edge anyway), not garbage.
     if (f == "resid_list_push" || f == "resid_list_push_k" || f == "resid_list_push_own" || f == "resid_bl_push_own" || f == "resid_box_i64" || f == "resid_box_f64" || f == "resid_box_bool") { return false; }
-    return !lo_has_str(["llvm.sqrt.f64", "resid_bytes_be16", "resid_char_at_n", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_elems", "resid_list_get", "resid_list_get_nc", "resid_bl_get", "resid_bl_get_nc", "resid_list_get_sh", "resid_list_get_own", "resid_list_share_f", "resid_list_get_v", "resid_list_vdata", "resid_list_vlen", "resid_list_rec_at", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
+    return !lo_has_str(["llvm.sqrt.f64", "resid_bytes_be16", "resid_char_at_n", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_elems", "resid_list_get", "resid_list_get_nc", "resid_bl_get", "resid_bl_get_nc", "resid_list_get_sh", "resid_list_get_own", "resid_list_share_f", "resid_list_get_v", "resid_bl_get_v", "resid_list_vdata", "resid_list_vlen", "resid_bl_vlen", "resid_list_rec_at", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
 }
 
 // Every exit returns a scalar, a loop parameter (an older value, or a
@@ -5631,28 +5631,38 @@ List(Str) lsv_params(List(Str) ls, Int i, List(Str) tyl) {
     Bool lst = j >= 0 && j < tyl.len() && str_has_prefix(tyl[j], "List(") && str_starts_with(l, reg + " = phi ptr ");
     Str k1 = "@resid_list_get(ptr " + reg + ", ";
     Str k2 = "@resid_list_get_nc(ptr " + reg + ", ";
-    Bool used = lst && lr_same_in(str_split(l, "[ "), 2, reg) && (sv_uses(ls, i + 1, k1) || sv_uses(ls, i + 1, k2));
-    List(Str) ls2 = if (used) { lsv_rewrite(ls, reg, k1, k2) } else { ls };
+    // A packed list (List(UInt(8)), List(Bool)) is read by resid_bl_get:
+    // its view reads bytes (resid_bl_get_v), never both kinds.
+    Str b1 = "@resid_bl_get(ptr " + reg + ", ";
+    Str b2 = "@resid_bl_get_nc(ptr " + reg + ", ";
+    Bool same = lst && lr_same_in(str_split(l, "[ "), 2, reg);
+    Bool wd = same && (sv_uses(ls, i + 1, k1) || sv_uses(ls, i + 1, k2));
+    Bool by = same && (sv_uses(ls, i + 1, b1) || sv_uses(ls, i + 1, b2));
+    Bool used = wd != by;
+    List(Str) ls2 = if (wd && !by) { lsv_rewrite(ls, reg, k1, k2, false) } else { if (by && !wd) { lsv_rewrite(ls, reg, b1, b2, true) } else { ls } };
     // The two entry lines (if added) sit before the phis.
     return lsv_params(ls2, i + (if (used) { 3 } else { 1 }), tyl);
 }
 
-List(Str) lsv_rewrite(List(Str) ls, Str reg, Str k1, Str k2) {
+List(Str) lsv_rewrite(List(Str) ls, Str reg, Str k1, Str k2, Bool bytes) {
     Int b = lw_find_line(ls, "br label %tco.head", 1);
-    List(Str) out = lsv_lines(ls, 0, reg, k1, k2, ListBuf()).finish();
+    List(Str) out = lsv_lines(ls, 0, reg, k1, k2, bytes, ListBuf()).finish();
     List(Str) pre = out[0..b];
     List(Str) post = out[b..out.len()];
-    return pre.concat([reg + ".ld = call ptr @resid_list_vdata(ptr " + reg + ".in)", reg + ".ln = call i64 @resid_list_vlen(ptr " + reg + ".in)"]).concat(post);
+    // A byte view's count is 0 unless the list really holds bytes (the
+    // bl_* readers also take a list of words).
+    Str vlen = if (bytes) { "@resid_bl_vlen" } else { "@resid_list_vlen" };
+    return pre.concat([reg + ".ld = call ptr @resid_list_vdata(ptr " + reg + ".in)", reg + ".ln = call i64 " + vlen + "(ptr " + reg + ".in)"]).concat(post);
 }
 
-ListBuf(Str) lsv_lines(List(Str) ls, Int i, Str reg, Str k1, Str k2, ListBuf(Str) acc) {
+ListBuf(Str) lsv_lines(List(Str) ls, Int i, Str reg, Str k1, Str k2, Bool bytes, ListBuf(Str) acc) {
     if (i >= ls.len()) { return acc; }
     Str l = ls[i];
     // A musttail call must keep its callee's signature.
     Bool hit = (str_contains(l, k1) || str_contains(l, k2)) && str_ends_with(l, ")") && !str_contains(l, "musttail");
-    Str via = "@resid_list_get_v(ptr " + reg + ", ";
+    Str via = (if (bytes) { "@resid_bl_get_v(ptr " } else { "@resid_list_get_v(ptr " }) + reg + ", ";
     Str l2 = if (hit) { str_replace(str_replace(str_slice(l, 0, str_len(l) - 1), k1, via), k2, via) + ", ptr " + reg + ".ld, i64 " + reg + ".ln)" } else { l };
-    return lsv_lines(ls, i + 1, reg, k1, k2, acc.push(l2));
+    return lsv_lines(ls, i + 1, reg, k1, k2, bytes, acc.push(l2));
 }
 
 // ─── Versioned list loops (W3) ─────────────────────────────────────────
@@ -5666,7 +5676,8 @@ ListBuf(Str) lsv_lines(List(Str) ls, Int i, Str reg, Str k1, Str k2, ListBuf(Str
 // a loop region's compaction goes back to the checked head, whose guard
 // picks the copy again for the moved list.
 
-type OL = { Str reg; Bool ok; Bool wrote; Bool borrow; Map(Str, Int) fam; Int n; };
+// bytes: 0 no access seen yet, 1 word slots, 2 a byte list (resid_bl_*).
+type OL = { Str reg; Bool ok; Bool wrote; Bool borrow; Map(Str, Int) fam; Int n; Int bytes; };
 
 // pre: the function before loop regions (the analysis), ls: after.
 List(Str) ol_apply(List(Str) pre, List(Str) ls, List(Str) tyl) {
@@ -5689,7 +5700,7 @@ List(Str) ol_apply(List(Str) pre, List(Str) ls, List(Str) tyl) {
 Bool ol_writes(List(Str) f, Int i) {
     if (i >= f.len()) { return false; }
     Str l = f[i];
-    if (str_contains(l, "@resid_list_set_w(ptr %") || str_contains(l, "@resid_list_set_rec(ptr %") || str_contains(l, "@resid_list_set_rec_wb(ptr %") || str_contains(l, "@resid_list_set_rec_wbf(ptr %")) { return true; }
+    if (str_contains(l, "@resid_list_set_w(ptr %") || str_contains(l, "@resid_bl_set(ptr %") || str_contains(l, "@resid_list_set_rec(ptr %") || str_contains(l, "@resid_list_set_rec_wb(ptr %") || str_contains(l, "@resid_list_set_rec_wbf(ptr %")) { return true; }
     return ol_writes(f, i + 1);
 }
 
@@ -5715,7 +5726,7 @@ List(OL) ol_lists(List(Str) f, Int i, Int h1, Int b, List(Str) tyl, List(OL) acc
     Bool lst = j >= 0 && j < tyl.len() && str_has_prefix(tyl[j], "List(") && str_starts_with(l, reg + " = phi ptr ");
     if (!lst) { return ol_lists(f, i + 1, h1, b, tyl, acc); }
     Map(Str, Int) m0 = {};
-    OL v0 = ol_grow(f, b, OL {.reg = reg, .ok = true, .wrote = false, .borrow = false, .fam = m0.insert(reg, 1), .n = 1}, 0);
+    OL v0 = ol_grow(f, b, OL {.reg = reg, .ok = true, .wrote = false, .borrow = false, .fam = m0.insert(reg, 1), .n = 1, .bytes = 0}, 0);
     OL v1 = ol_check(f, b, v0);
     Bool ok = v1.ok && ol_heads_ok(f, h1, b, v1);
     return ol_lists(f, i + 1, h1, b, tyl, if (ok) { acc.concat([v1]) } else { acc });
@@ -5779,7 +5790,7 @@ OL ol_grow1(List(Str) f, Int i, OL v) {
     Str l = f[i];
     Str d = ol_dst(l);
     Bool add = d != "" && !v.fam.contains(d) && ol_joins(ol_rhs(l), v.fam);
-    OL v2 = if (add) { OL {.reg = v.reg, .ok = v.ok, .wrote = v.wrote, .borrow = v.borrow, .fam = v.fam.insert(d, 1), .n = v.n + 1} } else { v };
+    OL v2 = if (add) { OL {.reg = v.reg, .ok = v.ok, .wrote = v.wrote, .borrow = v.borrow, .fam = v.fam.insert(d, 1), .n = v.n + 1, .bytes = v.bytes} } else { v };
     return ol_grow1(f, i + 1, v2);
 }
 
@@ -5787,7 +5798,7 @@ Bool ol_joins(Str rhs, Map(Str, Int) fam) {
     if (str_starts_with(rhs, "phi ptr ")) { return ol_all_in(ol_phi_vals(rhs), 0, fam); }
     Str m = ol_first_arg(rhs);
     if (m == "" || !fam.contains(m)) { return false; }
-    return str_starts_with(rhs, "call ptr @resid_list_set_w(ptr " + m + ", i8 1, ") || str_starts_with(rhs, "call ptr @resid_list_set_rec(ptr " + m + ", i8 1, ") || str_starts_with(rhs, "call ptr @resid_list_set_rec_wb(ptr " + m + ", ") || str_starts_with(rhs, "call ptr @resid_list_set_rec_wbf(ptr " + m + ", ");
+    return str_starts_with(rhs, "call ptr @resid_list_set_w(ptr " + m + ", i8 1, ") || str_starts_with(rhs, "call ptr @resid_bl_set(ptr " + m + ", i8 1, ") || str_starts_with(rhs, "call ptr @resid_list_set_rec(ptr " + m + ", i8 1, ") || str_starts_with(rhs, "call ptr @resid_list_set_rec_wb(ptr " + m + ", ") || str_starts_with(rhs, "call ptr @resid_list_set_rec_wbf(ptr " + m + ", ");
 }
 
 // `call T @f(ptr %x, ...`: %x, else "".
@@ -5835,12 +5846,19 @@ OL ol_check(List(Str) f, Int i, OL v) {
     Bool rd = str_starts_with(rhs, "call ptr @resid_list_get" + a) || rhs == "call i64 @resid_list_len(ptr " + m + ")" || str_starts_with(rhs, "call i64 @resid_list_elems" + a) || str_starts_with(rhs, "call ptr @resid_list_rec_at" + a);
     Bool wr = str_starts_with(rhs, "call ptr @resid_list_set_w" + a + "i8 1, ") || str_starts_with(rhs, "call ptr @resid_list_set_rec" + a + "i8 1, ");
     Bool bw = str_starts_with(rhs, "call ptr @resid_list_rec_borrow" + a) || str_starts_with(rhs, "call ptr @resid_list_set_rec_wb" + a) || str_starts_with(rhs, "call ptr @resid_list_set_rec_wbf" + a);
-    if (!rd && !wr && !bw) { return ol_bad(v); }
-    OL v2 = OL {.reg = v.reg, .ok = true, .wrote = v.wrote || wr || str_contains(rhs, "_wb(") || str_contains(rhs, "_wbf("), .borrow = v.borrow || bw, .fam = v.fam, .n = v.n};
+    Bool brd = str_starts_with(rhs, "call ptr @resid_bl_get" + a);
+    Bool bwr = str_starts_with(rhs, "call ptr @resid_bl_set" + a + "i8 1, ");
+    if (!rd && !wr && !bw && !brd && !bwr) { return ol_bad(v); }
+    // A list is accessed as bytes or as words, never both (the length
+    // reads either).
+    Bool ln = rhs == "call i64 @resid_list_len(ptr " + m + ")";
+    Int bk = if (ln) { v.bytes } else { if (brd || bwr) { 2 } else { 1 } };
+    if (v.bytes != 0 && bk != v.bytes) { return ol_bad(v); }
+    OL v2 = OL {.reg = v.reg, .ok = true, .wrote = v.wrote || wr || bwr || str_contains(rhs, "_wb(") || str_contains(rhs, "_wbf("), .borrow = v.borrow || bw, .fam = v.fam, .n = v.n, .bytes = bk};
     return ol_check(f, i + 1, v2);
 }
 
-OL ol_bad(OL v) { return OL {.reg = v.reg, .ok = false, .wrote = v.wrote, .borrow = v.borrow, .fam = v.fam, .n = v.n}; }
+OL ol_bad(OL v) { return OL {.reg = v.reg, .ok = false, .wrote = v.wrote, .borrow = v.borrow, .fam = v.fam, .n = v.n, .bytes = v.bytes}; }
 
 // ─── The copy ──────────────────────────────────────────────────────────
 
@@ -5971,8 +5989,12 @@ List(Str) ol_tests(List(OL) vs, Int k, List(Str) acc) {
     Str w = f"%ol.w{k}";
     Str hd = f"%ol.h{k}";
     Str c = f"%ol.c{k}";
-    Str test = if (v.wrote || v.borrow) { c + " = icmp eq i32 " + hd + ", -2" } else { c + " = icmp slt i32 " + hd + ", 0" };
-    return ol_tests(vs, k + 1, acc.concat([w + " = getelementptr i8, ptr " + v.reg + ", i64 8", hd + " = load i32, ptr " + w, test]));
+    Str c0 = if (v.bytes == 2) { c + ".s" } else { c };
+    Str test = if (v.wrote || v.borrow) { c0 + " = icmp eq i32 " + hd + ", -2" } else { c0 + " = icmp slt i32 " + hd + ", 0" };
+    // A byte list's accessors also take a list of words (bl_set packs it
+    // first): the copy needs the byte representation, type word 4 or 5.
+    List(Str) ty = if (v.bytes == 2) { [c + ".tp = getelementptr i8, ptr " + v.reg + ", i64 24", c + ".t = load i64, ptr " + c + ".tp", c + ".t4 = sub i64 " + c + ".t, 4", c + ".tb = icmp ult i64 " + c + ".t4, 2", c + " = and i1 " + c0 + ", " + c + ".tb"] } else { [] };
+    return ol_tests(vs, k + 1, acc.concat([w + " = getelementptr i8, ptr " + v.reg + ", i64 8", hd + " = load i32, ptr " + w, test]).concat(ty));
 }
 
 // %ol.nK's element count register, %ol.eK.
@@ -6075,6 +6097,13 @@ List(Str) ol_op0(Str l, Map(Str, Int) fam) {
     if (str_starts_with(rhs, "call ptr @resid_list_get(") && a.len() == 2) {
         return ["call void @resid_ol_check(" + a[1] + ", i64 " + n + ")", d + ".a = getelementptr i64, ptr " + s + ", " + a[1], d + " = load ptr, ptr " + d + ".a"];
     }
+    if (str_starts_with(rhs, "call ptr @resid_bl_get(") && a.len() == 2) {
+        return ["call void @resid_ol_check(" + a[1] + ", i64 " + n + ")", d + ".a = getelementptr i8, ptr " + s + ", " + a[1], d + ".b = load i8, ptr " + d + ".a", d + ".z = zext i8 " + d + ".b to i64", d + " = inttoptr i64 " + d + ".z to ptr"];
+    }
+    if (str_starts_with(rhs, "call ptr @resid_bl_set(") && a.len() == 4) {
+        Str w = str_slice(a[3], 4, str_len(a[3]));
+        return ["call void @resid_ol_check(" + a[2] + ", i64 " + n + ")", d + ".a = getelementptr i8, ptr " + s + ", " + a[2], d + ".t = trunc i64 " + w + " to i8", "store i8 " + d + ".t, ptr " + d + ".a", alias];
+    }
     if (str_starts_with(rhs, "call ptr @resid_list_set_w(") && a.len() == 4) {
         Str w = str_slice(a[3], 4, str_len(a[3]));
         return ["call void @resid_ol_check(" + a[2] + ", i64 " + n + ")", d + ".a = getelementptr i64, ptr " + s + ", " + a[2], "store i64 " + w + ", ptr " + d + ".a", alias];
@@ -6109,6 +6138,66 @@ List(Str) ol_args(Str rhs) {
     Int a = str_index_of(rhs, "(", 0);
     if (a < 0 || !str_ends_with(rhs, ")")) { return []; }
     return str_split(str_slice(rhs, a + 1, str_len(rhs) - 1), ", ");
+}
+
+// ─── Two owned writes to one list ──────────────────────────────────────
+// `%a = call ptr @resid_list_set_w(ptr %l, i8 1, i64 I, i64 X)` directly
+// followed by `%b = call ptr @resid_list_set_w(ptr %a, i8 1, i64 J, i64 Y)`
+// with %a used nowhere else (a swap, `xs.with(i, y).with(j, x)`) is one
+// call, resid_list_set2_w: the list's header is tested once for both
+// stores, where the second write otherwise reloads it (the first's result
+// is a phi of its fast and slow paths). resid_bl_set pairs likewise
+// (resid_bl_set2). Runs after the loop copies (ol_apply), which rewrite
+// the single writes they own.
+List(Str) sw2_apply(List(Str) ls) {
+    if (!sw2_any(ls, 0)) { return ls; }
+    return sw2_at(ls, 0, ListBuf()).finish();
+}
+
+Bool sw2_any(List(Str) ls, Int i) {
+    if (i + 1 >= ls.len()) { return false; }
+    if (sw2_pair(ls, i) > 0) { return true; }
+    return sw2_any(ls, i + 1);
+}
+
+// 1: a pair of word writes at i, 2: of byte writes, 0: none.
+Int sw2_pair(List(Str) ls, Int i) {
+    Str ra = ol_dst(ls[i]);
+    Str rb = ol_dst(ls[i + 1]);
+    if (ra == "" || rb == "") { return 0; }
+    Int k = sw2_kind(ol_rhs(ls[i]));
+    Str rhs2 = ol_rhs(ls[i + 1]);
+    if (k == 0 || sw2_kind(rhs2) != k || ol_first_arg(rhs2) != ra) { return 0; }
+    if (ol_args(ol_rhs(ls[i])).len() != 4 || ol_args(rhs2).len() != 4) { return 0; }
+    // %a: defined at i, read at i + 1 and nowhere else.
+    return if (sw2_uses(ls, 0, ra, 0) == 2) { k } else { 0 };
+}
+
+Int sw2_kind(Str rhs) {
+    Str m = ol_first_arg(rhs);
+    if (m == "") { return 0; }
+    if (str_starts_with(rhs, "call ptr @resid_list_set_w(ptr " + m + ", i8 1, ")) { return 1; }
+    if (str_starts_with(rhs, "call ptr @resid_bl_set(ptr " + m + ", i8 1, ")) { return 2; }
+    return 0;
+}
+
+// The lines naming register r.
+Int sw2_uses(List(Str) ls, Int i, Str r, Int acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    Bool has = str_contains(l, r) && ol_regs(l, 0, str_len(l), []).contains(r);
+    return sw2_uses(ls, i + 1, r, if (has) { acc + 1 } else { acc });
+}
+
+ListBuf(Str) sw2_at(List(Str) ls, Int i, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    Int k = if (i + 1 < ls.len()) { sw2_pair(ls, i) } else { 0 };
+    if (k == 0) { return sw2_at(ls, i + 1, acc.push(ls[i])); }
+    List(Str) a = ol_args(ol_rhs(ls[i]));
+    List(Str) b = ol_args(ol_rhs(ls[i + 1]));
+    Str f = if (k == 1) { "@resid_list_set2_w" } else { "@resid_bl_set2" };
+    Str l2 = ol_dst(ls[i + 1]) + " = call ptr " + f + "(" + a[0] + ", " + a[2] + ", " + a[3] + ", " + b[2] + ", " + b[3] + ")";
+    return sw2_at(ls, i + 2, acc.push(l2));
 }
 
 // ─── Record writes into list elements ──────────────────────────────────
@@ -6518,8 +6607,8 @@ Str orf_index(Str rhs, Map(Str, Int) fam) {
     Str m = ol_first_arg(rhs);
     if (m == "" || !fam.contains(m)) { return ""; }
     List(Str) a = ol_args(rhs);
-    Str t = if (str_starts_with(rhs, "call ptr @resid_list_get(") && a.len() == 2) { a[1] } else {
-        if ((str_starts_with(rhs, "call ptr @resid_list_set_w(") && a.len() == 4) || (str_starts_with(rhs, "call ptr @resid_list_set_rec(") && a.len() == 5)) { a[2] } else {
+    Str t = if ((str_starts_with(rhs, "call ptr @resid_list_get(") || str_starts_with(rhs, "call ptr @resid_bl_get(")) && a.len() == 2) { a[1] } else {
+        if ((str_starts_with(rhs, "call ptr @resid_list_set_w(") && a.len() == 4) || (str_starts_with(rhs, "call ptr @resid_bl_set(") && a.len() == 4) || (str_starts_with(rhs, "call ptr @resid_list_set_rec(") && a.len() == 5)) { a[2] } else {
             if ((str_starts_with(rhs, "call ptr @resid_list_rec_at(") && a.len() == 3) || (str_starts_with(rhs, "call ptr @resid_list_rec_borrow(") && a.len() == 4)) { a[1] } else { "" } } };
     return if (str_starts_with(t, "i64 ")) { str_slice(t, 4, str_len(t)) } else { "" };
 }

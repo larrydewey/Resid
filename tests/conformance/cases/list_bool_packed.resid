@@ -1,0 +1,66 @@
+// List(Bool) is stored one byte per element (type word 5): literals,
+// builders, owned and persistent updates, concat, slices, fill, maps and
+// nested lists, and loops that the compiler versions over the packed bytes
+// (a sieve), all against the values a list of words would hold.
+
+List(Bool) flip(List(Bool) xs, Int i) {
+    if (i >= xs.len()) { return xs; }
+    return flip(xs.with(i, !xs[i]), i + 1);
+}
+
+List(Bool) build(Int i, Int n, ListBuf(Bool) acc) {
+    if (i >= n) { return acc.finish(); }
+    return build(i + 1, n, acc.push(i % 3 == 0));
+}
+
+Int count(List(Bool) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return count(xs, i + 1, if (xs[i]) { acc + 1 } else { acc });
+}
+
+List(Bool) clear(List(Bool) flags, Int k, Int i, Int size) {
+    if (k > size) { return flags; }
+    return clear(flags.with(k - 1, false), k + i, i, size);
+}
+
+Int sieve(List(Bool) flags, Int i, Int size, Int primes) {
+    if (i > size) { return primes; }
+    if (flags[i - 1]) { return sieve(clear(flags, i + i, i, size), i + 1, size, primes + 1); }
+    return sieve(flags, i + 1, size, primes);
+}
+
+List(Bool) swap(List(Bool) xs, Int i, Int j) {
+    Bool a = xs[i];
+    Bool b = xs[j];
+    return xs.with(i, b).with(j, a);
+}
+
+Int main() {
+    List(Bool) a = [true, false, true];
+    println(f"{a}");
+    List(Bool) b = flip(a, 0);
+    println(f"{b} {a}");
+    List(Bool) c = a.concat(b).concat([false]);
+    println(f"{c} {c.len()}");
+    List(Bool) d = build(0, 1000, ListBuf());
+    println(f"{count(d, 0, 0)} {d[999]} {d[0]} {d[1]}");
+    List(Bool) e = d.with(1, true);
+    println(f"{count(e, 0, 0)} {count(d, 0, 0)}");
+    println(f"{c[1..4]}");
+    List(Bool) m = [];
+    println(f"{m.concat([true]).concat([false])}");
+    for (Bool x in a) { print(f"{x} "); }
+    println("");
+    Map(Str, List(Bool)) mp = {"k": a};
+    List(Bool) g = mp.get("k") else { [] };
+    println(f"{g}");
+    List(List(Bool)) nested = [a, b];
+    println(f"{nested}");
+    println(f"{a.fill(0, 2, false)} {a}");
+    println(f"{sieve(build(0, 5000, ListBuf()).fill(0, 5000, true), 2, 5000, 0)}");
+    List(Bool) s = swap([true, false, false], 0, 2);
+    List(Bool) keep = [true, false];
+    List(Bool) s2 = swap(keep, 0, 1);
+    println(f"{s} {s2} {keep}");
+    return 0;
+}

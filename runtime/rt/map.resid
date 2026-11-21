@@ -2089,6 +2089,20 @@ pub Int rt_list_set_w(Int l, Int owned, Int i, Int w) {
     return list_set_slow(l, owned, i, w);
 }
 
+// xs.with(i, a).with(j, b) on an owned list (the compiler's sw2_apply): one
+// header test for both stores. Off the fast path, the two writes in order,
+// so an index out of range aborts as the first write that meets it.
+@export("resid_list_set2_w", "ptr(ptr,i64,i64,i64,i64)")
+@inline
+pub Int rt_list_set2_w(Int l, Int i, Int a, Int j, Int b) {
+    Int n = lcount(l);
+    if (ltransient(l) && ult(i, n) && ult(j, n)) {
+        Int r = lroot(l) + 24;
+        return st64(r + i * 8, a) * 0 + st64(r + j * 8, b) * 0 + l;
+    }
+    return rt_list_set_w(list_set_slow(l, 1, i, a), 1, j, b);
+}
+
 // xs.with(i, r) on a list of inline records of w words: r's fields copied
 // into element i (in place on an owned transient list; nothing to copy
 // when r is that element, rewritten in place).
@@ -2219,7 +2233,7 @@ Int fill_target(Int l, Int owned, Int from, Int n) {
 // w. k is the raw slot kind of the element type (0 for tagged words); an
 // empty list may not know its kind yet (`[]`), so it takes k.
 @export("resid_list_grow_w", "ptr(ptr,i64,i64,i64)")
-pub Int rt_list_grow_w(Int l, Int n, Int w, Int k) { return if (k == 4 || lbytes(l)) { bl_grow_list(l, n, w) } else { list_grow(l, n, w, k) }; }
+pub Int rt_list_grow_w(Int l, Int n, Int w, Int k) { return if (k == 4 || k == 5 || lbytes(l)) { bl_grow_list(l, n, w) } else { list_grow(l, n, w, k) }; }
 
 @export("resid_list_grow", "ptr(ptr,i64,ptr,i64)")
 pub Int rt_list_grow(Int l, Int n, Int v, Int k) { return list_grow(l, n, v, k); }
@@ -2386,7 +2400,7 @@ pub Int rt_list_push_own(Int a, Int w, Int k) {
 
 @noinline
 Int list_push_own_slow(Int a, Int w, Int k) {
-    if (k == 4 || lbytes(a)) { return rt_bl_push_own(a, w); }
+    if (k == 4 || k == 5 || lbytes(a)) { return rt_bl_push_own(a, w); }
     if (no_thaw(a)) { return mark_frozen(rt_list_push_k(a, w, k)); }
     Int n = lcount(a);
     Int t = if (ltransient(a)) { a } else { with_fresh(a, max(4, n)) };

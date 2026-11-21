@@ -27,6 +27,31 @@
   was built on its crates, were deleted on 2026-09-26; both are in git
   history.
 
+### 0zzb. Packed List(Bool), byte-list loop copies, fused swaps (2026-11-21)
+
+From an AWFY profile (callgrind against the C harness): Sieve's clearing
+loop already matched C (4 instructions an element); the gap was 8-byte
+Bool slots, byte lists missing from the loop copies, and a swap testing
+the list twice.
+
+- **`List(Bool)` packed**: one byte per element, type word 5 (4 stays
+  UInt(8)). `lst_packed` routes both to `resid_bl_*`; the runtime keeps
+  the kind through every byte-list maker (`bl_kind`) and boxes kind 5 as
+  Bool (`slot_box`).
+- **Loop copies (W3) for byte lists**: `ol_*` take `resid_bl_get`/
+  `resid_bl_set` (byte loads and stores in the copy; the guard also checks
+  type word 4/5). Without this, packing alone made Sieve 9% slower.
+- **Byte views** for read-only loops (`resid_bl_get_v`, `resid_bl_vlen`).
+- **Fused swaps**: `xs.with(i, a).with(j, b)` on an owned list is one
+  call (`resid_list_set2_w`, `resid_bl_set2`; `sw2_apply` after the loop
+  copies).
+- Checked with an assertion runtime (every 8-byte list path aborts on a
+  byte list): conformance had no hit. Tests `list_bool_packed`,
+  `list_swap_fused`.
+- AWFY on a 4-thread Xeon, best of 3x5, ms: Sieve 47.8 -> 34.6, Permute
+  102 -> 87, Queens 73 -> 71, the rest within noise. A read-only loop
+  over a 1M-element List(Bool): 102 -> 91 ms.
+
 ### 0zza. Large objects in loop regions; packed file reads (2026-11-20)
 
 Found through Pylon: `pylon put` of a 20 MB file peaked at 1.08 GB (40 MB
