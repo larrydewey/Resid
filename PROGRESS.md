@@ -60,6 +60,13 @@ the list twice.
   owned writes do not count) and makes their region calls constants.
   Permute 87 -> 74.5 ms (65 -> 53 instructions a call); no other AWFY
   loop qualifies (each allocates).
+- **Builder loops** (`bv_apply`): a loop pushing one element a step onto
+  a ListBuf it carries keeps the builder's count in a register (the
+  buffer and its capacity read once) while the buffer has room, falling
+  back to the checked loop for a push that must grow; the count is written
+  back at every exit. Sieve 34.5 -> 23.7 ms (its builder of 5000 Bools was
+  about 14 instructions a push); Havlak, Storage and Queens' fills take it
+  too. Test: `listbuf_loop_copy`.
 
 ### 0zza. Large objects in loop regions; packed file reads (2026-11-20)
 

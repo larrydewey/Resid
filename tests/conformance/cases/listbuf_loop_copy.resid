@@ -1,0 +1,62 @@
+// A loop that pushes one element a step onto a builder it carries runs a
+// copy that keeps the count in a register (bv_apply): bytes, Bools and
+// words, growth past each capacity, a builder returned unfinished (and
+// pushed onto again), an exit before any push, and a builder that already
+// holds elements when the loop starts.
+
+ListBuf(UInt(8)) bytes(Int i, Int n, ListBuf(UInt(8)) acc) {
+    if (i >= n) { return acc; }
+    return bytes(i + 1, n, acc.push((UInt(8)) (i & 255)));
+}
+
+List(Bool) flags(Int i, Int n, ListBuf(Bool) acc) {
+    if (i >= n) { return acc.finish(); }
+    return flags(i + 1, n, acc.push(i % 7 == 0));
+}
+
+List(Int) squares(Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return squares(i + 1, n, acc.push(i * i));
+}
+
+List(Str) words(Int i, Int n, ListBuf(Str) acc) {
+    if (i >= n) { return acc.finish(); }
+    return words(i + 1, n, acc.push(f"w{i}"));
+}
+
+Int sum8(List(UInt(8)) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return sum8(xs, i + 1, acc + (Int) xs[i]);
+}
+
+Int count(List(Bool) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return count(xs, i + 1, if (xs[i]) { acc + 1 } else { acc });
+}
+
+Int sum(List(Int) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return sum(xs, i + 1, acc + xs[i]);
+}
+
+Int main() {
+    // Sizes around each capacity step (64 bytes first, 8 words first).
+    List(Int) sizes = [0, 1, 7, 8, 9, 63, 64, 65, 1000, 70000];
+    for (Int n in sizes) {
+        List(UInt(8)) b = bytes(0, n, ListBuf()).finish();
+        List(Bool) f = flags(0, n, ListBuf());
+        List(Int) q = squares(0, n, ListBuf());
+        println(f"{n}: {b.len()} {sum8(b, 0, 0)} {f.len()} {count(f, 0, 0)} {q.len()} {sum(q, 0, 0)}");
+    }
+    // Unfinished, then pushed onto by a second loop and by hand.
+    ListBuf(UInt(8)) half = bytes(0, 100, ListBuf());
+    List(UInt(8)) whole = bytes(0, 50, half.push((UInt(8)) 7)).finish();
+    println(f"{whole.len()} {sum8(whole, 0, 0)} {whole[100]} {whole[101]}");
+    // A builder that already holds elements.
+    ListBuf(Int) start = ListBuf();
+    List(Int) pre = squares(3, 6, start.push(100).push(200));
+    println(f"{pre}");
+    List(Str) ws = words(0, 12, ListBuf());
+    println(f"{ws}");
+    return 0;
+}
