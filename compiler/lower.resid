@@ -10536,7 +10536,7 @@ pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts,
     PG r = PG {.pos = r0.pos, .err = r0.err, .glines = r0.glines, .hlines = r0.hlines, .lines = r0.lines.concat(rfs).concat(ffs).concat(sfs), .tmp = r0.tmp, .lbl = r0.lbl};
     PG r1 = r;
     if (r1.err != "" || dbg || resid_rtmod()) { return r1; }
-    return PG {.pos = r1.pos, .err = r1.err, .glines = r1.glines, .hlines = r1.hlines, .lines = vl_module(ol_module(r1.lines)), .tmp = r1.tmp, .lbl = r1.lbl};
+    return PG {.pos = r1.pos, .err = r1.err, .glines = r1.glines, .hlines = r1.hlines, .lines = rz_module(vl_module(ol_module(r1.lines))), .tmp = r1.tmp, .lbl = r1.lbl};
 }
 
 // ─── Signatures from the graph ──────────────────────────────────────
@@ -11421,6 +11421,154 @@ Int vl_i32_max() { return 2147483647; }
 type VL = { Bool ok; Str why; Map(Str, Str) sub; Map(Str, Str) kind; Map(Str, Int) lo; Map(Str, Int) hi; List(Str) out; List(Str) lists; List(Str) ints; Int n; Int bound; Str bad; };
 
 VL vl_fail(VL v, Str why) { return VL {.ok = false, .why = why, .sub = v.sub, .kind = v.kind, .lo = v.lo, .hi = v.hi, .out = v.out, .lists = v.lists, .ints = v.ints, .n = v.n, .bound = v.bound, .bad = v.bad}; }
+
+// ─── Loops that allocate nothing keep no region ────────────────────────
+// lr_region_ok gives a loop a region when its body calls a program
+// function that is not a leaf (fs.leaf, a reading of the source), though
+// many such callees allocate nothing once lowered: a record rebuilt in
+// place, an owned list written in place (Permute's recursion, where every
+// level entered, tested and left a region). Over the lowered module, a
+// function allocates when it calls a runtime function outside rz_rt_free,
+// calls through a pointer, or calls a function that allocates (a greatest
+// fixed point, so a recursion that allocates nothing stays free). In a
+// function that allocates nothing, the calls of its loop regions become
+// constants: never pushed, never due, nothing to move at an exit (LLVM
+// drops the compaction and exit-move blocks). A region's own calls
+// (resid_loop_*, a move through a %lr.cx context) do not count.
+pub List(Str) rz_module(List(Str) ls) {
+    if (!rz_has_region(ls, 0)) { return ls; }
+    Map(Str, Int) e0 = {};
+    Map(Str, Int) defs = rz_defs(ls, 0, e0);
+    Map(Str, Int) self0 = rz_self(ls, 0, defs, e0);
+    Map(Str, Int) alloc = rz_fix(ls, defs, self0, 0);
+    return rz_walk(ls, alloc, 0, ListBuf()).finish();
+}
+
+Bool rz_has_region(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return false; }
+    if (str_contains(ls[i], " = call i64 @resid_loop_enter()")) { return true; }
+    return rz_has_region(ls, i + 1);
+}
+
+// Each function defined here: name -> index of its `define`.
+Map(Str, Int) rz_defs(List(Str) ls, Int i, Map(Str, Int) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    Bool d = str_starts_with(l, "define ") && !str_contains(l, "\n");
+    Str nm = if (d) { rz_name(l) } else { "" };
+    return rz_defs(ls, i + 1, if (nm != "") { acc.insert(nm, i) } else { acc });
+}
+
+// A `define` line's function name, unquoted (as rz_callee gives it).
+Str rz_name(Str l) {
+    Str n = vl_fn_name(l);
+    return if (str_starts_with(n, "\"") && str_ends_with(n, "\"") && str_len(n) >= 2) { str_slice(n, 1, str_len(n) - 1) } else { n };
+}
+
+// A call of a region's own: resid_loop_*, or a move through its context.
+Bool rz_region_call(Str f, Str l) { return str_starts_with(f, "resid_loop_") || str_contains(l, ", ptr %lr.cx"); }
+
+// The callee of a call in line l: its name, "*" for a call through a
+// pointer, "" for no call (inline asm counts as none).
+Str rz_callee(Str l) {
+    Int at = str_index_of(l, "call ", 0);
+    if (at < 0 || str_contains(l, " asm ")) { return ""; }
+    Int c = str_index_of(l, "@", at);
+    Int p = str_index_of(l, "(", at);
+    if (c < 0 || (p >= 0 && p < c)) { return "*"; }
+    if (str_char_at(l, c + 1) == 34) {
+        Int q = str_index_of(l, "\"", c + 2);
+        return if (q > c) { str_slice(l, c + 2, q) } else { "*" };
+    }
+    Int e = str_index_of(l, "(", c);
+    return if (e > c) { str_slice(l, c + 1, e) } else { "*" };
+}
+
+// A runtime function that allocates nothing in the caller's region.
+Bool rz_rt_free(Str f, Str l) {
+    if (rz_region_call(f, l)) { return true; }
+    if (str_starts_with(f, "llvm.") || str_starts_with(f, "checked_") || str_starts_with(f, "wrapping_") || str_starts_with(f, "saturating_")) { return true; }
+    // Owned writes in place (a first write to a frozen list copies it: the
+    // copy replaces the list the caller carries, as in a loop body).
+    if (f == "resid_list_set_w" || f == "resid_bl_set" || f == "resid_list_with_i64" || f == "resid_list_with_bool" || f == "resid_list_with_f64") { return str_contains(l, ", i8 1,"); }
+    if (f == "resid_list_set2_w" || f == "resid_bl_set2" || f == "resid_ol_check" || f == "resid_ol_put" || f == "resid_list_freeze") { return true; }
+    return lo_has_str(["resid_overflow_check", "resid_div_check", "resid_conv_check", "resid_index_abort", "resid_abort", "resid_list_len", "resid_list_elems", "resid_list_get", "resid_list_get_nc", "resid_bl_get", "resid_bl_get_nc", "resid_list_get_v", "resid_bl_get_v", "resid_list_vdata", "resid_list_vlen", "resid_bl_vlen", "resid_list_rec_at", "str_char_at", "str_len", "resid_str_eq", "abs_i64", "min_i64", "max_i64", "clamp_i64"], f, 0);
+}
+
+// Functions that allocate by themselves (1), whatever their callees do.
+Map(Str, Int) rz_self(List(Str) ls, Int i, Map(Str, Int) defs, Map(Str, Int) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    if (!str_starts_with(l, "define ") || str_contains(l, "\n")) { return rz_self(ls, i + 1, defs, acc); }
+    Int e = vl_fn_end(ls, i + 1);
+    Bool a = rz_self_fn(ls, i + 1, e, defs);
+    return rz_self(ls, e + 1, defs, if (a) { acc.insert(rz_name(l), 1) } else { acc });
+}
+
+Bool rz_self_fn(List(Str) ls, Int i, Int e, Map(Str, Int) defs) {
+    if (i >= e) { return false; }
+    Str f = rz_callee(ls[i]);
+    Bool a = f == "*" || (f != "" && !defs.contains(f) && !rz_rt_free(f, ls[i]));
+    if (a) { return true; }
+    return rz_self_fn(ls, i + 1, e, defs);
+}
+
+// The functions that allocate: those that do by themselves, then every
+// caller of one, to a fixed point (at most one round per function).
+Map(Str, Int) rz_fix(List(Str) ls, Map(Str, Int) defs, Map(Str, Int) alloc, Int round) {
+    Map(Str, Int) a2 = rz_round(ls, 0, defs, alloc);
+    if (a2.len() == alloc.len() || round > defs.len()) { return a2; }
+    return rz_fix(ls, defs, a2, round + 1);
+}
+
+Map(Str, Int) rz_round(List(Str) ls, Int i, Map(Str, Int) defs, Map(Str, Int) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    if (!str_starts_with(l, "define ") || str_contains(l, "\n")) { return rz_round(ls, i + 1, defs, acc); }
+    Int e = vl_fn_end(ls, i + 1);
+    Str nm = rz_name(l);
+    Bool a = !acc.contains(nm) && rz_calls_alloc(ls, i + 1, e, defs, acc);
+    return rz_round(ls, e + 1, defs, if (a) { acc.insert(nm, 1) } else { acc });
+}
+
+Bool rz_calls_alloc(List(Str) ls, Int i, Int e, Map(Str, Int) defs, Map(Str, Int) alloc) {
+    if (i >= e) { return false; }
+    Str f = rz_callee(ls[i]);
+    if (f != "" && defs.contains(f) && alloc.contains(f) && !rz_region_call(f, ls[i])) { return true; }
+    return rz_calls_alloc(ls, i + 1, e, defs, alloc);
+}
+
+ListBuf(Str) rz_walk(List(Str) ls, Map(Str, Int) alloc, Int i, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    if (!str_starts_with(l, "define ") || str_contains(l, "\n")) { return rz_walk(ls, alloc, i + 1, acc.push(l)); }
+    Int e = vl_fn_end(ls, i + 1);
+    Bool free = !alloc.contains(rz_name(l));
+    return rz_walk(ls, alloc, e, rz_fn(ls, i, e, free, acc));
+}
+
+// Lines i..e of one function (its `define` included), the region calls
+// made constant when it allocates nothing.
+ListBuf(Str) rz_fn(List(Str) ls, Int i, Int e, Bool free, ListBuf(Str) acc) {
+    if (i >= e) { return acc; }
+    Str l = ls[i];
+    return rz_fn(ls, i + 1, e, free, acc.push(if (free) { rz_line(l) } else { l }));
+}
+
+Str rz_line(Str l) {
+    Str d = ol_dst(l);
+    if (d == "") { return l; }
+    Str rhs = ol_rhs(l);
+    if (rhs == "call i64 @resid_loop_enter()") { return d + " = add i64 0, 0"; }
+    if (str_starts_with(rhs, "call i64 @resid_loop_due2(")) { return d + " = add i64 0, 0"; }
+    if (str_starts_with(rhs, "call i1 @resid_loop_due(")) { return d + " = icmp ne i64 0, 0"; }
+    if (str_starts_with(rhs, "call ptr @resid_loop_exit(")) { return d + " = getelementptr i8, ptr null, i64 0"; }
+    if (str_starts_with(rhs, "call ptr @resid_loop_own_move(")) {
+        List(Str) a = ol_args(rhs);
+        return if (a.len() == 4 && str_starts_with(a[1], "ptr ")) { d + " = getelementptr i8, " + a[1] + ", i64 0" } else { l };
+    }
+    return l;
+}
 
 pub List(Str) vl_module(List(Str) ls) {
     Map(Str, Int) none = {};

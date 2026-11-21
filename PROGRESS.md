@@ -51,6 +51,15 @@ the list twice.
 - AWFY on a 4-thread Xeon, best of 3x5, ms: Sieve 47.8 -> 34.6, Permute
   102 -> 87, Queens 73 -> 71, the rest within noise. A read-only loop
   over a 1M-element List(Bool): 102 -> 91 ms.
+- **Regions dropped where nothing allocates** (`rz_module`): a loop gets a
+  region when it calls a non-leaf function (a reading of the source), but
+  Permute's `permute` allocates nothing once lowered (its record and list
+  are written in place), so every level of the recursion entered, tested
+  and left a region. A module pass over the lowered IR finds the functions
+  that allocate nothing (a fixed point; region calls and reads, checks and
+  owned writes do not count) and makes their region calls constants.
+  Permute 87 -> 74.5 ms (65 -> 53 instructions a call); no other AWFY
+  loop qualifies (each allocates).
 
 ### 0zza. Large objects in loop regions; packed file reads (2026-11-20)
 
