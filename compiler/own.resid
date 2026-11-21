@@ -382,7 +382,13 @@ List(Int) ow_param_ids(Kg g, Int f, Int i, ListBuf(Int) acc) {
 // value's subpath p may point into location (r, l) (OE).
 
 type OLc = { Int r; Int l; };
-type OE = { Int p; Int r; Int l; };
+// x: the entry is exact, its p and l unfolded (no step dropped by a fold
+// to three steps, the four-step cap or ow_coarse). Only an exact entry is
+// extended by a deeper read (ow_sub_ents): a folded l is somewhere under
+// l, so l plus the read's remaining steps would name a location the value
+// may not point into; a coarse entry stays at l, which overlaps every
+// location under it.
+type OE = { Int p; Int r; Int l; Bool x; };
 
 Int ow_any() { return 8192; }
 Int ow_kstep(Int k, Bool not) { return if (k < 0 || k >= 12287) { 8192 } else { 8193 + k * 2 + (if (not) { 1 } else { 0 }) }; }
@@ -516,7 +522,7 @@ Bool ow_has_step_n(Int p, Int s, Int i) { return ow_has_step(p, s, i + 1);
 }
 
 OLc ow_loc(Int b, Int p) { return OLc {.r = b, .l = p}; }
-OE ow_ent(Int p, OLc l) { return OE {.p = p, .r = l.r, .l = l.l}; }
+OE ow_ent(Int p, OLc l) { return OE {.p = p, .r = l.r, .l = l.l, .x = ow_pn(p) < 4 && ow_pn(l.l) < 4}; }
 OLc ow_ent_l(OE e) { return OLc {.r = e.r, .l = e.l}; }
 
 // The entries of path value b.q: the value is location b.q itself, and
@@ -532,7 +538,11 @@ List(OE) ow_sub_ents(List(OE) es, Int q, Int i, ListBuf(OE) acc) {
     if (i >= es.len()) { return acc.finish(); }
     OE e = es[i];
     Int rl = ow_prel(e.p, q);
-    ListBuf(OE) a2 = if (rl >= 2 || rl == 0) { acc.push(OE {.p = ow_pdrop(e.p, ow_pn(q)), .r = e.r, .l = e.l}) } else { if (rl == 1) { acc.push(OE {.p = 0, .r = e.r, .l = ow_ptrunc(ow_pcat(e.l, ow_pdrop(q, ow_pn(e.p))), 3)}) } else { acc } };
+    // q below e.p: an exact entry's location goes down by q's remaining
+    // steps; a coarse one stays where it is (see OE).
+    Int ext = ow_pn(e.l) + ow_pn(q) - ow_pn(e.p);
+    OE down = if (e.x) { OE {.p = 0, .r = e.r, .l = ow_ptrunc(ow_pcat(e.l, ow_pdrop(q, ow_pn(e.p))), 3), .x = ext <= 3 && ow_pn(q) < 4} } else { OE {.p = 0, .r = e.r, .l = e.l, .x = false} };
+    ListBuf(OE) a2 = if (rl >= 2 || rl == 0) { acc.push(OE {.p = ow_pdrop(e.p, ow_pn(q)), .r = e.r, .l = e.l, .x = e.x}) } else { if (rl == 1) { acc.push(down) } else { acc } };
     return ow_sub_ents_n(es, q, i, a2);
 }
 
@@ -546,7 +556,7 @@ List(OE) ow_sub_ents_n(List(OE) es, Int q, Int i, ListBuf(OE) acc) { return ow_s
 List(OE) ow_under(List(OE) es, Int step, Int i, ListBuf(OE) acc) {
     if (i >= es.len()) { return acc.finish(); }
     OE e = es[i];
-    return ow_under_n(es, step, i, acc.push(OE {.p = ow_ptrunc(ow_pcat(ow_papp(0, step), e.p), 3), .r = e.r, .l = ow_ptrunc(e.l, 3)}));
+    return ow_under_n(es, step, i, acc.push(OE {.p = ow_ptrunc(ow_pcat(ow_papp(0, step), e.p), 3), .r = e.r, .l = ow_ptrunc(e.l, 3), .x = e.x && ow_pn(e.p) + 1 <= 3 && ow_pn(e.l) <= 3}));
 }
 
 List(OE) ow_under_n(List(OE) es, Int step, Int i, ListBuf(OE) acc) { return ow_under(es, step, i + 1, acc); }
@@ -555,12 +565,12 @@ List(OE) ow_under_n(List(OE) es, Int step, Int i, ListBuf(OE) acc) { return ow_u
 List(OE) ow_under_p(List(OE) es, Int q, Int i, ListBuf(OE) acc) {
     if (i >= es.len()) { return acc.finish(); }
     OE e = es[i];
-    return ow_under_p_n(es, q, i, acc.push(OE {.p = ow_ptrunc(ow_pcat(q, e.p), 3), .r = e.r, .l = ow_ptrunc(e.l, 3)}));
+    return ow_under_p_n(es, q, i, acc.push(OE {.p = ow_ptrunc(ow_pcat(q, e.p), 3), .r = e.r, .l = ow_ptrunc(e.l, 3), .x = e.x && ow_pn(q) + ow_pn(e.p) <= 3 && ow_pn(e.l) <= 3}));
 }
 
 List(OE) ow_under_p_n(List(OE) es, Int q, Int i, ListBuf(OE) acc) { return ow_under_p(es, q, i + 1, acc); }
 
-Bool ow_ent_eq(OE a, OE b) { return a.p == b.p && a.r == b.r && a.l == b.l; }
+Bool ow_ent_eq(OE a, OE b) { return a.p == b.p && a.r == b.r && a.l == b.l && a.x == b.x; }
 
 // Duplicate-free, first copies in order: short lists by scanning, longer
 // ones through a hash of the three words (a bucket is checked in full).
@@ -678,7 +688,7 @@ OV ow_ovc(List(OE) es, Bool owned, Bool cur, OF f) { return OV {.es = ow_norm(es
 // callee taking such a value as owned would rewrite the object through
 // one holder under the other: the locations model a list's slots as one,
 // so a second store of an object is otherwise invisible.
-OE ow_twice() { return OE {.p = 0, .r = 0 - 3, .l = 0}; }
+OE ow_twice() { return OE {.p = 0, .r = 0 - 3, .l = 0, .x = true}; }
 
 Bool ow_has_twice(List(OE) es, Int i) {
     if (i >= es.len()) { return false; }
@@ -845,7 +855,11 @@ List(OE) ow_norm(List(OE) es) {
 List(OE) ow_coarse(List(OE) es, Int i, ListBuf(OE) acc) {
     if (i >= es.len()) { return acc.finish(); }
     OE e = es[i];
-    return ow_coarse_n(es, i, acc.push(OE {.p = 0, .r = e.r, .l = ow_ptrunc(e.l, 1)}));
+    // The subpath keeps its first step, as the location does: a field of
+    // the value stays apart from its other fields (a set of a record's
+    // fields would otherwise say each may point into every other's
+    // location), and the entries stay bounded (fields times locations).
+    return ow_coarse_n(es, i, acc.push(OE {.p = ow_ptrunc(e.p, 1), .r = e.r, .l = ow_ptrunc(e.l, 1), .x = false}));
 }
 
 List(OE) ow_coarse_n(List(OE) es, Int i, ListBuf(OE) acc) { return ow_coarse(es, i + 1, acc); }
@@ -2119,7 +2133,10 @@ Map(Int, Str) ow_keeps_ps_n(Int fk0, List(OE) es, List(Int) ps, Int i, Map(Int, 
 Str ow_keep_of(List(OE) es, Int p, Int i, Str acc) {
     if (i >= es.len()) { return acc; }
     OE e = es[i];
-    Str one = if (e.r == p) { f"{ow_ptrunc(e.p, 3)}|{ow_ptrunc(e.l, 3)};" } else { "" };
+    // A coarse entry (or one these folds make coarse) is marked `~`: its
+    // entries at the call site stay coarse (ow_keep_ents).
+    Bool ex = e.x && ow_pn(e.p) <= 3 && ow_pn(e.l) <= 3;
+    Str one = if (e.r == p) { f"{ow_ptrunc(e.p, 3)}|{ow_ptrunc(e.l, 3)}" + (if (ex) { "" } else { "~" }) + ";" } else { "" };
     return ow_keep_of_n(es, p, i, if (one != "" && !str_contains(";" + acc, ";" + one)) { acc + one } else { acc });
 }
 
@@ -2129,13 +2146,25 @@ Str ow_keep_of_n(List(OE) es, Int p, Int i, Str acc) { return ow_keep_of(es, p, 
 // holds at q, placed under the result's P, for each "P|q".
 List(OE) ow_keep_ents(List(OE) es, List(Str) pqs, Int i, ListBuf(OE) acc) {
     if (i >= pqs.len()) { return acc.finish(); }
-    Str pq = pqs[i];
+    Str pq0 = pqs[i];
+    Bool cs = str_ends_with(pq0, "~");
+    Str pq = if (cs) { str_slice(pq0, 0, str_len(pq0) - 1) } else { pq0 };
     Int bar = str_index_of(pq, "|", 0);
-    ListBuf(OE) a1 = if (bar < 0) { acc } else { ow_push_e(acc, ow_under_p(ow_sub_ents(es, str_parse_int(str_slice(pq, bar + 1, str_len(pq))), 0, ListBuf()), str_parse_int(str_slice(pq, 0, bar)), 0, ListBuf()), 0) };
+    List(OE) placed = if (bar < 0) { [] } else { ow_under_p(ow_sub_ents(es, str_parse_int(str_slice(pq, bar + 1, str_len(pq))), 0, ListBuf()), str_parse_int(str_slice(pq, 0, bar)), 0, ListBuf()) };
+    ListBuf(OE) a1 = ow_push_e(acc, if (cs) { ow_inexact(placed, 0, ListBuf()) } else { placed }, 0);
     return ow_keep_ents_n(es, pqs, i, a1);
 }
 
 List(OE) ow_keep_ents_n(List(OE) es, List(Str) pqs, Int i, ListBuf(OE) acc) { return ow_keep_ents(es, pqs, i + 1, acc); }
+
+// The entries, each marked coarse.
+List(OE) ow_inexact(List(OE) es, Int i, ListBuf(OE) acc) {
+    if (i >= es.len()) { return acc.finish(); }
+    OE e = es[i];
+    return ow_inexact_n(es, i, acc.push(OE {.p = e.p, .r = e.r, .l = e.l, .x = false}));
+}
+
+List(OE) ow_inexact_n(List(OE) es, Int i, ListBuf(OE) acc) { return ow_inexact(es, i + 1, acc); }
 
 // Two keeps strings united.
 Str ow_kjoin(Str a, Str b) { return ow_kjoin_at(a, str_split(b, ";"), 0); }

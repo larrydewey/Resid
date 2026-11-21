@@ -67,6 +67,11 @@ the list twice.
   back at every exit. Sieve 34.5 -> 23.7 ms (its builder of 5000 Bools was
   about 14 instructions a push); Havlak, Storage and Queens' fills take it
   too. Test: `listbuf_loop_copy`.
+- **Exact alias entries** (`compiler/own.resid`, PLAN-awfy-close §10): a
+  folded or coarsened alias entry is no longer extended by a deeper read,
+  which invented locations (`d.cs.cs`); `ow_coarse` keeps a subpath's first
+  step. Every AWFY instruction count unchanged; `tests/own` checks the
+  report has no invented location.
 
 ### 0zza. Large objects in loop regions; packed file reads (2026-11-20)
 

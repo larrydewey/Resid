@@ -62,6 +62,19 @@ else
     bad "awfy harness build"
 fi
 
+# 2b. No invented locations: a coarse alias entry (folded to three steps,
+# or by ow_coarse) is never extended by a deeper read, which named
+# locations no value has, as DeltaBlue's d.cs.cs (Db.cs is a List(Con)).
+# Every location in the report under a Db list field is the field itself
+# or an element step below it.
+if (cd "$ROOT" && "$COMPILER" "$AW/harness.resid" -o "$TMP/harness_rep" --own-report "$TMP/own.txt" > /dev/null 2>&1) \
+    && ! grep -qE '\bd[0-9]*\.(cs|vs)\.(cs|vs|mark|r)\b' "$TMP/own.txt"; then
+    ok "no invented locations in the AWFY report"
+else
+    bad "no invented locations in the AWFY report"
+    grep -oE '\bd[0-9]*\.(cs|vs)\.(cs|vs|mark|r)\b' "$TMP/own.txt" | sort | uniq -c | head -5
+fi
+
 # 3. Regression programs (cases/): ownership off and on must print the same.
 for c in "$ROOT"/tests/own/cases/*.resid; do
     n="$(basename "$c" .resid)"

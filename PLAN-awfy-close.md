@@ -603,3 +603,33 @@ fixes it and makes the `^` narrowing sound (CD correct), at +20%
 DeltaBlue instructions: some of DeltaBlue's chains rest on the invented
 locations. Next: the exactness bit, then recover DeltaBlue's precision
 from exact sources (patch: scratch own.flagC.resid of this round).
+
+## 10. Exact alias entries (2026-11-21)
+
+The soundness concern of §9 is fixed, at no cost. An alias entry (OE)
+carries `x`, exact: its subpath and location unfolded (no step dropped by
+the fold to three steps, the four-step cap or `ow_coarse`). `ow_sub_ents`
+extends only an exact entry by a deeper read; a coarse one stays at its
+location, which overlaps everything under it. Keeps summaries mark a coarse
+entry `~` so the call site's entries stay coarse (`ow_keep_ents`).
+
+Reproduction: the committed compiler's `--own-report` of the AWFY harness
+named 22 locations no value has (`d.cs.cs`, `d.vs.vs`, `d.cs.vs[k18]`:
+`Db.cs` is a `List(Con)`); with exact entries, none (`tests/own/run.sh`
+now checks it). CD's `next.t` no longer occurs at HEAD.
+
+The +20% on DeltaBlue that §9 measured was `ow_coarse`, not the bit:
+collapsing an entry set to `p = 0` made a record's every field alias every
+other field's location, and only the invented extensions had kept them
+apart. `ow_coarse` now keeps the subpath's first step as it does the
+location's (sound: a prefix of the true subpath covers it; still bounded,
+fields times locations). With both, every AWFY benchmark runs the same
+instruction count as before, DeltaBlue included.
+
+Next (Richards, §9 open): `set_ab` "reads" `s.pk` only by moving it into
+its result (`with_ts`), which defeats the hole for `w.data`. Splitting
+moves from reads is sound only with the other half: the call's result
+binder's later uses (here `s2.pk.with(work, ..)`, which replaces the slot
+whole) must not reach the kept field. The backward pass kills a binder at
+its binding, so those uses have to be recorded at the call.
+
