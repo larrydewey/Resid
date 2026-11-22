@@ -31,30 +31,30 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: resid
 
       # The book server and the Datastar SDK it renders with, side by side.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: larrydewey/resid-book
           path: resid-book
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: larrydewey/resid-datastar
           path: resid-datastar
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: larrydewey/resid-json
           path: resid-json
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: larrydewey/resid-serial
           path: resid-serial
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: larrydewey/resid-toml
           path: resid-toml
@@ -87,16 +87,16 @@ jobs:
           ../resid/build/boot/stage2.bin src/site.resid -o resid-book --profile debug -depmap deps.txt
           ./resid-book export ../resid/website/book.toml ../resid/website/dist
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: resid/website/dist
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
