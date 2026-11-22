@@ -694,10 +694,12 @@ Bool dv_calls_host(List(Str) ls, Int i) {
 
 // The hook goes after main's secret-mode switch when there is one: a host
 // (this binary re-run) then holds the secrets it reads in secret mode too.
+// The switch is resid_secret_mode_lazy (main_entry_ir) or, eager,
+// resid_secret_mode_set; a host arms the wiping itself (hs_secret_arm).
 List(Str) nt_hook_at(List(Str) ls, Int i, Str call, Bool in_main, ListBuf(Str) acc) {
     if (i >= ls.len()) { return acc.finish(); }
     Str l = ls[i];
-    Bool sm = i + 1 < ls.len() && str_contains(ls[i + 1], "@resid_secret_mode_set(i1 true)");
+    Bool sm = i + 1 < ls.len() && (str_contains(ls[i + 1], "@resid_secret_mode_set(i1 true)") || str_contains(ls[i + 1], "@resid_secret_mode_lazy()"));
     if (in_main && l == "entry:" && sm) { return nt_hook_at(ls, i + 2, call, false, acc.push(l).push(ls[i + 1]).push(call)); }
     if (in_main && l == "entry:") { return nt_hook_at(ls, i + 1, call, false, acc.push(l).push(call)); }
     return nt_hook_at(ls, i + 1, call, str_starts_with(l, "define i32 @main(") || str_starts_with(l, "define i64 @main("), acc.push(l));

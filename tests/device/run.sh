@@ -148,7 +148,7 @@ if [ "$#" -eq 0 ] || { [[ " $* " == *" device_secret_mode_host "* ]] && [ -d "$W
     scope="$(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null)"
     if [ -z "$scope" ] || [ "$scope" = 0 ]; then
         echo "SKIP device_secret_mode_host (no Yama ptrace policy here)"; skip=$((skip + 1))
-    elif grep -q 'call i8 @resid_secret_mode_set(i1 true)' "$WORK/device_secret_out/bin.ll" 2>/dev/null && cmp -s "$WORK/device_secret_out/out" "$CASES/device_secret_out.out"; then
+    elif grep -A1 -E 'call i8 @resid_secret_mode_(lazy\(\)|set\(i1 true\))' "$WORK/device_secret_out/bin.ll" 2>/dev/null | grep -q 'call void @resid_device_host()' && cmp -s "$WORK/device_secret_out/out" "$CASES/device_secret_out.out"; then
         echo "PASS device_secret_mode_host"; pass=$((pass + 1))
     else
         echo "FAIL device_secret_mode_host: device_secret_out is not in secret mode, or its output differs"; fail=$((fail + 1))

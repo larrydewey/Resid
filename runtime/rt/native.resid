@@ -407,6 +407,13 @@ pub Int hs_auth(Int pretend) {
 // A host's first act: not dumpable.
 pub Int hs_nodump() { return resid_raw_syscall(157, 4, 0, 0, 0, 0, 0); }   // PR_SET_DUMPABLE 0
 
+// A host of a program in secret mode wipes what it frees from the start.
+// main sets the mode lazily (resid_secret_mode_lazy) and the compiler
+// arms the wiping only in the program's own functions that handle a
+// secret; a host is runtime code, which carries no such mark, and holds
+// what it reads for the program (device replies, native arguments).
+pub Int hs_secret_arm() { return if (secret_mode()) { rt_secret_arm() } else { 0 }; }
+
 // /dev/null on fds 0, 1 and 2, then nothing open but fd 3; no signal
 // blocked (the child that executed the host blocked them all).
 pub Bool hs_settle() {
@@ -633,7 +640,7 @@ pub Int rt_native_host(Int tab, Int n) {
     if (argc != 2 || argv == 0) { return 0; }
     if (c_strcmp(ld64(argv), resid_raw_addr("resid-native-host")) != 0) { return 0; }
     if (ld64(argv + 24) != 0) { return 0; }   // the environment is empty
-    _ = at_secure() + hs_nodump();   // AT_SECURE read while /proc/self/auxv is still readable
+    _ = at_secure() + hs_nodump() + hs_secret_arm();   // AT_SECURE read while /proc/self/auxv is still readable
     if (!native_fd3_socket()) { return 0; }
     // From here on this process is a host and never returns: only fd 3,
     // and only for the program that started it (hs_auth).

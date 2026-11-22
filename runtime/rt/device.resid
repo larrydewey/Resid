@@ -1244,7 +1244,7 @@ pub Int rt_device_host_test(Int argc, Int argv, Int envp, Int mode, Int root) {
 Int dh_main(Int argv, Int envp, Int mode, Int root) {
     if (c_strcmp(ld64(argv), resid_raw_addr("resid-device-host")) != 0) { return 0; }
     if (envp == 0 || ld64(envp) != 0) { return 0; }   // the environment is empty
-    _ = at_secure() + hs_nodump();   // AT_SECURE read while /proc/self/auxv is still readable
+    _ = at_secure() + hs_nodump() + hs_secret_arm();   // AT_SECURE read while /proc/self/auxv is still readable
     if (!native_fd3_socket()) { return 0; }
     // From here on this process is a device host and never returns.
     if (!hs_settle()) { return native_child_exit(126); }   // /dev/null on 0-2, nothing else but fd 3
