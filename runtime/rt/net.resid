@@ -230,6 +230,19 @@ Bool dl_arm(Int fd) {
     return true;
 }
 
+// One receive (45) or send (44) under fd's deadline. The socket's timeout
+// is at most 30 s (dl_arm), so one that times out (EAGAIN) or is
+// interrupted (EINTR) before a later deadline is made again: a deadline
+// is how long the call may wait, not a cap of 30 s on it. Without a
+// deadline a timeout ends the call, as before (the 30 s base).
+Int io_dl(Int nr, Int fd, Int p, Int n, Int flags) {
+    if (!dl_arm(fd)) { return 0 - 11; }
+    Int r = resid_raw_syscall(nr, fd, p, n, flags, 0, 0);
+    Bool again = r == 0 - 11 || r == 0 - 4;
+    if (again && (r == 0 - 4 || dl_get(fd) != 0)) { return io_dl(nr, fd, p, n, flags); }
+    return r;
+}
+
 // ─── TCP listener ──────────────────────────────────────────────────────
 // The serve side: bind, accept, and the one policy below — loopback is a
 // plain `network` read, any other address is a `network` write.
@@ -946,8 +959,7 @@ Int answers(Int r, Int n, Int p, Int k, Int qtype, Int out) {
 // Write all n bytes at p (MSG_NOSIGNAL); false on error.
 Bool send_all(Int fd, Int p, Int n) {
     if (n <= 0) { return true; }
-    if (!dl_arm(fd)) { return false; }
-    Int w = resid_raw_syscall(44, fd, p, n, 16384, 0, 0);
+    Int w = io_dl(44, fd, p, n, 16384);
     if (w <= 0) { return false; }
     return send_all(fd, p + w, n - w);
 }
@@ -991,7 +1003,7 @@ Int recv_loop(Int fd, Int out, Int cap, Int len) {
         if (cap >= 4194304) { return st8(out + len, 0) * 0 + out; }
         return recv_loop(fd, xrealloc(out, cap * 2), cap * 2, len);
     }
-    Int n = if (dl_arm(fd)) { resid_raw_syscall(45, fd, out + len, cap - len - 1, 0, 0, 0) } else { 0 };
+    Int n = io_dl(45, fd, out + len, cap - len - 1, 0);
     if (n <= 0) { return st8(out + len, 0) * 0 + out; }
     return recv_loop(fd, out, cap, len + n);
 }
@@ -1088,8 +1100,8 @@ pub Int rt_tcp_recv_bin(Int fd, Int n0) {
 }
 
 Int recv_exact(Int fd, Int buf, Int got, Int n) {
-    if (got >= n || !dl_arm(fd)) { return got; }
-    Int r = resid_raw_syscall(45, fd, buf + got, n - got, 0, 0, 0);
+    if (got >= n) { return got; }
+    Int r = io_dl(45, fd, buf + got, n - got, 0);
     if (r <= 0) { return got; }
     return recv_exact(fd, buf, got + r, n);
 }
@@ -1106,7 +1118,7 @@ pub Int rt_tcp_recv_some_u8(Int fd, Int max0) { return rt_tcp_recv_some(fd, max0
 pub Int rt_tcp_recv_some(Int fd, Int max0) {
     Int max = if (sock_ok(fd)) { clamp(max0, 0, 1048576) } else { 0 };
     Int buf = xmalloc(if (max > 0) { max } else { 1 });
-    Int r = if (max > 0 && dl_arm(fd)) { resid_raw_syscall(45, fd, buf, max, 0, 0, 0) } else { 0 };
+    Int r = if (max > 0) { io_dl(45, fd, buf, max, 0) } else { 0 };
     Int n = if (r > 0) { r } else { 0 };
     Int out = bl_from_bytes(n, buf);
     _ = c_free_prefix(buf, n);
@@ -1321,7 +1333,7 @@ pub Int rt_unix_send(Int fd, Int l) {
 pub Int rt_unix_recv_some(Int fd, Int max0) {
     Int max = if (ux_conn(fd)) { clamp(max0, 0, 1048576) } else { 0 };
     Int buf = xmalloc(if (max > 0) { max } else { 1 });
-    Int r = if (max > 0 && dl_arm(fd)) { resid_raw_syscall(45, fd, buf, max, 0, 0, 0) } else { 0 };
+    Int r = if (max > 0) { io_dl(45, fd, buf, max, 0) } else { 0 };
     Int n = if (r > 0) { r } else { 0 };
     Int out = bl_from_bytes(n, buf);
     _ = c_free_prefix(buf, n);

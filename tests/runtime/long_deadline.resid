@@ -1,0 +1,36 @@
+// A deadline longer than the 30 s a socket waits by default
+// (runtime/rt/net.resid, io_dl): a receive under a 45 s deadline must
+// wait for bytes that come 32 s after the connection, not end empty at
+// 30 s. Run by run.sh with UX_DIR (a fresh directory, mode 0700) and a
+// client (long_deadline_client.py) that sends "late" 32 s after it
+// connects. Symbolon's SSH agent gives its consent window five minutes
+// this way, and a window answered after 30 s was refused.
+
+@requires(environment)
+Str env(Str k) { return environment.get(k); }
+
+// The client's connection, waiting up to n tenths of a second.
+@requires(network, clock)
+Int accept_wait(Int l, Int n) {
+    if (n <= 0) { return -1; }
+    Int c = resid_unix_accept_now(l);
+    if (c >= 0) { return c; }
+    _ = clock.sleep_ns(100000000);
+    return accept_wait(l, n - 1);
+}
+
+@requires(network, environment, clock)
+Int main() {
+    Int l = resid_unix_listen(env("UX_DIR") + "/late.sock");
+    println(f"listen {l >= 0}");
+    Int c = accept_wait(l, 300);
+    println(f"accepted {c >= 0}");
+    _ = resid_unix_deadline(c, 45000);
+    Int t0 = clock.monotonic_ns();
+    List(Int) got = resid_unix_recv_some(c, 64);
+    Int waited = (clock.monotonic_ns() - t0) / 1000000000;
+    println(f"received {got.len()} bytes after more than 30 s: {waited > 30}");
+    _ = resid_unix_close(c);
+    _ = resid_unix_close(l);
+    return 0;
+}

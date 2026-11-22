@@ -98,6 +98,19 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/unixsock.resid -o "$W/unixsock") > "
 else
     fail=$((fail + 1)); echo "FAIL unix sockets: $(grep -m1 -i error "$W/unixsock.log") $(diff "$W/unixsock.out" unixsock.out 2>/dev/null | head -3 | tr '\n' ' ')"
 fi
+# A deadline past the socket's 30 s default (io_dl): a receive under a 45 s
+# deadline waits for bytes a client sends 32 s after connecting (about 33 s).
+mkdir -m 700 "$W/uxlate"
+if (cd "$ROOT" && "$COMPILER" tests/runtime/long_deadline.resid -o "$W/long_deadline") > "$W/long_deadline.log" 2>&1; then
+    python3 -I long_deadline_client.py "$W/uxlate/late.sock" & LDC=$!
+    UX_DIR="$W/uxlate" timeout 60 "$W/long_deadline" > "$W/long_deadline.out" 2>&1
+    wait $LDC 2>/dev/null
+fi
+if [ "$(cat "$W/long_deadline.out" 2>/dev/null)" = "$(printf 'listen true\naccepted true\nreceived 5 bytes after more than 30 s: true')" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL a deadline past 30 s: $(grep -m1 -i error "$W/long_deadline.log") $(tr '\n' ' ' < "$W/long_deadline.out" 2>/dev/null)"
+fi
 # The same on AArch64, under qemu-user (skipped without it): the runtime
 # reads stat buffers by architecture, and a wrong offset there refuses every
 # directory (the owner was read from st_nlink, so Android could not listen).
