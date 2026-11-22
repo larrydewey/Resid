@@ -13,6 +13,13 @@ import "../../lib/rsa.resid";
 import "../../lib/x509.resid";
 import "../../lib/aesgcm.resid";
 import "../../lib/chacha.resid";
+import "../../lib/chachag.resid";
+import "../../lib/aescbcg.resid";
+import "../../lib/xaesg.resid";
+import "../../lib/sha256g.resid";
+import "../../lib/rsaoaep.resid";
+import "../../lib/rsakey.resid";
+import "../../lib/word.resid";
 import "../../lib/x25519.resid";
 import "../../lib/ed25519.resid";
 import "../../lib/hpke.resid";
@@ -50,6 +57,7 @@ Curve curve_named(Str s) { return if (s == "p384") { P384 } else if (s == "p521"
 
 // The library's answer for test t under group g: 1 accepted, 0 refused,
 // -1 not run (a kind this probe does not cover).
+@requires(declassify)
 Int run_one(List(Str) g, List(Str) t) {
     Str kind = g[1];
     if (kind == "ecdsa") {
@@ -126,6 +134,66 @@ Int run_one(List(Str) g, List(Str) t) {
         if (opened != sealed) { return 0 - 2; }
         return if (opened) { 1 } else { 0 };
     }
+    if (kind == "cbc") {
+        List(Int) key = unhex(t[3]);
+        List(Int) iv = unhex(t[4]);
+        Option(List(Int)) pt = aes_cbc_decrypt(key, iv, unhex(t[6]));
+        Bool opened = match pt { Some(p) => ct_equal(p, unhex(t[5])), None => false };
+        // The secret copy must agree with the public one.
+        Option(List(Secret(UInt(8)))) spt = aes_cbcg_decrypt(secret_bytes(key), iv, unhex(t[6]));
+        Bool sopened = match spt { Some(p) => ct_same(p, secret_bytes(unhex(t[5]))), None => false };
+        if (opened != sopened) { return 0 - 2; }
+        return if (opened) { 1 } else { 0 };
+    }
+    if (kind == "xchacha") {
+        List(Int) key = unhex(t[3]);
+        List(Int) iv = unhex(t[4]);
+        if (key.len() != 32 || iv.len() != 24) { return 0; }
+        List(Int) aad = unhex(t[5]);
+        List(Int) ctt = unhex(t[7]).concat(unhex(t[8]));
+        Option(List(Int)) pt = xchacha20poly1305_decrypt(key, iv, ctt, aad);
+        Bool opened = match pt { Some(p) => ct_equal(p, unhex(t[6])), None => false };
+        Bool sealed = ct_equal(xchacha20poly1305_seal(key, iv, unhex(t[6]), aad), ctt);
+        Option(List(Secret(UInt(8)))) spt = xchacha20poly1305g_decrypt(secret_bytes(key), iv, ctt, aad);
+        Bool sopened = match spt { Some(p) => ct_same(p, secret_bytes(unhex(t[6]))), None => false };
+        if (opened != sealed || opened != sopened) { return 0 - 2; }
+        return if (opened) { 1 } else { 0 };
+    }
+    if (kind == "pbkdf2") {
+        List(Int) pass = unhex(t[3]);
+        List(Int) salt = unhex(t[4]);
+        Int iters = str_parse_int(t[5]);
+        Int len = str_parse_int(t[6]);
+        Bool pub_ok = ct_equal(pbkdf2_sha256g(pass, salt, iters, len), unhex(t[7]));
+        Bool sec_ok = ct_same(pbkdf2_sha256g(secret_bytes(pass), secret_bytes(salt), iters, len), secret_bytes(unhex(t[7])));
+        if (pub_ok != sec_ok) { return 0 - 2; }
+        return if (pub_ok) { 1 } else { 0 };
+    }
+    if (kind == "xaes") {
+        List(Int) key = unhex(t[3]);
+        List(Int) iv = unhex(t[4]);
+        List(Int) aad = unhex(t[5]);
+        List(Int) ctt = unhex(t[7]).concat(unhex(t[8]));
+        Option(List(Int)) pt = xaes256gcm_decrypt(key, iv, ctt, aad);
+        Bool opened = match pt { Some(p) => ct_equal(p, unhex(t[6])), None => false };
+        Bool sealed = ct_equal(xaes256gcm_seal(key, iv, unhex(t[6]), aad), ctt);
+        Option(List(Secret(UInt(8)))) spt = xaes256gcmg_decrypt(secret_bytes(key), iv, ctt, aad);
+        Bool sopened = match spt { Some(p) => ct_same(p, secret_bytes(unhex(t[6]))), None => false };
+        if (opened != sealed || opened != sopened) { return 0 - 2; }
+        return if (opened) { 1 } else { 0 };
+    }
+    if (kind == "oaep") {
+        // OAEP here takes SHA-1 and SHA-256 only (lib/rsaoaep.resid).
+        if ((g[2] != "sha1" && g[2] != "sha256") || (g[3] != "sha1" && g[3] != "sha256")) { return 0 - 1; }
+        Option(RsaKey) ok = rsa_key_parse(unhex(g[4]));
+        return match ok {
+            None => 0 - 1,
+            Some(k) => match rsa_oaep_decrypt(hash_named(g[2]), hash_named(g[3]), k, unhex(t[4]), unhex(t[5])) {
+                None => 0,
+                Some(p) => if (ct_same(p, secret_bytes(unhex(t[3])))) { 1 } else { 0 }
+            }
+        };
+    }
     if (kind == "x25519") {
         List(Int) shared = x25519_shared(unhex(t[4]), unhex(t[3]));
         if (shared.len() == 0) { return 0; }
@@ -201,7 +269,7 @@ Int run_hpke(List(Str) g, List(Str) t) {
 
 type Tally = { Int pass; Int fail; Int skip; };
 
-@requires(filesystem(readonly))
+@requires(filesystem(readonly), declassify)
 Tally run_lines(Str file, List(Str) lines, Int i, List(Str) g, Tally acc) {
     if (i >= lines.len()) { return acc; }
     Str line = lines[i];
@@ -220,7 +288,7 @@ Tally run_lines(Str file, List(Str) lines, Int i, List(Str) g, Tally acc) {
     return run_lines(file, lines, i + 1, g, next);
 }
 
-@requires(args, filesystem(readonly))
+@requires(args, filesystem(readonly), declassify)
 Int main() {
     Str path = args.get(1);
     List(Str) lines = str_split(filesystem.read_all(path), "\n");

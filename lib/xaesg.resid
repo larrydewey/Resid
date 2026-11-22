@@ -1,0 +1,76 @@
+// xaesg.resid — XAES-256-GCM (c2sp.org/XAES-256-GCM), generic like
+// lib/aesgcmg.resid: AES-256-GCM with a 24-byte nonce, whose first 12
+// bytes and the key derive a per-message key (NIST SP 800-108r1 counter
+// KDF with AES-256 CMAC) and whose last 12 bytes are the GCM nonce. For
+// formats that use it (Bitwarden's COSE keys).
+//
+// Public by design, as for GCM: the nonce, the associated data, every
+// length, the ciphertext and tag, and the verdict of open.
+
+import "word.resid";
+import "crypto.resid";
+import "aesgcmg.resid";
+
+// The CMAC subkey K1 = L << 1, xor 0x87 when L's top bit was set, on the
+// big-endian bytes of L.
+@needs(Word(W, B))
+List(B) xa_k1(List(B) l, Int i, ListBuf(B) acc) {
+    if (i >= 16) { return acc.finish(); }
+    W cur = w_shl(w_from_byte(l[i]), 1);
+    W carry = if (i < 15) { w_shr(w_from_byte(l[i + 1]), 7) } else { w_lift(0) };
+    W top = w_shr(w_from_byte(l[0]), 7);
+    W red = if (i == 15) { w_andk(w_addk(w_not(top), 1), 135) } else { w_lift(0) };
+    return xa_k1(l, i + 1, acc.push(w_byte(w_xor(w_or(cur, carry), red), 0)));
+}
+
+// AES-256 of one block of bytes.
+@needs(Word(W, B), Block128(X, W, B))
+List(B) xa_block(List(W) rk, List(B) b) {
+    ListBuf(B) acc = ListBuf();
+    return aesg_le_bytes(aesg_encrypt_sw(rk, aesg_le_pack(b, 0)), 0, acc).finish();
+}
+
+@needs(Word(W, B))
+List(B) xa_xor_pub(List(B) a, List(Int) b, Int i, ListBuf(B) acc) {
+    if (i >= a.len()) { return acc.finish(); }
+    return xa_xor_pub(a, b, i + 1, acc.push(b_xork(a[i], b[i])));
+}
+
+// The derived 32-byte key for the first 12 nonce bytes.
+@needs(Word(W, B), Block128(X, W, B))
+List(B) xa_key(List(B) key, List(Int) n12) {
+    List(W) rk = aesg_key_expand(key);
+    ListBuf(B) z = ListBuf();
+    List(B) l = xa_block(rk, w_lift_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0, z));
+    ListBuf(B) kb = ListBuf();
+    List(B) k1 = xa_k1(l, 0, kb);
+    ListBuf(B) a1 = ListBuf();
+    ListBuf(B) a2 = ListBuf();
+    List(B) m1 = xa_xor_pub(k1, [0, 1, 88, 0].concat(n12), 0, a1);
+    List(B) m2 = xa_xor_pub(k1, [0, 2, 88, 0].concat(n12), 0, a2);
+    return xa_block(rk, m1).concat(xa_block(rk, m2));
+}
+
+/// XAES-256-GCM seal: ciphertext || tag; empty when the key is not 32
+/// bytes or the nonce not 24.
+@needs(Word(W, B), Block128(X, W, B))
+pub List(B) xaes256gcmg_seal(List(B) key, List(Int) nonce, List(B) plaintext, List(Int) aad) {
+    List(B) none = [];
+    if (key.len() != 32 || nonce.len() != 24) { return none; }
+    return aes_gcmg_seal(xa_key(key, nonce[0..12]), nonce[12..24], plaintext, aad);
+}
+
+/// XAES-256-GCM open: the plaintext when the tag verifies; None for a bad
+/// tag, a key that is not 32 bytes, a nonce that is not 24, or a short
+/// input. The verdict is public (CtSame(B)).
+@needs(Word(W, B), Block128(X, W, B), CtSame(B))
+pub Option(List(B)) xaes256gcmg_decrypt(List(B) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
+    if (key.len() != 32 || nonce.len() != 24 || ct_and_tag.len() < 16) { return None; }
+    return aes_gcmg_decrypt(xa_key(key, nonce[0..12]), nonce[12..24], ct_and_tag, aad);
+}
+
+/// The public copies, on byte lists of Int.
+pub List(Int) xaes256gcm_seal(List(Int) key, List(Int) nonce, List(Int) plaintext, List(Int) aad) { return xaes256gcmg_seal(key, nonce, plaintext, aad); }
+
+/// XAES-256-GCM open on public bytes: the plaintext when the tag verifies.
+pub Option(List(Int)) xaes256gcm_decrypt(List(Int) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) { return xaes256gcmg_decrypt(key, nonce, ct_and_tag, aad); }

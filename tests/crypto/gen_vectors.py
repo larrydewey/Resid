@@ -2,7 +2,10 @@
 """Convert Wycheproof JSON test vectors into the line format
 tests/crypto/probe.resid reads, under tests/crypto/vectors/.
 
-Usage: tests/crypto/gen_vectors.py <dir-of-wycheproof-json> [commit]
+Usage: tests/crypto/gen_vectors.py <dir-of-wycheproof-json> [commit] [name...]
+
+With names, only those files are converted (the others are left as they
+are).
 
 The same directory may hold hpke.json, the RFC 9180 vectors from
 https://github.com/cfrg/draft-irtf-cfrg-hpke (test-vectors.json); they go
@@ -70,6 +73,13 @@ FILES = [
     ("aes_gcm_test", "gcm"),
     ("aes_wrap_test", "kw"),
     ("chacha20_poly1305_test", "chacha"),
+    ("aes_cbc_pkcs5_test", "cbc"),
+    ("xchacha20_poly1305_test", "xchacha"),
+    ("rsa_oaep_2048_sha1_mgf1sha1_test", "oaep"),
+    ("rsa_oaep_2048_sha256_mgf1sha256_test", "oaep"),
+    ("rsa_oaep_3072_sha256_mgf1sha256_test", "oaep"),
+    ("rsa_oaep_4096_sha256_mgf1sha256_test", "oaep"),
+    ("rsa_oaep_misc_test", "oaep"),
     ("x25519_test", "x25519"),
     ("ed25519_test", "ed25519"),
 ]
@@ -121,7 +131,17 @@ def convert(name, kind, d):
             out.append(f"G hkdf {hash_of_file(name)}")
             for t in g["tests"]:
                 out.append(f"T {t['tcId']} {t['result']} {h(t['ikm'])} {h(t['salt'])} {h(t['info'])} {t['size']} {h(t['okm'])}")
-        elif kind in ("gcm", "chacha"):
+        elif kind == "cbc":
+            out.append("G cbc")
+            for t in g["tests"]:
+                out.append(f"T {t['tcId']} {t['result']} {h(t['key'])} {h(t['iv'])} {h(t['msg'])} {h(t['ct'])}")
+        elif kind == "oaep":
+            if g["mgf"] != "MGF1" or g["sha"] not in HASH or g["mgfSha"] not in HASH:
+                continue
+            out.append(f"G oaep {HASH[g['sha']]} {HASH[g['mgfSha']]} {g['privateKeyPkcs8']}")
+            for t in g["tests"]:
+                out.append(f"T {t['tcId']} {t['result']} {h(t['msg'])} {h(t['ct'])} {h(t['label'])}")
+        elif kind in ("gcm", "chacha", "xchacha"):
             out.append(f"G {kind} {g['ivSize']} {g['tagSize']}")
             for t in g["tests"]:
                 out.append(f"T {t['tcId']} {t['result']} {h(t['key'])} {h(t['iv'])} {h(t['aad'])} {h(t['msg'])} {h(t['ct'])} {h(t['tag'])}")
@@ -167,7 +187,10 @@ def main():
     commit = sys.argv[2] if len(sys.argv) > 2 else "unknown"
     dst = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectors")
     os.makedirs(dst, exist_ok=True)
+    only = set(sys.argv[3:])
     for name, kind in FILES:
+        if only and name not in only:
+            continue
         with open(os.path.join(src, name + ".json")) as f:
             d = json.load(f)
         lines = [f"# wycheproof {commit} testvectors_v1/{name}.json (Apache-2.0)"] + convert(name, kind, d)
@@ -175,7 +198,7 @@ def main():
             f.write("\n".join(lines) + "\n")
         print(f"{name}: {sum(1 for l in lines if l.startswith('T '))} tests")
     hp = os.path.join(src, "hpke.json")
-    if os.path.exists(hp):
+    if os.path.exists(hp) and not only:
         with open(hp) as f:
             d = json.load(f)
         lines = ["# RFC 9180 test vectors, cfrg/draft-irtf-cfrg-hpke test-vectors.json"] + convert_hpke(d)

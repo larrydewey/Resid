@@ -344,3 +344,52 @@ pub Option(List(B)) chacha20poly1305g_decrypt_nb(List(B) key, List(B) nonce, Lis
     ListBuf(B) out = ListBuf();
     return Some(cg_xor_run(st, 1, ct, 0, out).finish());
 }
+
+// ── XChaCha20-Poly1305 (draft-irtf-cfrg-xchacha-03) ────────────────
+// HChaCha20 makes a subkey from the key and the first 16 nonce bytes; the
+// AEAD above then runs under that subkey with the nonce 0^4 || the last 8
+// nonce bytes. For formats that use it (Bitwarden's COSE keys, libsodium):
+// a 24-byte random nonce never repeats in practice.
+
+// a - b modulo 2^32.
+@needs(Word(W, B))
+W cg_sub(W a, W b) { return w_add(a, w_addk(w_not(b), 1)); }
+
+@needs(Word(W, B))
+List(B) cg_words_le(List(W) ws, Int k, ListBuf(B) acc) {
+    if (k >= 4 * ws.len()) { return acc.finish(); }
+    return cg_words_le(ws, k + 1, acc.push(w_byte(ws[k / 4], (k % 4) * 8)));
+}
+
+/// HChaCha20: the 32-byte subkey for a 32-byte key and a 16-byte nonce
+/// (words 0-3 and 12-15 of the rounds, without the final addition).
+@needs(Word(W, B))
+pub List(B) hchachag(List(B) key, List(Int) nonce16) {
+    List(W) st = chachag_state(key, cg_le32(nonce16, 0), nonce16[4..16]);
+    List(W) w = cg_words(st, st[12]);
+    ListBuf(B) acc = ListBuf();
+    return cg_words_le([cg_sub(w[0], st[0]), cg_sub(w[1], st[1]), cg_sub(w[2], st[2]), cg_sub(w[3], st[3]),
+                        cg_sub(w[12], st[12]), cg_sub(w[13], st[13]), cg_sub(w[14], st[14]), cg_sub(w[15], st[15])], 0, acc);
+}
+
+List(Int) cg_xnonce(List(Int) nonce) { return [0, 0, 0, 0].concat(nonce[16..24]); }
+
+/// XChaCha20-Poly1305 seal with a 24-byte nonce: ciphertext || tag; empty
+/// when the key is not 32 bytes or the nonce not 24.
+@needs(Word(W, B), Wide512(P, B))
+@key(key)
+@nonce(nonce)
+pub List(B) xchacha20poly1305g_seal(List(B) key, List(Int) nonce, List(B) plaintext, List(Int) aad) {
+    List(B) none = [];
+    if (key.len() != 32 || nonce.len() != 24) { return none; }
+    return chacha20poly1305g_seal(hchachag(key, nonce[0..16]), cg_xnonce(nonce), plaintext, aad);
+}
+
+/// XChaCha20-Poly1305 open: the plaintext when the tag verifies; None for
+/// a bad tag, a key that is not 32 bytes, a nonce that is not 24, or an
+/// input shorter than a tag. The verdict is public (CtSame(B)).
+@needs(Word(W, B), Wide512(P, B), CtSame(B))
+pub Option(List(B)) xchacha20poly1305g_decrypt(List(B) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
+    if (key.len() != 32 || nonce.len() != 24 || ct_and_tag.len() < 16) { return None; }
+    return chacha20poly1305g_decrypt(hchachag(key, nonce[0..16]), cg_xnonce(nonce), ct_and_tag, aad);
+}

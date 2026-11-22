@@ -47,3 +47,16 @@ pub Option(List(Int)) chacha20poly1305_decrypt(List(Int) key, List(Int) nonce, L
 pub List(Int) chacha20poly1305_open_bytes(List(Int) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
     return chacha20poly1305_decrypt(key, nonce, ct_and_tag, aad) else { [] };
 }
+
+/// HChaCha20 (draft-irtf-cfrg-xchacha-03 §2.2): the 32-byte subkey for a key and a 16-byte nonce.
+pub List(Int) hchacha20(List(Int) key, List(Int) nonce16) { return hchachag(key, nonce16); }
+
+/// XChaCha20-Poly1305 seal with a 24-byte nonce: ciphertext || tag (empty for a bad key or nonce length).
+pub List(Int) xchacha20poly1305_seal(List(Int) key, List(Int) nonce, List(Int) plaintext, List(Int) aad) {
+    return xchacha20poly1305g_seal(key, nonce, plaintext, aad);
+}
+
+/// XChaCha20-Poly1305 open: the plaintext when the tag verifies, else None.
+pub Option(List(Int)) xchacha20poly1305_decrypt(List(Int) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
+    return xchacha20poly1305g_decrypt(key, nonce, ct_and_tag, aad);
+}

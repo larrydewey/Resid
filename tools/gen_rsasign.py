@@ -130,10 +130,8 @@ List(Int) r{K}_bytes(UInt({W}) x, Int n, Int i, ListBuf(Int) acc) {{
     return r{K}_bytes(x, n, i + 1, acc.push(wrapping_i64((x >> (UInt({W})) (8 * (n - 1 - i))) & 255)));
 }}
 
-// The CRT signature s = m^d mod n, k bytes, published.
-@requires(declassify)
-List(Int) r{K}_sign_em(List(Int) em, Int k, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {{
-    UInt({W}) m = r{K}_pub(em, 0, r{K}_zero());
+// m^d mod n by CRT, for a public m < n.
+Secret(UInt({W})) r{K}_crt(UInt({W}) m, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {{
     Secret(UInt({W})) sd = r{K}_of(d, 0, classify(r{K}_zero()));
     Secret(UInt({W})) sp = r{K}_of(p, 0, classify(r{K}_zero()));
     Secret(UInt({W})) sq = r{K}_of(q, 0, classify(r{K}_zero()));
@@ -145,9 +143,26 @@ List(Int) r{K}_sign_em(List(Int) em, Int k, List(Secret(UInt(8))) d, List(Secret
     // h = q^-1 (mp - mq) mod p; mq < q < 2p, so one subtraction reduces it.
     Secret(UInt({W})) diff = r{K}_csub(wrapping_uadd(mp, wrapping_usub(sp, r{K}_csub(mq, sp))), sp);
     Secret(UInt({W})) h = r{K}_mont(r{K}_mont(diff, si, sp, pinv), rr, sp, pinv);
-    Secret(UInt({W})) s = wrapping_uadd(mq, wrapping_umul(h, sq));
+    return wrapping_uadd(mq, wrapping_umul(h, sq));
+}}
+
+// The CRT signature s = m^d mod n, k bytes, published.
+@requires(declassify)
+List(Int) r{K}_sign_em(List(Int) em, Int k, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {{
+    Secret(UInt({W})) s = r{K}_crt(r{K}_pub(em, 0, r{K}_zero()), d, p, q, iqmp);
     UInt({W}) out = ct_public(declassify(s, "an RSA signature, checked against the public key before anyone receives it"));
     return r{K}_bytes(out, k, 0, ListBuf());
+}}
+
+List(Secret(UInt(8))) r{K}_sbytes(Secret(UInt({W})) x, Int n, Int i, ListBuf(Secret(UInt(8))) acc) {{
+    if (i >= n) {{ return acc.finish(); }}
+    return r{K}_sbytes(x, n, i + 1, acc.push(wrapping_u8(x >> (UInt({W})) (8 * (n - 1 - i)))));
+}}
+
+// The RSA decryption primitive m = c^d mod n (RFC 8017 §5.1.2) by CRT, k
+// bytes, kept secret: the caller removes the padding in constant time.
+List(Secret(UInt(8))) r{K}_dec_em(List(Int) c, Int k, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {{
+    return r{K}_sbytes(r{K}_crt(r{K}_pub(c, 0, r{K}_zero()), d, p, q, iqmp), k, 0, ListBuf());
 }}
 '''
 
@@ -177,6 +192,25 @@ pub List(Int) rsa_pkcs1_sign(HashAlg h, List(Int) n0, List(Int) e, List(Secret(U
     List(Int) s = if (pb <= 1024) { r1024_sign_em(em, k, d, p, q, iqmp) } else { if (pb <= 1536) { r1536_sign_em(em, k, d, p, q, iqmp) } else { r2048_sign_em(em, k, d, p, q, iqmp) } };
     RsaPub pk = rsa_pub(n, e);
     return if (pk.ok && rsa_pkcs1_verify(h, pk, msg, s)) { s } else { [] };
+}
+
+/// The RSA decryption primitive (RFC 8017 §5.1.2): c^d mod n as k secret
+/// big-endian bytes, for the key (n, d, p, q, q^-1 mod p) as in
+/// rsa_pkcs1_sign. Empty when the key is malformed or larger than 4096
+/// bits, or c is not below n (all public). For padding schemes to build on
+/// (lib/rsaoaep.resid); a decryption is not checked against the public key
+/// (the result is never published, so a faulty half reveals nothing).
+pub List(Secret(UInt(8))) rsa_decrypt_raw(List(Int) n0, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp, List(Int) c0) {
+    List(Secret(UInt(8))) none = [];
+    List(Int) n = n0[lead_zeros(n0, 0)..n0.len()];
+    Int k = n.len();
+    if (k < 128 || k > 512 || (n[k - 1] & 1) == 0 || d.len() > k || p.len() != q.len() || p.len() * 2 < k - 1 || p.len() * 2 > k + 1 || iqmp.len() > p.len()) { return none; }
+    if (c0.len() != k) { return none; }
+    List(UInt(64)) cl = rsa_from_be(c0, (k + 7) / 8);
+    List(UInt(64)) nl = rsa_from_be(n, (k + 7) / 8);
+    if (rsa_cmp(cl, nl) >= 0) { return none; }
+    Int pb = p.len() * 8;
+    return if (pb <= 1024) { r1024_dec_em(c0, k, d, p, q, iqmp) } else { if (pb <= 1536) { r1536_dec_em(c0, k, d, p, q, iqmp) } else { r2048_dec_em(c0, k, d, p, q, iqmp) } };
 }
 '''
 

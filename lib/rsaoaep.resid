@@ -1,0 +1,112 @@
+// rsaoaep.resid — RSAES-OAEP decryption (RFC 8017 §7.1.2) on secret keys,
+// in constant time: for reading keys other software encrypted to an RSA
+// key we hold (Bitwarden's organization keys, EncString types 3 and 4,
+// are RSA-2048-OAEP with SHA-1).
+//
+// The private key is lib/rsakey.resid's RsaKey; the decryption primitive is
+// lib/rsasign.resid's rsa_decrypt_raw (CRT, Montgomery ladder, no branch on
+// the key). The encoded message is then checked without a branch or an
+// index that depends on it: every byte of DB is visited, the first 0x01
+// after the zero padding is found with masks, and the checks are folded
+// into one bit. That bit and the message length are the only things
+// published (through declassify): a caller sees "valid, n bytes" or
+// "invalid", never which check failed (Manger 2001).
+//
+// The hashes (OAEP's label hash and MGF1) are Sha1 or Sha256; others are
+// refused.
+
+import "word.resid";
+import "hash.resid";
+import "rsasign.resid";
+import "rsakey.resid";
+import "sha1g.resid";
+import "sha256g.resid";
+
+Int ro_hlen(HashAlg h) { return match h { Sha1 => 20, Sha256 => 32, _ => 0 }; }
+
+List(Secret(UInt(8))) ro_hash(HashAlg h, List(Secret(UInt(8))) m) {
+    List(Secret(UInt(8))) none = [];
+    return match h { Sha1 => sha1g(m), Sha256 => sha256g(m), _ => none };
+}
+
+List(Int) ro_hash_pub(HashAlg h, List(Int) m) {
+    List(Int) none = [];
+    return match h { Sha1 => sha1g(m), Sha256 => sha256g(m), _ => none };
+}
+
+List(Int) ro_be32(Int c) { return [(c >> 24) & 255, (c >> 16) & 255, (c >> 8) & 255, c & 255]; }
+
+// MGF1 (RFC 8017 §B.2.1) over a secret seed: `len` secret bytes.
+List(Secret(UInt(8))) ro_mgf1(HashAlg h, List(Secret(UInt(8))) seed, Int len, Int c, ListBuf(Secret(UInt(8))) acc, Int have) {
+    if (have >= len) { return acc.finish()[0..len]; }
+    List(Secret(UInt(8))) blk = ro_hash(h, seed.concat(secret_bytes(ro_be32(c))));
+    return ro_mgf1(h, seed, len, c + 1, ro_push_all(blk, 0, acc), have + blk.len());
+}
+
+ListBuf(Secret(UInt(8))) ro_push_all(List(Secret(UInt(8))) b, Int i, ListBuf(Secret(UInt(8))) acc) {
+    if (i >= b.len()) { return acc; }
+    return ro_push_all(b, i + 1, acc.push(b[i]));
+}
+
+List(Secret(UInt(8))) ro_xor(List(Secret(UInt(8))) a, List(Secret(UInt(8))) b, Int i, ListBuf(Secret(UInt(8))) acc) {
+    if (i >= a.len()) { return acc.finish(); }
+    return ro_xor(a, b, i + 1, acc.push(a[i] ^ b[i]));
+}
+
+// 1 when the byte is zero, else 0, without a branch.
+Secret(UInt(32)) ro_is_zero(Secret(UInt(8)) b) {
+    Secret(UInt(32)) x = (UInt(32)) b;
+    return ((wrapping_usub(x, (UInt(32)) 1)) >> (UInt(32)) 31) & (UInt(32)) 1;
+}
+
+// All ones when bit is 1, else 0.
+Secret(UInt(32)) ro_mask(Secret(UInt(32)) bit) { return wrapping_usub((UInt(32)) 0, bit); }
+
+// OR of a[i] ^ b[i] over the list, as a word.
+Secret(UInt(32)) ro_diff(List(Secret(UInt(8))) a, List(Secret(UInt(8))) b, Int i, Secret(UInt(32)) acc) {
+    if (i >= a.len()) { return acc; }
+    return ro_diff(a, b, i + 1, acc | (UInt(32)) (a[i] ^ b[i]));
+}
+
+/// The scan of DB after the label hash: the first 0x01 found, where, and a stray byte before it.
+type RoScan = { Secret(UInt(32)) found; Secret(UInt(32)) at; Secret(UInt(32)) bad; };
+
+// Walks PS || 0x01 || M from position i of db: `found` becomes 1 at the
+// first 0x01 (its index in `at`); a nonzero byte other than 0x01 before it
+// sets `bad`.
+RoScan ro_scan(List(Secret(UInt(8))) db, Int i, RoScan s) {
+    if (i >= db.len()) { return s; }
+    Secret(UInt(32)) z = ro_is_zero(db[i]);
+    Secret(UInt(32)) one = ro_is_zero(db[i] ^ (UInt(8)) 1);
+    Secret(UInt(32)) before = s.found ^ (UInt(32)) 1;
+    Secret(UInt(32)) hit = before & one;
+    Secret(UInt(32)) stray = before & (z ^ (UInt(32)) 1) & (one ^ (UInt(32)) 1);
+    return ro_scan(db, i + 1, RoScan {.found = s.found | hit, .at = s.at | (ro_mask(hit) & wrapping_u32(i)), .bad = s.bad | stray});
+}
+
+/// RSAES-OAEP decryption of `ct` under `key` with label hash `h`, MGF1 hash
+/// `mgf` (Sha1 or Sha256) and `label`: the message, secret, or None when
+/// the ciphertext is not k bytes, not below n, or does not decode (one
+/// public verdict for every failure).
+@requires(declassify)
+pub Option(List(Secret(UInt(8)))) rsa_oaep_decrypt(HashAlg h, HashAlg mgf, RsaKey key, List(Int) ct, List(Int) label) {
+    Int hl = ro_hlen(h);
+    if (hl == 0 || ro_hlen(mgf) == 0) { return None; }
+    List(Secret(UInt(8))) em = rsa_decrypt_raw(key.n, key.d, key.p, key.q, key.iqmp, ct);
+    Int k = em.len();
+    if (k == 0 || k < 2 * hl + 2) { return None; }
+    List(Secret(UInt(8))) mseed = em[1..1 + hl];
+    List(Secret(UInt(8))) mdb = em[1 + hl..k];
+    List(Secret(UInt(8))) seed = ro_xor(mseed, ro_mgf1(mgf, mdb, hl, 0, ListBuf(), 0), 0, ListBuf());
+    List(Secret(UInt(8))) db = ro_xor(mdb, ro_mgf1(mgf, seed, k - hl - 1, 0, ListBuf(), 0), 0, ListBuf());
+    List(Secret(UInt(8))) lhash = secret_bytes(ro_hash_pub(h, label));
+    Secret(UInt(32)) hash_ok = ro_is_zero(wrapping_u8(ro_diff(db[0..hl], lhash, 0, classify((UInt(32)) 0))));
+    Secret(UInt(32)) y_ok = ro_is_zero(em[0]);
+    RoScan s = ro_scan(db, hl, RoScan {.found = classify((UInt(32)) 0), .at = classify((UInt(32)) 0), .bad = classify((UInt(32)) 0)});
+    Secret(UInt(32)) ok = hash_ok & y_ok & s.found & (s.bad ^ (UInt(32)) 1);
+    // One verdict and, when it is good, where the message starts.
+    UInt(32) pub_ok = ct_public(declassify(ok, "whether an OAEP decryption is well formed (one bit for every failure)"));
+    if (pub_ok != (UInt(32)) 1) { return None; }
+    UInt(32) at = ct_public(declassify(s.at, "where a well-formed OAEP message starts (its length)"));
+    return Some(db[(Int) at + 1..db.len()]);
+}

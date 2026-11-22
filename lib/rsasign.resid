@@ -115,10 +115,8 @@ List(Int) r1024_bytes(UInt(2112) x, Int n, Int i, ListBuf(Int) acc) {
     return r1024_bytes(x, n, i + 1, acc.push(wrapping_i64((x >> (UInt(2112)) (8 * (n - 1 - i))) & 255)));
 }
 
-// The CRT signature s = m^d mod n, k bytes, published.
-@requires(declassify)
-List(Int) r1024_sign_em(List(Int) em, Int k, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {
-    UInt(2112) m = r1024_pub(em, 0, r1024_zero());
+// m^d mod n by CRT, for a public m < n.
+Secret(UInt(2112)) r1024_crt(UInt(2112) m, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {
     Secret(UInt(2112)) sd = r1024_of(d, 0, classify(r1024_zero()));
     Secret(UInt(2112)) sp = r1024_of(p, 0, classify(r1024_zero()));
     Secret(UInt(2112)) sq = r1024_of(q, 0, classify(r1024_zero()));
@@ -130,9 +128,26 @@ List(Int) r1024_sign_em(List(Int) em, Int k, List(Secret(UInt(8))) d, List(Secre
     // h = q^-1 (mp - mq) mod p; mq < q < 2p, so one subtraction reduces it.
     Secret(UInt(2112)) diff = r1024_csub(wrapping_uadd(mp, wrapping_usub(sp, r1024_csub(mq, sp))), sp);
     Secret(UInt(2112)) h = r1024_mont(r1024_mont(diff, si, sp, pinv), rr, sp, pinv);
-    Secret(UInt(2112)) s = wrapping_uadd(mq, wrapping_umul(h, sq));
+    return wrapping_uadd(mq, wrapping_umul(h, sq));
+}
+
+// The CRT signature s = m^d mod n, k bytes, published.
+@requires(declassify)
+List(Int) r1024_sign_em(List(Int) em, Int k, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {
+    Secret(UInt(2112)) s = r1024_crt(r1024_pub(em, 0, r1024_zero()), d, p, q, iqmp);
     UInt(2112) out = ct_public(declassify(s, "an RSA signature, checked against the public key before anyone receives it"));
     return r1024_bytes(out, k, 0, ListBuf());
+}
+
+List(Secret(UInt(8))) r1024_sbytes(Secret(UInt(2112)) x, Int n, Int i, ListBuf(Secret(UInt(8))) acc) {
+    if (i >= n) { return acc.finish(); }
+    return r1024_sbytes(x, n, i + 1, acc.push(wrapping_u8(x >> (UInt(2112)) (8 * (n - 1 - i)))));
+}
+
+// The RSA decryption primitive m = c^d mod n (RFC 8017 §5.1.2) by CRT, k
+// bytes, kept secret: the caller removes the padding in constant time.
+List(Secret(UInt(8))) r1024_dec_em(List(Int) c, Int k, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {
+    return r1024_sbytes(r1024_crt(r1024_pub(c, 0, r1024_zero()), d, p, q, iqmp), k, 0, ListBuf());
 }
 
 // ─── Primes up to 1536 bits (products in UInt(3136)) ─────────────────────
@@ -220,10 +235,8 @@ List(Int) r1536_bytes(UInt(3136) x, Int n, Int i, ListBuf(Int) acc) {
     return r1536_bytes(x, n, i + 1, acc.push(wrapping_i64((x >> (UInt(3136)) (8 * (n - 1 - i))) & 255)));
 }
 
-// The CRT signature s = m^d mod n, k bytes, published.
-@requires(declassify)
-List(Int) r1536_sign_em(List(Int) em, Int k, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {
-    UInt(3136) m = r1536_pub(em, 0, r1536_zero());
+// m^d mod n by CRT, for a public m < n.
+Secret(UInt(3136)) r1536_crt(UInt(3136) m, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {
     Secret(UInt(3136)) sd = r1536_of(d, 0, classify(r1536_zero()));
     Secret(UInt(3136)) sp = r1536_of(p, 0, classify(r1536_zero()));
     Secret(UInt(3136)) sq = r1536_of(q, 0, classify(r1536_zero()));
@@ -235,9 +248,26 @@ List(Int) r1536_sign_em(List(Int) em, Int k, List(Secret(UInt(8))) d, List(Secre
     // h = q^-1 (mp - mq) mod p; mq < q < 2p, so one subtraction reduces it.
     Secret(UInt(3136)) diff = r1536_csub(wrapping_uadd(mp, wrapping_usub(sp, r1536_csub(mq, sp))), sp);
     Secret(UInt(3136)) h = r1536_mont(r1536_mont(diff, si, sp, pinv), rr, sp, pinv);
-    Secret(UInt(3136)) s = wrapping_uadd(mq, wrapping_umul(h, sq));
+    return wrapping_uadd(mq, wrapping_umul(h, sq));
+}
+
+// The CRT signature s = m^d mod n, k bytes, published.
+@requires(declassify)
+List(Int) r1536_sign_em(List(Int) em, Int k, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {
+    Secret(UInt(3136)) s = r1536_crt(r1536_pub(em, 0, r1536_zero()), d, p, q, iqmp);
     UInt(3136) out = ct_public(declassify(s, "an RSA signature, checked against the public key before anyone receives it"));
     return r1536_bytes(out, k, 0, ListBuf());
+}
+
+List(Secret(UInt(8))) r1536_sbytes(Secret(UInt(3136)) x, Int n, Int i, ListBuf(Secret(UInt(8))) acc) {
+    if (i >= n) { return acc.finish(); }
+    return r1536_sbytes(x, n, i + 1, acc.push(wrapping_u8(x >> (UInt(3136)) (8 * (n - 1 - i)))));
+}
+
+// The RSA decryption primitive m = c^d mod n (RFC 8017 §5.1.2) by CRT, k
+// bytes, kept secret: the caller removes the padding in constant time.
+List(Secret(UInt(8))) r1536_dec_em(List(Int) c, Int k, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {
+    return r1536_sbytes(r1536_crt(r1536_pub(c, 0, r1536_zero()), d, p, q, iqmp), k, 0, ListBuf());
 }
 
 // ─── Primes up to 2048 bits (products in UInt(4160)) ─────────────────────
@@ -325,10 +355,8 @@ List(Int) r2048_bytes(UInt(4160) x, Int n, Int i, ListBuf(Int) acc) {
     return r2048_bytes(x, n, i + 1, acc.push(wrapping_i64((x >> (UInt(4160)) (8 * (n - 1 - i))) & 255)));
 }
 
-// The CRT signature s = m^d mod n, k bytes, published.
-@requires(declassify)
-List(Int) r2048_sign_em(List(Int) em, Int k, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {
-    UInt(4160) m = r2048_pub(em, 0, r2048_zero());
+// m^d mod n by CRT, for a public m < n.
+Secret(UInt(4160)) r2048_crt(UInt(4160) m, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {
     Secret(UInt(4160)) sd = r2048_of(d, 0, classify(r2048_zero()));
     Secret(UInt(4160)) sp = r2048_of(p, 0, classify(r2048_zero()));
     Secret(UInt(4160)) sq = r2048_of(q, 0, classify(r2048_zero()));
@@ -340,9 +368,26 @@ List(Int) r2048_sign_em(List(Int) em, Int k, List(Secret(UInt(8))) d, List(Secre
     // h = q^-1 (mp - mq) mod p; mq < q < 2p, so one subtraction reduces it.
     Secret(UInt(4160)) diff = r2048_csub(wrapping_uadd(mp, wrapping_usub(sp, r2048_csub(mq, sp))), sp);
     Secret(UInt(4160)) h = r2048_mont(r2048_mont(diff, si, sp, pinv), rr, sp, pinv);
-    Secret(UInt(4160)) s = wrapping_uadd(mq, wrapping_umul(h, sq));
+    return wrapping_uadd(mq, wrapping_umul(h, sq));
+}
+
+// The CRT signature s = m^d mod n, k bytes, published.
+@requires(declassify)
+List(Int) r2048_sign_em(List(Int) em, Int k, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {
+    Secret(UInt(4160)) s = r2048_crt(r2048_pub(em, 0, r2048_zero()), d, p, q, iqmp);
     UInt(4160) out = ct_public(declassify(s, "an RSA signature, checked against the public key before anyone receives it"));
     return r2048_bytes(out, k, 0, ListBuf());
+}
+
+List(Secret(UInt(8))) r2048_sbytes(Secret(UInt(4160)) x, Int n, Int i, ListBuf(Secret(UInt(8))) acc) {
+    if (i >= n) { return acc.finish(); }
+    return r2048_sbytes(x, n, i + 1, acc.push(wrapping_u8(x >> (UInt(4160)) (8 * (n - 1 - i)))));
+}
+
+// The RSA decryption primitive m = c^d mod n (RFC 8017 §5.1.2) by CRT, k
+// bytes, kept secret: the caller removes the padding in constant time.
+List(Secret(UInt(8))) r2048_dec_em(List(Int) c, Int k, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp) {
+    return r2048_sbytes(r2048_crt(r2048_pub(c, 0, r2048_zero()), d, p, q, iqmp), k, 0, ListBuf());
 }
 
 // ─── Entry ──────────────────────────────────────────────────────────
@@ -370,4 +415,23 @@ pub List(Int) rsa_pkcs1_sign(HashAlg h, List(Int) n0, List(Int) e, List(Secret(U
     List(Int) s = if (pb <= 1024) { r1024_sign_em(em, k, d, p, q, iqmp) } else { if (pb <= 1536) { r1536_sign_em(em, k, d, p, q, iqmp) } else { r2048_sign_em(em, k, d, p, q, iqmp) } };
     RsaPub pk = rsa_pub(n, e);
     return if (pk.ok && rsa_pkcs1_verify(h, pk, msg, s)) { s } else { [] };
+}
+
+/// The RSA decryption primitive (RFC 8017 §5.1.2): c^d mod n as k secret
+/// big-endian bytes, for the key (n, d, p, q, q^-1 mod p) as in
+/// rsa_pkcs1_sign. Empty when the key is malformed or larger than 4096
+/// bits, or c is not below n (all public). For padding schemes to build on
+/// (lib/rsaoaep.resid); a decryption is not checked against the public key
+/// (the result is never published, so a faulty half reveals nothing).
+pub List(Secret(UInt(8))) rsa_decrypt_raw(List(Int) n0, List(Secret(UInt(8))) d, List(Secret(UInt(8))) p, List(Secret(UInt(8))) q, List(Secret(UInt(8))) iqmp, List(Int) c0) {
+    List(Secret(UInt(8))) none = [];
+    List(Int) n = n0[lead_zeros(n0, 0)..n0.len()];
+    Int k = n.len();
+    if (k < 128 || k > 512 || (n[k - 1] & 1) == 0 || d.len() > k || p.len() != q.len() || p.len() * 2 < k - 1 || p.len() * 2 > k + 1 || iqmp.len() > p.len()) { return none; }
+    if (c0.len() != k) { return none; }
+    List(UInt(64)) cl = rsa_from_be(c0, (k + 7) / 8);
+    List(UInt(64)) nl = rsa_from_be(n, (k + 7) / 8);
+    if (rsa_cmp(cl, nl) >= 0) { return none; }
+    Int pb = p.len() * 8;
+    return if (pb <= 1024) { r1024_dec_em(c0, k, d, p, q, iqmp) } else { if (pb <= 1536) { r1536_dec_em(c0, k, d, p, q, iqmp) } else { r2048_dec_em(c0, k, d, p, q, iqmp) } };
 }

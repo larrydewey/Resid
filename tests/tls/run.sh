@@ -605,5 +605,9 @@ bulk_case "GET of 8 MiB" '^GET status=200 len=8388608 same=true err=$' get 83886
 bulk_case "PUT of 8 MiB" '^PUT status=200 same=true ' put 8388608
 bulk_case "keep-alive on the blocking server" '^SERVE served=2 one=true two=true$' serve
 
+# Chunked response bodies (lib/tlsclient.resid's https_dechunk).
+cout="$(cd "$ROOT" && "$COMPILER" test tests/tls/chunked_test.resid 2>&1)"
+if printf '%s\n' "$cout" | grep -q '^Failures: 0 '; then ok; else bad "chunked bodies: $(printf '%s' "$cout" | grep -E 'Failures|✗' | tr '\n' ' ')"; fi
+
 echo "tls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

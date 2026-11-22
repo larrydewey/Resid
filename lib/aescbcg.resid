@@ -1,0 +1,78 @@
+// aescbcg.resid — AES-CBC decryption (NIST SP 800-38A §6.2) and PKCS#7
+// unpadding (RFC 5652 §6.3), generic over lib/word.resid's Word(W, B) and
+// Block128(X, W, B) like lib/aesgcmg.resid: one implementation for public
+// bytes (W = B = Int, X = UInt(128)) and for secret keys and plaintexts
+// (Secret(UInt(32)) words, Secret(UInt(8)) bytes, Secret(UInt(128))
+// blocks).
+//
+// For reading data other software encrypted (Bitwarden's EncString type 2,
+// LastPass): CBC offers no integrity, so authenticate the ciphertext first
+// (encrypt-then-MAC) and only then decrypt it; never act on a padding
+// failure before the MAC has been checked, or the padding becomes an
+// oracle.
+//
+// Public by design: the IV, the ciphertext, every length, and the padding
+// length (the plaintext's length is public once it is unpadded). The
+// unpadding publishes one verdict per candidate length through CtSame(B),
+// which needs the declassify grant at secret types.
+
+import "word.resid";
+import "crypto.resid";
+import "aesgcmg.resid";
+
+// Public bytes p..p+15 of d, little-endian packed.
+UInt(128) acb_pub_block(List(Int) d, Int p) { return aesg_le_pack_pub(d[p..p + 16], 15, (UInt(128)) 0); }
+
+@needs(Word(W, B), Block128(X, W, B))
+ListBuf(B) acb_blocks(List(W) rk, UInt(128) prev, List(Int) ct, Int p, ListBuf(B) out) {
+    if (p >= ct.len()) { return out; }
+    UInt(128) c = acb_pub_block(ct, p);
+    X plain = x_xor(aesg_decrypt_sw(rk, x_lift(c)), x_lift(prev));
+    return acb_blocks(rk, c, ct, p + 16, aesg_le_bytes(plain, 0, out));
+}
+
+/// AES-CBC decryption of `ct` (a whole number of 16-byte blocks) under a
+/// 16-, 24- or 32-byte key with the 16-byte `iv`, padding kept. None when
+/// the key, IV or ciphertext length is wrong (all public).
+@needs(Word(W, B), Block128(X, W, B))
+pub Option(List(B)) aes_cbcg_decrypt_raw(List(B) key, List(Int) iv, List(Int) ct) {
+    List(W) rk = aesg_key_expand(key);
+    if (rk.len() == 0 || iv.len() != 16 || ct.len() == 0 || ct.len() % 16 != 0) { return None; }
+    ListBuf(B) out = ListBuf();
+    return Some(acb_blocks(rk, acb_pub_block(iv, 0), ct, 0, out).finish());
+}
+
+@needs(Word(W, B))
+List(B) acb_repeat(Int v, Int n, ListBuf(B) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return acb_repeat(v, n - 1, acc.push(b_lift(v)));
+}
+
+// The PKCS#7 padding length of `p` (1..16), or 0 when it has none.
+@needs(Word(W, B), CtSame(B))
+Int acb_pad_len(List(B) p, Int n) {
+    if (n > 16 || n > p.len()) { return 0; }
+    ListBuf(B) acc = ListBuf();
+    if (ct_same(p[p.len() - n..p.len()], acb_repeat(n, n, acc))) { return n; }
+    return acb_pad_len(p, n + 1);
+}
+
+/// `p` without its PKCS#7 padding; None when the padding is malformed.
+@needs(Word(W, B), CtSame(B))
+pub Option(List(B)) pkcs7g_unpad(List(B) p) {
+    if (p.len() == 0 || p.len() % 16 != 0) { return None; }
+    Int n = acb_pad_len(p, 1);
+    if (n == 0) { return None; }
+    return Some(p[0..p.len() - n]);
+}
+
+/// AES-CBC decryption with PKCS#7 padding removed: None for a wrong key,
+/// IV or ciphertext length, or malformed padding. Authenticate `ct` first.
+@needs(Word(W, B), Block128(X, W, B), CtSame(B))
+pub Option(List(B)) aes_cbcg_decrypt(List(B) key, List(Int) iv, List(Int) ct) {
+    Option(List(B)) raw = aes_cbcg_decrypt_raw(key, iv, ct);
+    return match raw { None => None, Some(p) => pkcs7g_unpad(p) };
+}
+
+/// The public copy: AES-CBC with PKCS#7 on byte lists of Int.
+pub Option(List(Int)) aes_cbc_decrypt(List(Int) key, List(Int) iv, List(Int) ct) { return aes_cbcg_decrypt(key, iv, ct); }

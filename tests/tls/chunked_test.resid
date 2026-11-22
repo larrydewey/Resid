@@ -1,0 +1,31 @@
+// lib/tlsclient.resid's chunked-body decoding (RFC 9112 §7.1).
+import "../../lib/tlsclient.resid";
+import "../../lib/testing.resid";
+import "../../lib/crypto.resid";
+
+List(Int) b(Str s) { return str_to_bytes(s); }
+
+Bool same(Option(List(Int)) got, Str want) { return match got { None => false, Some(x) => ct_equal(x, str_to_bytes(want)) }; }
+Bool none(Option(List(Int)) got) { return match got { None => true, Some(_) => false }; }
+
+test "chunks join" {
+    expect(same(https_dechunk(b("4\r\nWiki\r\n5\r\npedia\r\nE\r\n in\r\n\r\nchunks.\r\n0\r\n\r\n"), 0, ListBuf()), "Wikipedia in\r\n\r\nchunks.")).toEqual(true);
+}
+test "extensions and trailers are skipped" {
+    expect(same(https_dechunk(b("3;name=v\r\nabc\r\n0\r\nX-T: 1\r\n\r\n"), 0, ListBuf()), "abc")).toEqual(true);
+}
+test "an empty body" {
+    expect(same(https_dechunk(b("0\r\n\r\n"), 0, ListBuf()), "")).toEqual(true);
+}
+test "upper-case hex" {
+    expect(same(https_dechunk(b("A\r\n0123456789\r\n0\r\n\r\n"), 0, ListBuf()), "0123456789")).toEqual(true);
+}
+test "cut short" {
+    expect(none(https_dechunk(b("5\r\nabc"), 0, ListBuf()))).toEqual(true);
+    expect(none(https_dechunk(b("3\r\nabc\r\n"), 0, ListBuf()))).toEqual(true);
+}
+test "malformed" {
+    expect(none(https_dechunk(b("zz\r\nabc\r\n0\r\n\r\n"), 0, ListBuf()))).toEqual(true);
+    expect(none(https_dechunk(b("3\r\nabcd\r\n0\r\n\r\n"), 0, ListBuf()))).toEqual(true);
+    expect(none(https_dechunk(b("ffffffffffffffff\r\n"), 0, ListBuf()))).toEqual(true);
+}

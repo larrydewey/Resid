@@ -271,8 +271,12 @@ Str rk_lines(Str b, Int i, StrBuf acc) {
 /// 3072 or 4096 bits with two primes of equal length. The bytes are
 /// secret from here on; only the framing, n and e are published.
 @requires(declassify)
-pub Option(RsaKey) rsa_key_parse(List(Int) file) {
-    List(Secret(UInt(8))) f = secret_bytes(file);
+pub Option(RsaKey) rsa_key_parse(List(Int) file) { return rsa_key_parse_secret(secret_bytes(file)); }
+
+/// rsa_key_parse for key bytes that are already secret (a key that was
+/// itself decrypted, e.g. a PKCS#8 DER inside an encrypted store).
+@requires(declassify)
+pub Option(RsaKey) rsa_key_parse_secret(List(Secret(UInt(8))) f) {
     if (f.len() == 0) { return None; }
     Bool is_der = tk_at(f, 0) == 48;
     List(Secret(UInt(8))) der = if (is_der) { f } else { tk_pem_block(f, ["PRIVATE KEY", "RSA PRIVATE KEY"]) };

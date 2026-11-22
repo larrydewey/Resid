@@ -654,6 +654,18 @@ pub HttpsGet tls_https_request(Str url, Str name, TrustStore store, List(Str) al
         _ = wire_close(sc.conn);
         return HttpsGet { .status = status, .bytes = [], .err = "", .head = head };
     }
+    if (str_contains(str_to_lower(https_header(sc.lines, "transfer-encoding")), "chunked")) {
+        // Chunked coding (RFC 9112 §7.1): with Connection: close the body
+        // ends with the connection, so it is read to the end (within the
+        // cap) and then decoded.
+        HeadBytes all = https_to_eof(sc.conn, sc.rest, https_max_body() + 65536);
+        if (!all.ok) { return https_failed(url + " sent a chunked body over this tool's " + f"{https_max_body()}" + "-byte cap"); }
+        Option(List(Int)) dec = https_dechunk(all.body, 0, ListBuf());
+        return match dec {
+            None => https_failed(url + " sent a malformed chunked body (or it was cut short)"),
+            Some(b) => HttpsGet { .status = status, .bytes = b, .err = "", .head = head }
+        };
+    }
     Str cl = https_header(sc.lines, "content-length");
     if (!https_digits(cl) && method != "GET") {
         _ = wire_close(sc.conn);
@@ -710,6 +722,68 @@ HeadScan https_scan(TlsClient c, List(Int) acc, List(Str) lines, Bool done, Int 
 /// A response body read by its declared length.
 /// `ok` is false when the connection ended before the whole body arrived.
 type HeadBytes = { List(Int) body; Bool ok; };
+
+// Everything until the peer closes, the connection closed here; ok is
+// false when it passes `cap` first.
+@requires(network, declassify)
+HeadBytes https_to_eof(TlsClient c, List(Int) acc, Int cap) {
+    if (acc.len() > cap) { _ = wire_close(c); return HeadBytes { .body = acc, .ok = false }; }
+    WireIn(TlsClient) in = wire_fill(c, acc, acc.len() + 1, cap + 1);
+    if (in.eof) { _ = wire_close(in.conn); return HeadBytes { .body = in.data, .ok = in.data.len() <= cap }; }
+    return https_to_eof(in.conn, in.data, cap);
+}
+
+Int https_hexval(Int c) {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    if (c >= 65 && c <= 70) { return c - 55; }
+    return 0 - 1;
+}
+
+// The chunk size at b[i..] up to ';' or CR (hex digits, at most 15), or -1.
+Int https_chunk_size(List(Int) b, Int i, Int end, Int acc, Int n) {
+    if (i >= end || b[i] == 59) { return if (n > 0) { acc } else { 0 - 1 }; }
+    Int v = https_hexval(b[i]);
+    if (v < 0 || n >= 15) { return 0 - 1; }
+    return https_chunk_size(b, i + 1, end, acc * 16 + v, n + 1);
+}
+
+/// Decodes a chunked body: the chunks' data, or None when it is malformed
+/// or ends before the last (zero-size) chunk. Trailer fields are ignored.
+pub Option(List(Int)) https_dechunk(List(Int) b, Int i, ListBuf(Int) acc) {
+    Option(List(Int)) spans = https_chunk_spans(b, i, ListBuf());
+    return match spans {
+        None => https_drop(acc),
+        Some(sp) => Some(https_push_spans(b, sp, 0, acc).finish())
+    };
+}
+
+Option(List(Int)) https_drop(ListBuf(Int) acc) {
+    _ = acc.finish();
+    return None;
+}
+
+// Where each chunk's data starts and ends (pairs), or None when the body
+// is malformed or ends before the zero-size chunk.
+Option(List(Int)) https_chunk_spans(List(Int) b, Int i, ListBuf(Int) acc) {
+    Int eol = https_crlf(b, i);
+    Int n = if (eol < 0) { 0 - 1 } else { https_chunk_size(b, i, eol, 0, 0) };
+    Int start = eol + 2;
+    Bool fits = n > 0 && start + n + 2 <= b.len() && b[start + n] == 13 && b[start + n + 1] == 10;
+    if (n == 0) { return Some(acc.finish()); }
+    if (!fits) { return https_drop(acc); }
+    return https_chunk_spans(b, start + n + 2, acc.push(start).push(start + n));
+}
+
+ListBuf(Int) https_push_spans(List(Int) b, List(Int) sp, Int k, ListBuf(Int) acc) {
+    if (k >= sp.len()) { return acc; }
+    return https_push_spans(b, sp, k + 2, https_push_range(b, sp[k], sp[k + 1], acc));
+}
+
+ListBuf(Int) https_push_range(List(Int) b, Int i, Int end, ListBuf(Int) acc) {
+    if (i >= end) { return acc; }
+    return https_push_range(b, i + 1, end, acc.push(b[i]));
+}
 
 // The body, by the length the head declared. A response that ends first is
 // a failure, not a short archive: the caller checks a hash either way, but

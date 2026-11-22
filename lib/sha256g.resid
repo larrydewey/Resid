@@ -190,3 +190,64 @@ pub List(B) hkdf256g_expand(List(B) prk, List(B) info, Int len) {
     if (len < 0 || len > 255 * 32) { return none; }
     return g_expand(prk, info, 1, len, none, none);
 }
+
+// ─── PBKDF2-HMAC-SHA-256 (RFC 8018 §5.2) ─────────────────────────
+// Generic like HMAC: at secret types the password, every U_j and the
+// output stay secret. The HMAC key's inner and outer states are computed
+// once, so each iteration is two compressions over a 32-byte message.
+
+// The state after the 64-byte HMAC key block xored with `x`.
+@needs(Word(W, B))
+List(W) g_pad_state(List(B) kb, Int x) {
+    ListBuf(B) pb = ListBuf();
+    ListBuf(W) ib = ListBuf();
+    return sha256g_block(g_xor_pad(kb, x, 0, pb), 0, g_lift_words(sha256g_iv(), 0, ib));
+}
+
+@needs(Word(W, B))
+List(B) g_state_bytes(List(W) h) {
+    ListBuf(B) acc = ListBuf();
+    return g_digest_bytes(h, 0, acc);
+}
+
+// HMAC of a 32-byte message from the two precomputed states.
+@needs(Word(W, B))
+List(B) g_hmac32(List(W) ist, List(W) ost, List(B) m) {
+    ListBuf(B) p1 = ListBuf();
+    ListBuf(B) p2 = ListBuf();
+    List(B) inner = g_state_bytes(sha256g_block(m.concat(w_lift_bytes(sha256g_pad(96)[0..32], 0, p1)), 0, ist));
+    return g_state_bytes(sha256g_block(inner.concat(w_lift_bytes(sha256g_pad(96)[0..32], 0, p2)), 0, ost));
+}
+
+@needs(Word(W, B))
+List(B) g_xor32(List(B) a, List(B) b, Int i, ListBuf(B) acc) {
+    if (i >= 32) { return acc.finish(); }
+    return g_xor32(a, b, i + 1, acc.push(b_xor(a[i], b[i])));
+}
+
+@needs(Word(W, B))
+List(B) g_pbkdf2_iter(List(W) ist, List(W) ost, List(B) u, List(B) t, Int left) {
+    if (left <= 0) { return t; }
+    List(B) un = g_hmac32(ist, ost, u);
+    ListBuf(B) acc = ListBuf();
+    return g_pbkdf2_iter(ist, ost, un, g_xor32(t, un, 0, acc), left - 1);
+}
+
+@needs(Word(W, B))
+List(B) g_pbkdf2_blocks(List(B) pass, List(W) ist, List(W) ost, List(B) salt, Int iters, Int len, Int i, List(B) out) {
+    if (out.len() >= len) { return out[0..len]; }
+    ListBuf(B) ib = ListBuf();
+    List(B) u1 = hmac256g(pass, salt.concat(w_lift_bytes([(i >> 24) & 255, (i >> 16) & 255, (i >> 8) & 255, i & 255], 0, ib)));
+    return g_pbkdf2_blocks(pass, ist, ost, salt, iters, len, i + 1, out.concat(g_pbkdf2_iter(ist, ost, u1, u1, iters - 1)));
+}
+
+/// PBKDF2-HMAC-SHA-256 of `pass` and `salt` with `iters` iterations (at
+/// least 1): `len` bytes (at most 255 * 32 here). Empty for bad arguments.
+@needs(Word(W, B))
+@key_from(pass)
+pub List(B) pbkdf2_sha256g(List(B) pass, List(B) salt, Int iters, Int len) {
+    List(B) none = pass[0..0];
+    if (iters < 1 || len < 1 || len > 255 * 32) { return none; }
+    List(B) kb = g_key_block(pass);
+    return g_pbkdf2_blocks(pass, g_pad_state(kb, 54), g_pad_state(kb, 92), salt, iters, len, 1, none);
+}
