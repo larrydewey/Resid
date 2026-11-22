@@ -6,7 +6,7 @@
   "publisher": "resid",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.91.0"
   },
   "categories": [
     "Programming Languages",
@@ -91,12 +91,15 @@
     "package": "vsce package"
   },
   "dependencies": {
-    "vscode-languageclient": "^8.0.0"
+    "vscode-languageclient": "^11.0.1"
   },
   "devDependencies": {
-    "@types/vscode": "^1.75.0",
-    "@types/node": "^18.0.0",
-    "typescript": "^5.0.0",
-    "vsce": "^2.15.0"
+    "@types/vscode": "^1.91.0",
+    "@types/node": "^26.0.0",
+    "typescript": "^7.0.2",
+    "@vscode/vsce": "^4.1.1"
+  },
+  "overrides": {
+    "minimatch": "^11.0.9"
   }
 }

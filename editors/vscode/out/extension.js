@@ -43,7 +43,7 @@ let client;
 function activate(context) {
     const config = vscode.workspace.getConfiguration('resid');
     const lspEnabled = config.get('lsp.enable', true);
-    const output = vscode.window.createOutputChannel('Resid LSP');
+    const output = vscode.window.createOutputChannel('Resid LSP', { log: true });
     context.subscriptions.push(output);
     if (!lspEnabled) {
         output.appendLine('Resid LSP is disabled by the resid.lsp.enable setting.');

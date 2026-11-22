@@ -8,7 +8,7 @@ let client: LanguageClient;
 export function activate(context: vscode.ExtensionContext) {
     const config = vscode.workspace.getConfiguration('resid');
     const lspEnabled = config.get<boolean>('lsp.enable', true);
-    const output = vscode.window.createOutputChannel('Resid LSP');
+    const output = vscode.window.createOutputChannel('Resid LSP', { log: true });
     context.subscriptions.push(output);
     
     if (!lspEnabled) {
