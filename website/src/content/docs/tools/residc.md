@@ -71,6 +71,7 @@ directly. What differs on AArch64:
 | `--no-reduce` | skip compile-time reduction (for comparison) |
 | `--reduce-budget N` | evaluate up to N steps at compile time (default 16,000,000), or `unbounded`: no step or depth limit, only the memory meter ([budgets](/Resid/reference/reduction/#determinism-and-budgets)); a budget other than the default is recorded in the provenance |
 | `--no-facts` | keep every runtime check (no range facts) |
+| `--loop-report` | print a `note: loop:` line for each tail-call loop that allocates and has no region (it keeps every step's garbage until it returns), with the reason: the parameter or result that has no move and the part of its type responsible, a carried `StrBuf`, a `spawn` in the body, a self-call outside the tail, or a loop that returns a sum and carries only scalars |
 | `--dump-reduced PATH` | write the residual program as source text |
 | `--dump-graph PATH` | write the parsed graph |
 | `-depmap PATH` | a dependency map from `resid-manifest` |

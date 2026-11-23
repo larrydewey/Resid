@@ -119,10 +119,18 @@ region, with no diagnostic.
 - In the re-share library 83 of 269 tail loops have a region (45
   before), all 11 `rsh_*` among them (none before). Symbolon's
   `reshare_test.resid`, unchanged: 2,298 MB -> 506 MB, 45 s -> 43 s.
-- Not done: the full re-share in the cosigner is unmeasured; 282 loops
-  of that test still carry changing heap state without a region (many
-  are builders with nothing to reclaim, some are not), and nothing yet
-  says which or why. `PLAN-hardware-access.md` §9 lists what follows.
+- **`--loop-report`** (`lower.resid`, The loop report): a `note: loop:`
+  line for each loop that allocates and has no region, with the first
+  reason it was refused one, down to the part of a type that has no move
+  (`a list of KgP (field st: KgState (holding Kg3 (field peers: Map(Int,
+  Kg3Peer))))`). Emitted IR is unchanged. Test: `loop_report.resid`.
+  On Symbolon's re-share test it names 234 loops: about 160 carry a
+  `ListBuf` (no move), 36 return a sum and carry only scalars, and the
+  protocol drivers of the test and of `lib/cggmp*.resid` (`ps2_all`,
+  `ps3_all`, `a1_all`, `a2_all`, `kg3_all`) carry a `Map(Int, record)`.
+- Not done: the full re-share in the cosigner is unmeasured; moves for
+  maps with record values and for builders; the report as an error.
+  `PLAN-hardware-access.md` §9 lists what follows.
 
 ### 0zza. Large objects in loop regions; packed file reads (2026-11-20)
 

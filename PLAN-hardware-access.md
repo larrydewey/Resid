@@ -192,10 +192,12 @@ question apart from the boundary.
   then writing it doubled the encoding time.
 - **Bounded memory.** Loops that kept every step's garbage are the first
   part: lists of sums, of 64-bit integers and of lists, and loops that
-  return a sum, now have regions (PROGRESS). Still to do: a diagnostic
-  that says why a loop has no region; a memory budget that is part of the
-  program (per `spawn` region, an `Err` and not an abort); capacities in
-  types for long-lived state.
+  return a sum, now have regions, and `--loop-report` names each loop
+  that still has none and why (PROGRESS 0zzb). Still to do: moves for
+  maps with record values and for builders; the report as an error once
+  it names only real leaks; a memory budget that is part of the program
+  (per `spawn` region, an `Err` and not an abort); capacities in types
+  for long-lived state.
 
 ## 10. Holes considered
 

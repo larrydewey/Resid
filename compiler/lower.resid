@@ -5420,6 +5420,8 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     // longer an older value.
     Bool region = tco_ok && lw_find_line(fn_lines0, "tco.head:", 1) >= 0 && lr_region_ok(w, d, fn_lines0, tyl, rev) && lr_cur_movable(cmv, evs, 0) && (cmv.len() == 0 || rev != "" || ll_ty(rbase) != "ptr");
     List(Str) fn_lines_r = if (region) { lr_region(fn_lines0, evs, rev, cmv) } else { fn_lines0 };
+    // --loop-report: name a loop that allocates and has no region, and why.
+    Bool lrn = if (!region && tco_ok && !resid_rtmod() && resid_raw_load64(loop_report_word()) == 1) { lr_report(w, d, fn_lines0, tyl, rev, cmv, evs) } else { false };
     // A loop updating an owned list in place gets an unchecked copy (W3).
     List(Str) fn_lines = if (tco_ok && !resid_rtmod() && !w.dbg) { ol_apply(fn_lines0, fn_lines_r, tyl) } else { fn_lines_r };
     List(Str) own0 = (if (!resid_rtmod() && !w.dbg) { ls_slot(sw2_apply(if (tco_ok) { bv_apply(fn_lines, tyl) } else { fn_lines }), 0) } else { fn_lines }).concat(["}"]);
@@ -5458,6 +5460,89 @@ List(Str) cap_rename_to(List(Str) ls, Str to, Int i, ListBuf(Str) acc) {
 // values into a fresh one (resid_loop_move); an exit moves its result
 // into the caller's region (resid_loop_exit). Unchanged parameters are
 // older values, which cannot point into the loop's region.
+
+// ─── The loop report (--loop-report) ────────────────────────────────
+// A loop without a region keeps every step's garbage until it returns,
+// and nothing said so: a session loop held a gigabyte this way. With the
+// flag, each such loop that allocates is named with the first reason
+// lr_region_ok and the conditions beside it refused it, in their order.
+pub Int loop_report_word() { return resid_raw_global("resid_loop_report", 8); }
+
+Bool lr_report(LW w, Int d, List(Str) ls, List(Str) tyl, Str rev, List(Str) cmv, List(Str) evs) {
+    Int h = lw_find_line(ls, "tco.head:", 1);
+    // Nothing allocated in the loop, nothing kept.
+    if (h < 0 || !lr_allocates(w, ls, h + 1)) { return false; }
+    return println("note: loop: " + w.g.ns[d].text + " keeps each step's garbage until it returns: " + lr_why_not(w, d, ls, tyl, rev, cmv, evs, h));
+}
+
+Str lr_why_not(LW w, Int d, List(Str) ls, List(Str) tyl, Str rev, List(Str) cmv, List(Str) evs, Int h) {
+    if (tyl.contains("StrBuf")) { return "it carries a StrBuf"; }
+    if (lg_spawns(w.g, lw_kid(w, d, w.g.ns[d].nk - 1))) { return "its body spawns"; }
+    Str rty = lw_text(w, lw_kid(w, d, 0));
+    Bool newc = lr_new_changing(w.fs, ls, h + 1, tyl);
+    Bool newr = lr_new_kind(w.fs, rty, []);
+    Bool carr = newc || (newr && lr_ptr_changing(ls, h + 1));
+    if (newr && !carr) { return "it returns " + rty + " and carries no heap value that changes (taken for a short call)"; }
+    if (carr && lr_calls_self(ls, 0, "@" + w.g.ns[d].text + "(")) { return "it also calls itself outside the tail"; }
+    Int bad = lr_phi_bad(ls, h + 1, lr_evac_tys(w.fs, tyl, 0, []));
+    if (bad >= 0 && bad < tyl.len()) { return f"parameter {bad + 1} changes and has no move: " + lr_why_ty(w.fs, tyl[bad], []); }
+    if (bv_has(ls, h + 1, " = musttail call ")) { return "one of its exits is a tail call of another function"; }
+    if (!lr_exits_ok(ls, h + 1, rev != "")) { return "it returns a new value that has no move: " + lr_why_ty(w.fs, rty, []); }
+    if (!lr_cur_movable(cmv, evs, 0)) { return "an owned record it updates has no move"; }
+    return "an owned record it updates could be returned unmoved";
+}
+
+// The first parameter lr_phis_ok refuses, or -1.
+Int lr_phi_bad(List(Str) ls, Int i, List(Str) tyl) {
+    if (i >= ls.len() || !str_contains(ls[i], " = phi ")) { return 0 - 1; }
+    Str l = ls[i];
+    Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
+    Int j = str_parse_int(str_slice(reg, 2, str_len(reg)));
+    Str ty = if (j >= 0 && j < tyl.len()) { tyl[j] } else { "" };
+    Bool ok = !str_contains(l, " = phi ptr ") || ty != "" || lr_same_in(str_split(l, "[ "), 2, reg);
+    if (!ok) { return j; }
+    return lr_phi_bad(ls, i + 1, tyl);
+}
+
+// Type t down to the part of it that has no move: "Batch (field msgs: a
+// list of ...)". A type that moves, or one already being explained, is
+// named and no more.
+Str lr_why_ty(Funcs fs, Str t0, List(Str) seen) {
+    Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(t0));
+    if (seen.contains(t) || lr_move(fs, t, []) != "") { return t; }
+    List(Str) s2 = seen.concat([t]);
+    Int si = struct_index(fs, t);
+    if (si >= 0) { return t + lr_why_field(fs, fs.stf[si], 0, s2); }
+    if (str_has_prefix(t, "List(") && !is_list_fixed(t)) { return "a list of " + lr_why_ty(fs, elem_type(t), s2); }
+    if (lr_is_sum(fs, t)) { return t + lr_why_sum(fs, lr_sum_vars(fs, t), 0, s2); }
+    return t;
+}
+
+Str lr_why_field(Funcs fs, Str fields, Int i, List(Str) seen) {
+    Int fl = str_len(fields);
+    if (i >= fl) { return ""; }
+    Int ce = _find_comma_at_depth_cg(fields, i, 0, 0);
+    Int end = if (ce >= 0) { ce } else { fl };
+    Str ent = str_slice(fields, i, end);
+    Int co = str_find_char(ent, 58, 0);
+    Str ty = if (co >= 0) { ct_base_of(fs.ctn, fs.ctb, str_trim(str_slice(ent, co + 1, str_len(ent)))) } else { "" };
+    if (co >= 0 && lr_move(fs, ty, seen) == "") { return " (field " + str_trim(str_slice(ent, 0, co)) + ": " + lr_why_ty(fs, ty, seen) + ")"; }
+    return lr_why_field(fs, fields, end + 1, seen);
+}
+
+Str lr_why_sum(Funcs fs, List(Str) vs, Int i, List(Str) seen) {
+    if (i >= vs.len()) { return ""; }
+    List(Str) q = str_split(vs[i], "|");
+    Str p = if (q.len() >= 4) { lr_why_pays(fs, str_split(q[3], "\x1f"), 0, seen) } else { "" };
+    if (p != "") { return " (holding " + p + ")"; }
+    return lr_why_sum(fs, vs, i + 1, seen);
+}
+
+Str lr_why_pays(Funcs fs, List(Str) ps, Int i, List(Str) seen) {
+    if (i >= ps.len()) { return ""; }
+    if (lr_slot_move(fs, ps[i], seen) == "") { return lr_why_ty(fs, ps[i], seen); }
+    return lr_why_pays(fs, ps, i + 1, seen);
+}
 
 Bool lr_region_ok(LW w, Int d, List(Str) ls, List(Str) tyl, Str rev) {
     // The runtime manages its own memory: no regions inside it.
