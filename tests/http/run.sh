@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # HTTP server tests: lib/httpserv.resid against clients in the same process
-# (roundtrip.resid, stream.resid) and, with python3, examples/http_server.resid driven
+# (roundtrip.resid, stream.resid, state.resid) and, with python3, examples/http_server.resid driven
 # over real sockets by several concurrent clients (client.py).
 set -uo pipefail
 cd "$(dirname "$0")"
@@ -20,6 +20,11 @@ else bad "roundtrip: $(grep -m1 -i error "$W/rt.log") $(diff "$W/rt.out" roundtr
 if (cd "$ROOT" && "$COMPILER" tests/http/stream.resid -o "$W/st") > "$W/st.log" 2>&1 \
     && timeout 60 "$W/st" > "$W/st.out" 2>&1 && cmp -s "$W/st.out" stream.out; then ok
 else bad "stream: $(grep -m1 -i error "$W/st.log") $(diff "$W/st.out" stream.out 2>/dev/null | head -4 | tr '\n' ' ')"; fi
+
+# A stateful loop: requests change the state, a live stream sees it.
+if (cd "$ROOT" && "$COMPILER" tests/http/state.resid -o "$W/sl") > "$W/sl.log" 2>&1 \
+    && timeout 60 "$W/sl" > "$W/sl.out" 2>&1 && cmp -s "$W/sl.out" state.out; then ok
+else bad "state: $(grep -m1 -i error "$W/sl.log") $(diff "$W/sl.out" state.out 2>/dev/null | head -4 | tr '\n' ' ')"; fi
 
 # The example server over real sockets, from python3 clients.
 if command -v python3 > /dev/null; then

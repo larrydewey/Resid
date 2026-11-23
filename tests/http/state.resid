@@ -1,0 +1,89 @@
+// A stateful event loop (http_state_loop): requests change the state the
+// loop threads, and a live stream steps from that state, so it sees what
+// later requests did. POST /add?n= adds to a counter; GET /watch streams
+// the counter whenever it changes and ends once it reaches 10.
+import "httpserv.resid";
+import "http.resid";
+
+HttpTurn(Int, Int) handle(Int total, HttpRequest r) {
+    if (r.path == "/add") {
+        Int n = str_parse_int(http_query_param(r.query, "n"));
+        Int t2 = total + n;
+        return HttpTurn { .state = t2, .out = Whole(http_reply_text(200, "text/plain", f"{t2}\n")) };
+    }
+    if (r.path == "/watch") {
+        List(Str) sse = ["Content-Type: text/event-stream"];
+        HttpStep(Int) closure(Int) unused = lambda(k) { http_step_end(k, []) };
+        HttpStream(Int) s = HttpStream { .status = 200, .headers = sse, .first = http_step(total, http_bytes(f"data: {total}\n\n"), 10), .next = unused };
+        return HttpTurn { .state = total, .out = Stream(s) };
+    }
+    return HttpTurn { .state = total, .out = Whole(http_reply_text(200, "text/plain", f"total {total}\n")) };
+}
+
+// A stream's state is the last value it sent.
+HttpStep(Int) watch(Int total, Int seen) {
+    if (total == seen) { return http_step(seen, [], 10); }
+    if (total >= 10) { return http_step_end(total, http_bytes(f"data: {total}\n\n")); }
+    return http_step(total, http_bytes(f"data: {total}\n\n"), 10);
+}
+
+@requires(network)
+Str chunked(Int fd, StrBuf acc) {
+    Str line = str_trim(http_recv_line(fd));
+    Int n = hex(line, 0, 0);
+    if (n <= 0) {
+        _ = http_recv_line(fd);
+        return acc.finish();
+    }
+    Str part = http_recv_count(fd, n);
+    _ = http_recv_line(fd);
+    return chunked(fd, acc.push(part));
+}
+
+Int hex(Str s, Int i, Int acc) {
+    if (i >= str_len(s)) { return if (i == 0) { -1 } else { acc }; }
+    Int c = str_char_at(s, i);
+    Int d = if (c >= 48 && c <= 57) { c - 48 } else { if (c >= 97 && c <= 102) { c - 87 } else { -1 } };
+    if (d < 0) { return -1; }
+    return hex(s, i + 1, acc * 16 + d);
+}
+
+@requires(network)
+Str post(Int port, Str path) {
+    Int fd = resid_tcp_connect("127.0.0.1", port);
+    _ = resid_tcp_send(fd, "POST " + path + " HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    Str all = resid_tcp_recv_all(fd);
+    _ = resid_tcp_close(fd);
+    Int b = str_index_of(all, "\r\n\r\n", 0);
+    return str_trim(str_slice(all, b + 4, str_len(all)));
+}
+
+@requires(network)
+Int main() {
+    Int lfd = http_listen(0);
+    if (lfd < 0) { println("listen failed"); return 1; }
+    Int port = http_bound_port(lfd);
+    HttpLimits lim = HttpLimits { .head_max = 2048, .body_max = 4096, .requests_max = 100, .request_ms = 2000, .reply_ms = 2000, .open_max = 64 };
+    HttpTurn(Int, Int) closure(Int, HttpRequest) h = lambda(a, r) { handle(a, r) };
+    HttpStep(Int) closure(Int, Int) t = lambda(a, k) { watch(a, k) };
+    Result(HttpLoopEnd(Int), RegionError) worker = spawn (network(readonly)) {
+        return http_state_loop(lfd, 0, h, t, lim, 5);
+    };
+    Int fd = resid_tcp_connect("127.0.0.1", port);
+    _ = resid_tcp_send(fd, "GET /watch HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    Str head = http_recv_head(fd);
+    println(str_slice(head, 9, 12) + " " + http_header_value(head, "content-type"));
+    println(post(port, "/add?n=3"));
+    println(post(port, "/add?n=4"));
+    println(post(port, "/add?n=5"));
+    Str body = chunked(fd, StrBuf());
+    _ = resid_tcp_close(fd);
+    // The stream saw the starting value and the end; what it saw between
+    // depends on timing, so only its first and last events are printed.
+    List(Str) events = str_split(str_trim(body), "\n\n");
+    println(events[0] + " .. " + events[events.len() - 1]);
+    println(post(port, "/total"));
+    HttpLoopEnd(Int) end = worker else { HttpLoopEnd { .accepted = -1, .state = -1 } };
+    println(f"accepted {end.accepted}, final state {end.state}");
+    return 0;
+}
