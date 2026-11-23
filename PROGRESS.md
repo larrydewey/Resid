@@ -95,6 +95,43 @@ the list twice.
   step. Every AWFY instruction count unchanged; `tests/own` checks the
   report has no invented location.
 
+### 0zzb. Loop regions for lists of sums, 64-bit integers and lists (2026-11-23)
+
+Found through Symbolon: a re-share "takes up to ~10 GB (memory is not
+reclaimed within a protocol session)", and its session loop (`rs_loop`,
+`src/agent/session.resid`) once kept a gigabyte alive while it polled. A
+loop gets a region only when every parameter that changes has a move
+(`lr_move`); a parameter without one left the whole loop without a
+region, with no diagnostic.
+
+- **Lists of sums** (`List(ThMsg)`): each element by its sum's mover.
+- **Lists of 33 to 64-bit integers** (`List(UInt(64))`, a big number's
+  limbs; `lr_list_wide`): raw slots, moved as a `List(Int)` is. Never
+  secret ones (E0258).
+- **Lists of lists** of anything that moves (`lr_list_def`).
+- **A loop that returns a sum** (a `Result`) and carries a heap value
+  that changes now earns a region (`lr_ptr_changing` in `lr_region_ok`);
+  one that carries only scalars is as before. The compiler compiles
+  itself in the same time (137-144 s against 129-150 s).
+- Test: `tests/runtime/mem/loop_shapes.resid` (eight loops of two
+  million steps; within `RESID_MEM_LIMIT=64`, the compiler before needed
+  3.9 GB), checked against the previous compiler's output.
+- In the re-share library 83 of 269 tail loops have a region (45
+  before), all 11 `rsh_*` among them (none before). Symbolon's
+  `reshare_test.resid`, unchanged: 2,298 MB -> 506 MB, 45 s -> 43 s.
+- **`--loop-report`** (`lower.resid`, The loop report): a `note: loop:`
+  line for each loop that allocates and has no region, with the first
+  reason it was refused one, down to the part of a type that has no move
+  (`a list of KgP (field st: KgState (holding Kg3 (field peers: Map(Int,
+  Kg3Peer))))`). Emitted IR is unchanged. Test: `loop_report.resid`.
+  On Symbolon's re-share test it names 234 loops: about 160 carry a
+  `ListBuf` (no move), 36 return a sum and carry only scalars, and the
+  protocol drivers of the test and of `lib/cggmp*.resid` (`ps2_all`,
+  `ps3_all`, `a1_all`, `a2_all`, `kg3_all`) carry a `Map(Int, record)`.
+- Not done: the full re-share in the cosigner is unmeasured; moves for
+  maps with record values and for builders; the report as an error.
+  `PLAN-hardware-access.md` §9 lists what follows.
+
 ### 0zza. Large objects in loop regions; packed file reads (2026-11-20)
 
 Found through Pylon: `pylon put` of a 20 MB file peaked at 1.08 GB (40 MB

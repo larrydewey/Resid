@@ -354,5 +354,18 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/loop_shapes.resid -o "$W/loop_sh
 else
     fail=$((fail + 1)); echo "FAIL loop regions for lists of sums and 64-bit integers: $(tail -1 "$W/loop_shapes.out" "$W/loop_shapes.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# --loop-report (lower.resid, The loop report): a loop that allocates and
+# has no region is named with its reason; without the flag nothing is said.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/loop_report.resid -o "$W/loop_report" --loop-report) > "$W/loop_report.log" 2>&1 \
+    && [ "$(grep -c '^note: loop: ' "$W/loop_report.log")" = 2 ] \
+    && grep -q '^note: loop: probe keeps .*: it returns Result(Int, Str) and carries no heap value that changes' "$W/loop_report.log" \
+    && grep -q '^note: loop: join keeps .*: it carries a StrBuf' "$W/loop_report.log" \
+    && (cd "$ROOT" && "$COMPILER" tests/runtime/mem/loop_report.resid -o "$W/loop_report2") > "$W/loop_report2.log" 2>&1 \
+    && ! grep -q '^note: loop: ' "$W/loop_report2.log" \
+    && [ "$("$W/loop_report")" = "true true 3" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL loop report: $(grep '^note: loop: \|rror' "$W/loop_report.log" | head -3 | tr '\n' ' ')"
+fi
 echo "runtime: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

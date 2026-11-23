@@ -10555,6 +10555,9 @@ Int main() {
         return 1;
     }
     Int _tgs  =  resid_raw_store64(tgt_word(), tk);
+    // --loop-report: lowering names each loop that allocates and has no
+    // region, with the reason (lower.resid, The loop report).
+    Int _lrp  =  resid_raw_store64(loop_report_word(), if (pick_flag(argc, "--loop-report")) { 1 } else { 0 });
     // Module symbols spell paths below the checkout or install (mg_base_set).
     Int _mgb  =  mg_base_set(mg_base_of(op_std_root(["@stdroot::" + stdlib_dir()], 0)));
     Str path  =  if (testmode) { args.get(2) } else { arg1 };
