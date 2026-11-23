@@ -7223,12 +7223,28 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
     if (struct_index(fs, t) >= 0 && lr_rec_ok(fs, t, seen)) { return "@" + lr_rec_fn(t) + "(ptr %V, ptr %C)"; }
     if (is_fn_type(t)) { return "@resid_mv_clo(ptr %V, ptr %C)"; }
     if (lr_is_sum(fs, t) && lr_sum_ok(fs, t, seen)) { return "@" + lr_sum_fn(t) + "(ptr %V, ptr %C)"; }
+    // A map of word keys whose values are records, sums, maps or lists of
+    // records: each value moves by the compiled `resid.mv.V` (lr_mv_fns).
+    // Not in the compiler's own build (--runtime-internals): its loops mix
+    // regions with bulk arenas, and a region on one of them (own.resid's
+    // ow_sweep_scc, under spawn) corrupted a map; they keep the regions
+    // they had until that is understood.
+    if (str_has_prefix(t, "Map(") && lr_word_ty(map_key_type_cg(t)) && !resid_internals()) {
+        Str vt = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(map_val_type_cg(t)));
+        Str vm = if (ll_ty(vt) == "ptr" && !lr_word_ty(vt)) { lr_move(fs, vt, seen.concat([t])) } else { "" };
+        if (vm != "" && vm != "-") { return f"@resid_mv_map_f(ptr %V, i8 {lr_kind(map_key_type_cg(t))}, ptr @" + lr_mv_fn(vt) + ", ptr %C)"; }
+    }
     if (str_has_prefix(t, "List(") && !is_list_fixed(t)) {
         Str et = ct_base_of(fs.ctn, fs.ctb, elem_type(t));
         if (struct_index(fs, et) >= 0 && lr_rec_ok(fs, et, seen)) { return "@resid_mv_list_f(ptr %V, ptr @" + lr_rec_fn(et) + ", ptr %C)"; }
         // A list of lists of words: each element moves as a list of words
         // does (resid_mv_list, the element mover list writes use too).
         if (lr_list_word(et)) { return "@resid_mv_list_f(ptr %V, ptr @resid_mv_list, ptr %C)"; }
+        // A list of sums, closures, maps or lists of records: each element
+        // by its compiled `resid.mv.E` (outside the compiler's own build,
+        // as for maps above).
+        Str em = if (!resid_internals() && ll_ty(et) == "ptr" && !lr_word_ty(et) && et != "Str") { lr_move(fs, et, seen.concat([t])) } else { "" };
+        if (em != "" && em != "-") { return "@resid_mv_list_f(ptr %V, ptr @" + lr_mv_fn(et) + ", ptr %C)"; }
     }
     return "";
 }
@@ -7241,6 +7257,55 @@ Bool lr_fx_flat(Str t) {
 }
 
 Str lr_rec_fn(Str t) { return "\"resid.rec.evac." + t + "\""; }
+
+// ─── Movers as functions ────────────────────────────────────────────
+// A map's values move by a function of (value, context): `resid.mv.V`
+// wraps V's move template (lr_move) in one. Made for every one the
+// program's lines name, with the sum movers they may name in turn.
+
+Str lr_mv_fn(Str t) { return "\"resid.mv." + t + "\""; }
+
+List(Str) lr_mv_def(Funcs fs, Str t) {
+    return ["define internal ptr @" + lr_mv_fn(t) + "(ptr %v, ptr %u) {", "entry:", "%c = call ptr " + lr_call(lr_move(fs, t, []), "%v", "%u"), "ret ptr %c", "}"];
+}
+
+// Every `@"resid.mv.T"` in the lines: its T.
+Map(Str, Int) lr_mv_refs(List(Str) ls, Int i, Map(Str, Int) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    Map(Str, Int) a2 = if (str_contains(l, "@\"resid.mv.")) { lr_mv_refs_in(l, 0, acc) } else { acc };
+    return lr_mv_refs(ls, i + 1, a2);
+}
+
+Map(Str, Int) lr_mv_refs_in(Str l, Int from, Map(Str, Int) acc) {
+    Int k = str_index_of(l, "@\"resid.mv.", from);
+    if (k < 0) { return acc; }
+    Int s0 = k + 11;
+    Int e = str_find_char(l, 34, s0);
+    if (e < 0) { return acc; }
+    return lr_mv_refs_in(l, e + 1, acc.insert(str_slice(l, s0, e), 1));
+}
+
+List(Str) lr_mv_defs(Funcs fs, List(Str) ts, Int i, List(Str) acc) {
+    if (i >= ts.len()) { return acc; }
+    return lr_mv_defs(fs, ts, i + 1, acc.concat(lr_mv_def(fs, ts[i])));
+}
+
+// The value movers and sum movers the lines name, and those their own
+// bodies name, until none is new.
+List(Str) lr_mv_sum_fns(Funcs fs, List(Str) ls) {
+    Map(Str, Int) d0 = {};
+    return lr_mv_sum_at(fs, ls, d0, d0, []);
+}
+
+List(Str) lr_mv_sum_at(Funcs fs, List(Str) ls, Map(Str, Int) mdone, Map(Str, Int) sdone, List(Str) acc) {
+    Map(Str, Int) e0 = {};
+    List(Str) mf = lr_sum_new(lr_mv_refs(ls, 0, e0).keys(), mdone, 0, []);
+    List(Str) sf = lr_sum_new(lr_sum_refs(ls, 0, e0).keys(), sdone, 0, []);
+    if (mf.len() == 0 && sf.len() == 0) { return acc; }
+    List(Str) defs = lr_mv_defs(fs, mf, 0, []).concat(lr_sum_defs(fs, sf, 0, []));
+    return lr_mv_sum_at(fs, defs, lr_set_add(mdone, mf, 0), lr_set_add(sdone, sf, 0), acc.concat(defs));
+}
 
 
 // ─── Moving sums and closures ───────────────────────────────────────
@@ -7283,7 +7348,9 @@ Str lr_slot_move(Funcs fs, Str p0, List(Str) seen) {
     Str p = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(p0));
     if (is_fixed_type(p)) { return ""; }
     if (p == "Bool") { return "-"; }
-    if (ll_ty(p) != "ptr") { return if (is_wide_box(p)) { "" } else { "@resid_mv_word(ptr %V, ptr %C)" }; }
+    // A wide integer's box moves as a word too (elem_move copies its limbs);
+    // the compiler's own build keeps the sums it had (see lr_move).
+    if (ll_ty(p) != "ptr") { return if (is_wide_box(p) && resid_internals()) { "" } else { "@resid_mv_word(ptr %V, ptr %C)" }; }
     if (p == "Str") { return "@resid_mv_word(ptr %V, ptr %C)"; }
     return lr_move(fs, p, seen);
 }
@@ -7424,6 +7491,7 @@ Map(Str, Int) lr_sum_refs_in(Str l, Int from, Map(Str, Int) acc) {
 Bool lr_new_kind(Funcs fs, Str t0, List(Str) seen) {
     Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(t0));
     if (is_fn_type(t) || lr_is_sum(fs, t)) { return true; }
+    if (str_has_prefix(t, "Map(") && lr_evac_fn(t) == "" && !resid_internals()) { return true; }
     if (seen.contains(t)) { return false; }
     Int si = struct_index(fs, t);
     if (si >= 0) { return lr_fields_new(fs, fs.stf[si], 0, seen.concat([t])); }
@@ -10701,7 +10769,7 @@ pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts,
     List(Str) rfs = if (r0.err != "" || resid_rtmod()) { [] } else { lr_rec_fns(fs, lo.hdr, 0, []) };
     List(Str) ffs = if (r0.err != "") { [] } else { lo_freeze_fns(fs, lo, 0, []) };
     // Closure movers (lw_lambda) are in the global lines.
-    List(Str) sfs = if (r0.err != "" || resid_rtmod()) { [] } else { lr_sum_fns(fs, r0.lines.concat(rfs).concat(r0.glines)) };
+    List(Str) sfs = if (r0.err != "" || resid_rtmod()) { [] } else { lr_mv_sum_fns(fs, r0.lines.concat(rfs).concat(r0.glines)) };
     PG r = PG {.pos = r0.pos, .err = r0.err, .glines = r0.glines, .hlines = r0.hlines, .lines = r0.lines.concat(rfs).concat(ffs).concat(sfs), .tmp = r0.tmp, .lbl = r0.lbl};
     PG r1 = r;
     if (r1.err != "" || dbg || resid_rtmod()) { return r1; }

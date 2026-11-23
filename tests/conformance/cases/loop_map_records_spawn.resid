@@ -1,0 +1,72 @@
+// Region loops over maps of records in spawned workers, starting from a
+// state the parent loop carries, with inner loops returning maps.
+type OS = { Map(Int, Int) need; Map(Int, Str) keeps; Map(Int, Int) fresh; };
+type OFS = { Map(Int, Int) need; Map(Int, Str) keeps; Bool fok; Str sig; List(Str) rb; };
+type OGS = { OS s; Map(Int, OFS) sums; Map(Int, Int) dirty; Int work; Str log; };
+type RegionError = { Str message; };
+
+OFS piece(Int i, OFS old) {
+    Map(Int, Int) n = {};
+    Map(Int, Str) k = {};
+    return OFS {.need = n.insert(i, i).insert(i + 1, 2), .keeps = k.insert(i, f"k{i}"), .fok = i % 3 == 0, .sig = f"sig{i % 7}" + str_slice(old.sig, 0, min(20, str_len(old.sig))), .rb = [f"r{i}"]};
+}
+
+Map(Int, Int) mark(Map(Int, Int) d, List(Int) cs, Int i) {
+    if (i >= cs.len()) { return d; }
+    return mark(d.insert(cs[i], 1), cs, i + 1);
+}
+
+Str junk(Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    return junk(i + 1, n, str_slice(acc + f"{i}", 0, 50));
+}
+
+OGS sweep(Int a, Int b, Int j, Int r, OGS st) {
+    if (j >= b) {
+        if (r < 3) { return sweep(a, b, a, r + 1, st); }
+        return st;
+    }
+    Map(Int, Int) none = {};
+    Map(Int, Str) nk = {};
+    OFS old = st.sums.get(j) else { OFS {.need = none, .keeps = nk, .fok = true, .sig = "", .rb = []} };
+    OFS p = piece(j + r, old);
+    OS s2 = OS {.need = st.s.need.insert(j, r), .keeps = st.s.keeps.insert(j, p.sig), .fresh = if (p.fok) { st.s.fresh.remove(j) } else { st.s.fresh.insert(j, 1) }};
+    OGS st2 = OGS {.s = s2, .sums = st.sums.insert(j, p), .dirty = if (p.fok) { mark(st.dirty.remove(j), [j + 1, j + 2, j + 3], 0) } else { st.dirty.remove(j) }, .work = st.work + 1, .log = junk(0, 300, st.log)};
+    return sweep(a, b, j + 1, r, st2);
+}
+
+OGS merge(OGS st, OGS p, Int a, Int b, Int j) {
+    if (j >= b) { return OGS {.s = st.s, .sums = st.sums, .dirty = st.dirty, .work = st.work + 1, .log = st.log}; }
+    Map(Int, Int) none = {};
+    Map(Int, Str) nk = {};
+    OFS f = p.sums.get(j) else { OFS {.need = none, .keeps = nk, .fok = true, .sig = "", .rb = []} };
+    return merge(OGS {.s = OS {.need = st.s.need.insert(j, 1), .keeps = st.s.keeps.insert(j, f.sig), .fresh = st.s.fresh}, .sums = st.sums.insert(j, f), .dirty = st.dirty, .work = st.work, .log = st.log}, p, a, b, j + 1);
+}
+
+OGS level(OGS st, Int n) {
+    Int q = n / 4;
+    Result(OGS, RegionError) r0 = spawn () { return sweep(0, q, 0, 0, st); };
+    Result(OGS, RegionError) r1 = spawn () { return sweep(q, 2 * q, q, 0, st); };
+    Result(OGS, RegionError) r2 = spawn () { return sweep(2 * q, 3 * q, 2 * q, 0, st); };
+    Result(OGS, RegionError) r3 = spawn () { return sweep(3 * q, n, 3 * q, 0, st); };
+    OGS p0 = r0 else { st };
+    OGS p1 = r1 else { st };
+    OGS p2 = r2 else { st };
+    OGS p3 = r3 else { st };
+    return merge(merge(merge(merge(st, p0, 0, q, 0), p1, q, 2 * q, q), p2, 2 * q, 3 * q, 2 * q), p3, 3 * q, n, 3 * q);
+}
+
+OGS levels(OGS st, Int l, Int n) {
+    if (l >= 30) { return st; }
+    return levels(level(st, n), l + 1, n);
+}
+
+Int main() {
+    Map(Int, Int) e = {};
+    Map(Int, Str) es = {};
+    Map(Int, OFS) sums = {};
+    OGS st = OGS {.s = OS {.need = e, .keeps = es, .fresh = e}, .sums = sums, .dirty = e, .work = 0, .log = ""};
+    OGS r = levels(st, 0, 2000);
+    println(f"{r.work} {r.sums.len()} {r.s.keeps.len()}");
+    return 0;
+}
