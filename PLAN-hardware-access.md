@@ -219,8 +219,8 @@ question apart from the boundary.
 
 ## 11. Step 1 proposal: packed word types
 
-**Proposed 2026-11-23, not accepted.** How a register's bits are
-declared. Three earlier forms (bit positions with access keywords in a
+**Accepted 2026-11-23 as a design; not implemented.** How a register's
+bits are declared. Three earlier forms (bit positions with access keywords in a
 new layout kind; whole words with masks; generated accessors) were put
 aside as unintuitive. This one uses what the language has: a register is
 a record that fits in one word.
@@ -286,8 +286,52 @@ step, since it changes parsers that are tested.
 devices) and `ReadOnly` (which says what the program may not do, not
 whose the field is, and suggests a value that does not change).
 
-Not settled: a register whose read has an effect (read-to-clear);
-registers wider than 64 bits; fields that are write-only.
+Three further rules, decided the same day:
+
+- **A register that changes when it is read** is marked
+  `@clears_on_read`. A plain read of it is a compile error; `take()`
+  reads it once and gives the value, so a second read, or one added for
+  a log line, does not compile.
+
+  ```resid
+  @word(32) @clears_on_read
+  type IrqCause = { DeviceOwned(Bool) rx; DeviceOwned(Bool) tx; @reserved(30); };
+
+  IrqCause c = dev.cause.take();
+  ```
+
+  Rejected: no marking (a stray read is a silent bug); a linear value
+  (it brings linearity into ordinary driver code and does not stop a
+  second read).
+- **A word is 8, 16, 32 or 64 bits**, what one hardware access carries.
+  A wider value is a record of words in the region's layout, and the
+  driver reads or writes each word itself, so each access and their
+  order are in the source (a 64-bit queue address on 32-bit registers is
+  `desc_lo` then `desc_hi`). Rejected: wider words with a declared
+  access order (one assignment would be several accesses).
+- **`DriverOwned(T)`**: a field the driver writes and cannot read back
+  (a command, a key slot), the mirror of `DeviceOwned`. A written
+  literal names it; reading it from any value is a compile error, so no
+  code depends on what the hardware returns there. Rejected: separate
+  read and write types for a register (two declarations to keep in
+  step); reading it as an `Option`.
+
+  ```resid
+  @word(32)
+  type Command = {
+      DriverOwned(UInt(8)) opcode;
+      Bool busy_irq;
+      DeviceOwned(Bool) busy;
+      @reserved(22);
+  };
+  ```
+
+First slice to build, before `Region(T)` exists: `@word(N)` types alone,
+with the packing the compiler generates exposed as two functions (a
+record to its word, a word to a record or an error value), the way a
+layout type gets its parser and serializer (`compiler/layout.resid`),
+and the three wrappers' rules as compile errors. Region reads, writes
+and `take()` then call those.
 
 ## 12. Open questions
 
