@@ -125,9 +125,12 @@ Int main() {
     Int ts = s + 128;
     Int n = 1000000;
 
+    // Pinned before the first fork: pin's mask lies in the shared mapping,
+    // so a parent and a child pinning at once could both take one CPU, and
+    // two polling loops on one CPU take a scheduler tick per round trip.
+    _ = pin(s, 0);
     Int p1 = sys(57, 0, 0, 0);
     if (p1 == 0) { _ = pin(s, 2); _ = serve_poll(s, 0); _ = bye(); }
-    _ = pin(s, 0);
     Int t0 = now(ts);
     _ = ping(s, 1, n);
     Int t1 = now(ts);
