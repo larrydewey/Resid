@@ -3,8 +3,8 @@
 // against pyca/cryptography and RFC 8439 appendix A: every vector at
 // public and secret types, on AES-NI / carry-less multiply (where the CPU
 // has them) and in software, and through the packed entry points
-// (aes_gcmg_seal_u8 / aes_gcmg_decrypt_u8 and the ChaCha20-Poly1305 *_u8
-// functions). Lengths straddle the block and the four-block step; long
+// (aes_gcmg_seal_u8 / aes_gcmg_decrypt_u8, the ChaCha20-Poly1305 *_u8
+// functions) and a GCM key expanded once (aes_gcmg_key, *_k). Lengths straddle the block and the four-block step; long
 // inputs come from pat(n, k) and are compared by their SHA-256.
 
 import "../../lib/aesgcmg.resid";
@@ -54,19 +54,24 @@ Str gcm_all(List(Int) key, List(Int) iv, List(Int) pt, List(Int) aad, Str want) 
     Str a3 = pick(a2, shown(aes_gcmg_seal_with(hw, cl, key, iv, pt, aad)) == want, "public hw seal");
     Str a4 = pick(a3, sshown(aes_gcmg_seal_with(false, false, sk, iv, sp, aad)) == want, "secret sw seal");
     Str a5 = pick(a4, sshown(aes_gcmg_seal_with(hw, cl, sk, iv, sp, aad)) == want, "secret hw seal");
-    Str a6 = pick(a5, sshown(aes_gcmg_seal_u8(sk, iv, bytes_u8(pt), aad)) == want, "secret u8 seal");
+    Str a6 = pick(a5, sshown(aes_gcmg_seal_u8(sk, iv, bytes_u8(pt), bytes_u8(aad))) == want, "secret u8 seal");
     Str a6b = pick(a6, sshown(aes_gcmg_seal_with(hw, false, sk, iv, sp, aad)) == want && sshown(aes_gcmg_seal_with(false, cl, sk, iv, sp, aad)) == want, "secret mixed seal");
     Str b1 = pick(a6b, opt_shown(aes_gcm_decrypt(key, iv, ct, aad)) == p, "public api open");
     Str b2 = pick(b1, opt_shown(aes_gcmg_decrypt_with(false, false, key, iv, ct, aad)) == p, "public sw open");
     Str b3 = pick(b2, sopt_shown(aes_gcmg_decrypt_with(false, false, sk, iv, ct, aad)) == p, "secret sw open");
     Str b4 = pick(b3, sopt_shown(aes_gcmg_decrypt_with(hw, cl, sk, iv, ct, aad)) == p, "secret hw open");
-    Str b5 = pick(b4, sopt_shown(aes_gcmg_decrypt_u8_with(false, false, sk, iv, bytes_u8(ct), aad)) == p, "secret u8 sw open");
-    Str b6 = pick(b5, sopt_shown(aes_gcmg_decrypt_u8(sk, iv, bytes_u8(ct), aad)) == p, "secret u8 open");
-    Str b7 = pick(b6, opt_shown(aes_gcmg_decrypt_u8_with(hw, cl, key, iv, bytes_u8(ct), aad)) == p, "public u8 open");
+    Str b5 = pick(b4, sopt_shown(aes_gcmg_decrypt_u8_with(false, false, sk, iv, bytes_u8(ct), bytes_u8(aad))) == p, "secret u8 sw open");
+    Str b6 = pick(b5, sopt_shown(aes_gcmg_decrypt_u8(sk, iv, bytes_u8(ct), bytes_u8(aad))) == p, "secret u8 open");
+    Str b7 = pick(b6, opt_shown(aes_gcmg_decrypt_u8_with(hw, cl, key, iv, bytes_u8(ct), bytes_u8(aad))) == p, "public u8 open");
+    // A key expanded once, used twice (seal, then open), both paths.
+    AesGcmKeyG(Secret(UInt(128)), Secret(UInt(32))) ek = aes_gcmg_key(sk);
+    AesGcmKeyG(Secret(UInt(128)), Secret(UInt(32))) eks = aes_gcmg_key_with(false, false, sk);
+    Str b8 = pick(b7, sshown(aes_gcmg_seal_k(ek, iv, sp, bytes_u8(aad))) == want && sshown(aes_gcmg_seal_k(eks, iv, sp, bytes_u8(aad))) == want, "expanded key seal");
+    Str b9 = pick(b8, sopt_shown(aes_gcmg_decrypt_k(ek, iv, bytes_u8(ct), bytes_u8(aad))) == p && sopt_shown(aes_gcmg_decrypt_k(eks, iv, bytes_u8(ct), bytes_u8(aad))) == p, "expanded key open");
     List(Int) bad = flip_last(ct);
-    Str c1 = pick(b7, sopt_shown(aes_gcmg_decrypt_with(false, false, sk, iv, bad, aad)) == "none" && sopt_shown(aes_gcmg_decrypt(sk, iv, bad, aad)) == "none", "tampered tag accepted");
+    Str c1 = pick(b9, sopt_shown(aes_gcmg_decrypt_with(false, false, sk, iv, bad, aad)) == "none" && sopt_shown(aes_gcmg_decrypt(sk, iv, bad, aad)) == "none", "tampered tag accepted");
     List(Int) badc = if (ct.len() > 16) { [ct[0] ^ 128].concat(ct[1..]) } else { bad };
-    return pick(c1, sopt_shown(aes_gcmg_decrypt_u8(sk, iv, bytes_u8(badc), aad)) == "none" && opt_shown(aes_gcm_decrypt(key, iv, badc, aad)) == "none", "tampered ciphertext accepted");
+    return pick(c1, sopt_shown(aes_gcmg_decrypt_u8(sk, iv, bytes_u8(badc), bytes_u8(aad))) == "none" && opt_shown(aes_gcm_decrypt(key, iv, badc, aad)) == "none", "tampered ciphertext accepted");
 }
 
 // ChaCha20-Poly1305 every way, as gcm_all.
@@ -79,16 +84,16 @@ Str cc_all(List(Int) key, List(Int) nonce, List(Int) pt, List(Int) aad, Str want
     Str a1 = pick("", shown(ct) == want, "public api seal");
     Str a2 = pick(a1, sshown(chacha20poly1305g_seal(sk, nonce, sp, aad)) == want, "secret seal");
     Str a3 = pick(a2, sshown(chacha20poly1305g_seal_nb(sk, secret_bytes(nonce), sp, aad)) == want, "secret nonce seal");
-    Str a4 = pick(a3, sshown(chacha20poly1305g_seal_u8(sk, nonce, bytes_u8(pt), aad)) == want, "secret u8 seal");
+    Str a4 = pick(a3, sshown(chacha20poly1305g_seal_u8(sk, nonce, bytes_u8(pt), bytes_u8(aad))) == want, "secret u8 seal");
     Str b1 = pick(a4, opt_shown(chacha20poly1305_decrypt(key, nonce, ct, aad)) == p, "public api open");
     Str b2 = pick(b1, sopt_shown(chacha20poly1305g_decrypt(sk, nonce, ct, aad)) == p, "secret open");
     Str b3 = pick(b2, sopt_shown(chacha20poly1305g_decrypt_nb(sk, secret_bytes(nonce), ct, aad)) == p, "secret nonce open");
-    Str b4 = pick(b3, sopt_shown(chacha20poly1305g_decrypt_u8(sk, nonce, bytes_u8(ct), aad)) == p, "secret u8 open");
-    Str b5 = pick(b4, opt_shown(chacha20poly1305g_decrypt_u8(key, nonce, bytes_u8(ct), aad)) == p, "public u8 open");
+    Str b4 = pick(b3, sopt_shown(chacha20poly1305g_decrypt_u8(sk, nonce, bytes_u8(ct), bytes_u8(aad))) == p, "secret u8 open");
+    Str b5 = pick(b4, opt_shown(chacha20poly1305g_decrypt_u8(key, nonce, bytes_u8(ct), bytes_u8(aad))) == p, "public u8 open");
     List(Int) bad = flip_last(ct);
     Str c1 = pick(b5, sopt_shown(chacha20poly1305g_decrypt(sk, nonce, bad, aad)) == "none" && opt_shown(chacha20poly1305_decrypt(key, nonce, bad, aad)) == "none", "tampered tag accepted");
     List(Int) badc = if (ct.len() > 16) { [ct[0] ^ 128].concat(ct[1..]) } else { bad };
-    return pick(c1, sopt_shown(chacha20poly1305g_decrypt_u8(sk, nonce, bytes_u8(badc), aad)) == "none", "tampered ciphertext accepted");
+    return pick(c1, sopt_shown(chacha20poly1305g_decrypt_u8(sk, nonce, bytes_u8(badc), bytes_u8(aad))) == "none", "tampered ciphertext accepted");
 }
 
 // The ChaCha20 keystream XOR every way.

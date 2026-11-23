@@ -367174,7 +367174,7 @@ store i64 %t213157, ptr %t213158
 store i64 %t213135, ptr %t213160
 %t213162 = getelementptr i64, ptr %t213150, i64 6
 store i64 %t213143, ptr %t213162
-%t213163 = call ptr @resid_spawn_start(ptr @spw2932165, ptr %t213150)
+%t213163 = call ptr @resid_spawn_start(ptr @spw2932233, ptr %t213150)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 call void @"resid.rec.freeze.OT"(ptr %p2)
@@ -367196,7 +367196,7 @@ store i64 %t213179, ptr %t213180
 store i64 %t213135, ptr %t213182
 %t213184 = getelementptr i64, ptr %t213172, i64 6
 store i64 %t213143, ptr %t213184
-%t213185 = call ptr @resid_spawn_start(ptr @spw2932327, ptr %t213172)
+%t213185 = call ptr @resid_spawn_start(ptr @spw2932395, ptr %t213172)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 call void @"resid.rec.freeze.OT"(ptr %p2)
@@ -367218,7 +367218,7 @@ store i64 %t213202, ptr %t213203
 store i64 %t213135, ptr %t213205
 %t213207 = getelementptr i64, ptr %t213195, i64 6
 store i64 %t213143, ptr %t213207
-%t213208 = call ptr @resid_spawn_start(ptr @spw2932527, ptr %t213195)
+%t213208 = call ptr @resid_spawn_start(ptr @spw2932595, ptr %t213195)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 call void @"resid.rec.freeze.OT"(ptr %p2)
@@ -367240,7 +367240,7 @@ store i64 %t213225, ptr %t213226
 store i64 %t213135, ptr %t213228
 %t213230 = getelementptr i64, ptr %t213218, i64 6
 store i64 %t213143, ptr %t213230
-%t213231 = call ptr @resid_spawn_start(ptr @spw2932731, ptr %t213218)
+%t213231 = call ptr @resid_spawn_start(ptr @spw2932799, ptr %t213218)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 call void @"resid.rec.freeze.OT"(ptr %p2)
@@ -367262,7 +367262,7 @@ store i64 %t213248, ptr %t213249
 store i64 %t213135, ptr %t213251
 %t213253 = getelementptr i64, ptr %t213241, i64 6
 store i64 %t213143, ptr %t213253
-%t213254 = call ptr @resid_spawn_start(ptr @spw2932935, ptr %t213241)
+%t213254 = call ptr @resid_spawn_start(ptr @spw2933003, ptr %t213241)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 call void @"resid.rec.freeze.OT"(ptr %p2)
@@ -367284,7 +367284,7 @@ store i64 %t213271, ptr %t213272
 store i64 %t213135, ptr %t213274
 %t213276 = getelementptr i64, ptr %t213264, i64 6
 store i64 %t213143, ptr %t213276
-%t213277 = call ptr @resid_spawn_start(ptr @spw2933139, ptr %t213264)
+%t213277 = call ptr @resid_spawn_start(ptr @spw2933207, ptr %t213264)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 call void @"resid.rec.freeze.OT"(ptr %p2)
@@ -367306,7 +367306,7 @@ store i64 %t213294, ptr %t213295
 store i64 %t213135, ptr %t213297
 %t213299 = getelementptr i64, ptr %t213287, i64 6
 store i64 %t213143, ptr %t213299
-%t213300 = call ptr @resid_spawn_start(ptr @spw2933343, ptr %t213287)
+%t213300 = call ptr @resid_spawn_start(ptr @spw2933411, ptr %t213287)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 call void @"resid.rec.freeze.OT"(ptr %p2)
@@ -367328,7 +367328,7 @@ store i64 %t213315, ptr %t213316
 store i64 %t213135, ptr %t213318
 %t213320 = getelementptr i64, ptr %t213308, i64 6
 store i64 %t213143, ptr %t213320
-%t213321 = call ptr @resid_spawn_start(ptr @spw2933547, ptr %t213308)
+%t213321 = call ptr @resid_spawn_start(ptr @spw2933615, ptr %t213308)
 %t213322 = call ptr @resid_spawn_wait(ptr %t213163)
 %t213323 = getelementptr {i32, i32, ptr}, ptr %t213322, i32 0, i32 0
 %t213324w = load i32, ptr %t213323
@@ -372429,7 +372429,7 @@ store i64 %t216465, ptr %t216466
 %t216467 = ptrtoint ptr %t216429 to i64
 %t216468 = getelementptr i64, ptr %t216430, i64 19
 store i64 %t216467, ptr %t216468
-%t216469 = call ptr @resid_spawn_start(ptr @spw2981443, ptr %t216430)
+%t216469 = call ptr @resid_spawn_start(ptr @spw2981511, ptr %t216430)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t216473 = call ptr @resid_list_freeze(ptr %p2)
@@ -372500,7 +372500,7 @@ store i64 %t216519, ptr %t216520
 %t216521 = ptrtoint ptr %t216483 to i64
 %t216522 = getelementptr i64, ptr %t216484, i64 19
 store i64 %t216521, ptr %t216522
-%t216523 = call ptr @resid_spawn_start(ptr @spw2981576, ptr %t216484)
+%t216523 = call ptr @resid_spawn_start(ptr @spw2981644, ptr %t216484)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t216527 = call ptr @resid_list_freeze(ptr %p2)
@@ -372571,7 +372571,7 @@ store i64 %t216573, ptr %t216574
 %t216575 = ptrtoint ptr %t216537 to i64
 %t216576 = getelementptr i64, ptr %t216538, i64 19
 store i64 %t216575, ptr %t216576
-%t216577 = call ptr @resid_spawn_start(ptr @spw2981709, ptr %t216538)
+%t216577 = call ptr @resid_spawn_start(ptr @spw2981777, ptr %t216538)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t216581 = call ptr @resid_list_freeze(ptr %p2)
@@ -372642,7 +372642,7 @@ store i64 %t216627, ptr %t216628
 %t216629 = ptrtoint ptr %t216591 to i64
 %t216630 = getelementptr i64, ptr %t216592, i64 19
 store i64 %t216629, ptr %t216630
-%t216631 = call ptr @resid_spawn_start(ptr @spw2981842, ptr %t216592)
+%t216631 = call ptr @resid_spawn_start(ptr @spw2981910, ptr %t216592)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t216635 = call ptr @resid_list_freeze(ptr %p2)
@@ -372713,7 +372713,7 @@ store i64 %t216681, ptr %t216682
 %t216683 = ptrtoint ptr %t216645 to i64
 %t216684 = getelementptr i64, ptr %t216646, i64 19
 store i64 %t216683, ptr %t216684
-%t216685 = call ptr @resid_spawn_start(ptr @spw2981975, ptr %t216646)
+%t216685 = call ptr @resid_spawn_start(ptr @spw2982043, ptr %t216646)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t216689 = call ptr @resid_list_freeze(ptr %p2)
@@ -372784,7 +372784,7 @@ store i64 %t216735, ptr %t216736
 %t216737 = ptrtoint ptr %t216699 to i64
 %t216738 = getelementptr i64, ptr %t216700, i64 19
 store i64 %t216737, ptr %t216738
-%t216739 = call ptr @resid_spawn_start(ptr @spw2982108, ptr %t216700)
+%t216739 = call ptr @resid_spawn_start(ptr @spw2982176, ptr %t216700)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t216743 = call ptr @resid_list_freeze(ptr %p2)
@@ -372855,7 +372855,7 @@ store i64 %t216789, ptr %t216790
 %t216791 = ptrtoint ptr %t216753 to i64
 %t216792 = getelementptr i64, ptr %t216754, i64 19
 store i64 %t216791, ptr %t216792
-%t216793 = call ptr @resid_spawn_start(ptr @spw2982241, ptr %t216754)
+%t216793 = call ptr @resid_spawn_start(ptr @spw2982309, ptr %t216754)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t216797 = call ptr @resid_list_freeze(ptr %p2)
@@ -372926,7 +372926,7 @@ store i64 %t216843, ptr %t216844
 %t216845 = ptrtoint ptr %t216807 to i64
 %t216846 = getelementptr i64, ptr %t216808, i64 19
 store i64 %t216845, ptr %t216846
-%t216847 = call ptr @resid_spawn_start(ptr @spw2982374, ptr %t216808)
+%t216847 = call ptr @resid_spawn_start(ptr @spw2982442, ptr %t216808)
 %t216848 = call ptr @resid_spawn_wait(ptr %t216469)
 %t216849 = getelementptr {i32, i32, ptr}, ptr %t216848, i32 0, i32 0
 %t216850w = load i32, ptr %t216849
@@ -373859,7 +373859,7 @@ store i64 %t217406, ptr %t217407
 %t217408 = ptrtoint ptr %t217374 to i64
 %t217409 = getelementptr i64, ptr %t217375, i64 17
 store i64 %t217408, ptr %t217409
-%t217410 = call ptr @resid_spawn_start(ptr @spw2992162, ptr %t217375)
+%t217410 = call ptr @resid_spawn_start(ptr @spw2992230, ptr %t217375)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t217414 = call ptr @resid_list_freeze(ptr %p2)
@@ -373928,7 +373928,7 @@ store i64 %t217457, ptr %t217458
 %t217459 = ptrtoint ptr %t217425 to i64
 %t217460 = getelementptr i64, ptr %t217426, i64 17
 store i64 %t217459, ptr %t217460
-%t217461 = call ptr @resid_spawn_start(ptr @spw2992298, ptr %t217426)
+%t217461 = call ptr @resid_spawn_start(ptr @spw2992366, ptr %t217426)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t217465 = call ptr @resid_list_freeze(ptr %p2)
@@ -373997,7 +373997,7 @@ store i64 %t217508, ptr %t217509
 %t217510 = ptrtoint ptr %t217476 to i64
 %t217511 = getelementptr i64, ptr %t217477, i64 17
 store i64 %t217510, ptr %t217511
-%t217512 = call ptr @resid_spawn_start(ptr @spw2992434, ptr %t217477)
+%t217512 = call ptr @resid_spawn_start(ptr @spw2992502, ptr %t217477)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t217516 = call ptr @resid_list_freeze(ptr %p2)
@@ -374066,7 +374066,7 @@ store i64 %t217559, ptr %t217560
 %t217561 = ptrtoint ptr %t217527 to i64
 %t217562 = getelementptr i64, ptr %t217528, i64 17
 store i64 %t217561, ptr %t217562
-%t217563 = call ptr @resid_spawn_start(ptr @spw2992570, ptr %t217528)
+%t217563 = call ptr @resid_spawn_start(ptr @spw2992638, ptr %t217528)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t217567 = call ptr @resid_list_freeze(ptr %p2)
@@ -374135,7 +374135,7 @@ store i64 %t217610, ptr %t217611
 %t217612 = ptrtoint ptr %t217578 to i64
 %t217613 = getelementptr i64, ptr %t217579, i64 17
 store i64 %t217612, ptr %t217613
-%t217614 = call ptr @resid_spawn_start(ptr @spw2992706, ptr %t217579)
+%t217614 = call ptr @resid_spawn_start(ptr @spw2992774, ptr %t217579)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t217618 = call ptr @resid_list_freeze(ptr %p2)
@@ -374204,7 +374204,7 @@ store i64 %t217661, ptr %t217662
 %t217663 = ptrtoint ptr %t217629 to i64
 %t217664 = getelementptr i64, ptr %t217630, i64 17
 store i64 %t217663, ptr %t217664
-%t217665 = call ptr @resid_spawn_start(ptr @spw2992842, ptr %t217630)
+%t217665 = call ptr @resid_spawn_start(ptr @spw2992910, ptr %t217630)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t217669 = call ptr @resid_list_freeze(ptr %p2)
@@ -374273,7 +374273,7 @@ store i64 %t217712, ptr %t217713
 %t217714 = ptrtoint ptr %t217680 to i64
 %t217715 = getelementptr i64, ptr %t217681, i64 17
 store i64 %t217714, ptr %t217715
-%t217716 = call ptr @resid_spawn_start(ptr @spw2992978, ptr %t217681)
+%t217716 = call ptr @resid_spawn_start(ptr @spw2993046, ptr %t217681)
 call void @"resid.rec.freeze.Kg"(ptr %p0)
 call void @"resid.rec.freeze.Funcs"(ptr %p1)
 %t217720 = call ptr @resid_list_freeze(ptr %p2)
@@ -374342,7 +374342,7 @@ store i64 %t217763, ptr %t217764
 %t217765 = ptrtoint ptr %t217731 to i64
 %t217766 = getelementptr i64, ptr %t217732, i64 17
 store i64 %t217765, ptr %t217766
-%t217767 = call ptr @resid_spawn_start(ptr @spw2993114, ptr %t217732)
+%t217767 = call ptr @resid_spawn_start(ptr @spw2993182, ptr %t217732)
 %t217768 = call ptr @resid_spawn_wait(ptr %t217410)
 %t217769 = getelementptr {i32, i32, ptr}, ptr %t217768, i32 0, i32 0
 %t217770w = load i32, ptr %t217769
@@ -452672,14 +452672,14 @@ entry:
 @.s204544 = private unnamed_addr constant [87 x i8] c"this program reaches lib/verify/, whose verifiers use the standard library's instance \00"
 @.s204546 = private unnamed_addr constant [38 x i8] c": an instance here may not replace it\00"
 @.s204557 = private unnamed_addr constant [78 x i8] c"aesgcm.resid=acee5126f96a7dd9cb0fd622ab991161167b1a2d776d2deff80eb6b3fd53b830\00"
-@.s204558 = private unnamed_addr constant [79 x i8] c"aesgcmg.resid=1e5104282e2ffe97b479fb626b3b2baf671001c5e95a93b938e5129ec4407a05\00"
+@.s204558 = private unnamed_addr constant [79 x i8] c"aesgcmg.resid=b2d7b794a4739fb112c23936002536a2f46fbdd593b06ee980be6cedaea70b09\00"
 @.s204559 = private unnamed_addr constant [80 x i8] c"calendar.resid=7f7ec06dc16c6f85b60da8d74d3044801a660756601aaf6f8881ff622ddc4f4e\00"
 @.s204560 = private unnamed_addr constant [76 x i8] c"cbor.resid=92d293b95c390a2b0f355e30e64bab1d35a690dc1be74ec11c4032ad373d1b37\00"
 @.s204561 = private unnamed_addr constant [83 x i8] c"cbor_floats.resid=ae7977f9c2403b2afe2c757e3e1ae0a859a0275e3ccd7a040c42c4ec00d85cdb\00"
 @.s204562 = private unnamed_addr constant [81 x i8] c"cbor_head.resid=bf6c7770bb245691dabdd8e4344386b1521f9bc5c7467b31f16b950dff97824a\00"
 @.s204563 = private unnamed_addr constant [82 x i8] c"certverify.resid=83bb5dfed6a9ab7478b0524182844ee9fc188dac3045da9667869dc553a410a0\00"
 @.s204564 = private unnamed_addr constant [78 x i8] c"chacha.resid=de523a17542c85cdd6119b0007ff31b53d0a26d2d3766d30f212af3e059c5fcf\00"
-@.s204565 = private unnamed_addr constant [79 x i8] c"chachag.resid=558a8212e9299eb04b091929c5a04c6ffc6874590d4075a8fdd50ef3071925a4\00"
+@.s204565 = private unnamed_addr constant [79 x i8] c"chachag.resid=96b1096b79099a464eab4f99734b728b5fc5fce69948e8b4acd3fee7427cc98e\00"
 @.s204566 = private unnamed_addr constant [77 x i8] c"chain.resid=8b0eb74fdda3f9ca986ceb9c41ec4eaca6186267b37cce58bb4f3493a06ee674\00"
 @.s204567 = private unnamed_addr constant [81 x i8] c"challenge.resid=9ef5f8f333f613155a6fc4016ff1cc684a2260cd1c3116af74c5c3f972e8f9bb\00"
 @.s204568 = private unnamed_addr constant [86 x i8] c"challenge_bind.resid=94a39c5fe6da767ca00e0e8bb0b84ca20147431290d53feb12b3a9e8be9384de\00"
@@ -453140,7 +453140,7 @@ entry:
 @.s213068 = private unnamed_addr constant [1 x i8] c"\00"
 @.s213090 = private unnamed_addr constant [1 x i8] c"\00"
 @.lty213116 = private unnamed_addr constant [11 x i8] c"List(OPre)\00"
-define ptr @spw2932165(ptr %envp) "probe-stack"="inline-asm" {
+define ptr @spw2932233(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453162,7 +453162,7 @@ entry:
 %c5b = load i64, ptr %c5a
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2932165, ptr %cap_slot0
+store ptr @resid.cap.spw2932233, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t213144 = call i64 @__mcompiler_own_resid__imin_o(i64 %c5b, i64 %c4b)
 %t213145 = call ptr @resid_listbuf_new()
@@ -453172,8 +453172,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t213148
 }
-@resid.cap.spw2932165 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2932327(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2932233 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2932395(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453195,7 +453195,7 @@ entry:
 %c5b = load i64, ptr %c5a
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2932327, ptr %cap_slot0
+store ptr @resid.cap.spw2932395, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t213164 = call i64 @__mcompiler_own_resid__imin_o(i64 %c5b, i64 %c4b)
 %t213165 = mul nsw i64 2, %c5b
@@ -453207,8 +453207,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t213170
 }
-@resid.cap.spw2932327 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2932527(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2932395 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2932595(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453230,7 +453230,7 @@ entry:
 %c5b = load i64, ptr %c5a
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2932527, ptr %cap_slot0
+store ptr @resid.cap.spw2932595, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t213186 = mul nsw i64 2, %c5b
 %t213187 = call i64 @__mcompiler_own_resid__imin_o(i64 %t213186, i64 %c4b)
@@ -453243,8 +453243,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t213193
 }
-@resid.cap.spw2932527 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2932731(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2932595 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2932799(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453266,7 +453266,7 @@ entry:
 %c5b = load i64, ptr %c5a
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2932731, ptr %cap_slot0
+store ptr @resid.cap.spw2932799, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t213209 = mul nsw i64 3, %c5b
 %t213210 = call i64 @__mcompiler_own_resid__imin_o(i64 %t213209, i64 %c4b)
@@ -453279,8 +453279,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t213216
 }
-@resid.cap.spw2932731 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2932935(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2932799 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2933003(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453302,7 +453302,7 @@ entry:
 %c5b = load i64, ptr %c5a
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2932935, ptr %cap_slot0
+store ptr @resid.cap.spw2933003, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t213232 = mul nsw i64 4, %c5b
 %t213233 = call i64 @__mcompiler_own_resid__imin_o(i64 %t213232, i64 %c4b)
@@ -453315,8 +453315,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t213239
 }
-@resid.cap.spw2932935 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2933139(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2933003 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2933207(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453338,7 +453338,7 @@ entry:
 %c5b = load i64, ptr %c5a
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2933139, ptr %cap_slot0
+store ptr @resid.cap.spw2933207, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t213255 = mul nsw i64 5, %c5b
 %t213256 = call i64 @__mcompiler_own_resid__imin_o(i64 %t213255, i64 %c4b)
@@ -453351,8 +453351,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t213262
 }
-@resid.cap.spw2933139 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2933343(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2933207 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2933411(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453374,7 +453374,7 @@ entry:
 %c5b = load i64, ptr %c5a
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2933343, ptr %cap_slot0
+store ptr @resid.cap.spw2933411, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t213278 = mul nsw i64 6, %c5b
 %t213279 = call i64 @__mcompiler_own_resid__imin_o(i64 %t213278, i64 %c4b)
@@ -453387,8 +453387,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t213285
 }
-@resid.cap.spw2933343 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2933547(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2933411 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2933615(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453410,7 +453410,7 @@ entry:
 %c5b = load i64, ptr %c5a
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2933547, ptr %cap_slot0
+store ptr @resid.cap.spw2933615, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t213301 = mul nsw i64 7, %c5b
 %t213302 = call i64 @__mcompiler_own_resid__imin_o(i64 %t213301, i64 %c4b)
@@ -453421,7 +453421,7 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t213306
 }
-@resid.cap.spw2933547 = unnamed_addr constant [2 x i8] c"_\00"
+@resid.cap.spw2933615 = unnamed_addr constant [2 x i8] c"_\00"
 @.ltyE213462 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
 @.s213466 = private unnamed_addr constant [8 x i8] c"payload\00"
 @.s213489 = private unnamed_addr constant [1 x i8] c"\00"
@@ -453568,7 +453568,7 @@ ret ptr %t213306
 @.s216176 = private unnamed_addr constant [6 x i8] c"#none\00"
 @.lty216241 = private unnamed_addr constant [14 x i8] c"List(Unknown)\00"
 @.lty216315 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
-define ptr @spw2981443(ptr %envp) "probe-stack"="inline-asm" {
+define ptr @spw2981511(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453628,7 +453628,7 @@ entry:
 %c18c = inttoptr i64 %c18b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2981443, ptr %cap_slot0
+store ptr @resid.cap.spw2981511, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t216416 = call ptr @__mcompiler_own_resid__ow_list_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c11c, i1 %c7c, ptr %c8c)
 %t216417 = call ptr @resid_list_freeze(ptr %t216416)
@@ -453636,8 +453636,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t216418
 }
-@resid.cap.spw2981443 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2981576(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2981511 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2981644(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453697,7 +453697,7 @@ entry:
 %c18c = inttoptr i64 %c18b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2981576, ptr %cap_slot0
+store ptr @resid.cap.spw2981644, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t216470 = call ptr @__mcompiler_own_resid__ow_list_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c12c, i1 %c7c, ptr %c8c)
 %t216471 = call ptr @resid_list_freeze(ptr %t216470)
@@ -453705,8 +453705,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t216472
 }
-@resid.cap.spw2981576 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2981709(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2981644 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2981777(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453766,7 +453766,7 @@ entry:
 %c18c = inttoptr i64 %c18b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2981709, ptr %cap_slot0
+store ptr @resid.cap.spw2981777, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t216524 = call ptr @__mcompiler_own_resid__ow_list_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c13c, i1 %c7c, ptr %c8c)
 %t216525 = call ptr @resid_list_freeze(ptr %t216524)
@@ -453774,8 +453774,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t216526
 }
-@resid.cap.spw2981709 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2981842(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2981777 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2981910(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453835,7 +453835,7 @@ entry:
 %c18c = inttoptr i64 %c18b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2981842, ptr %cap_slot0
+store ptr @resid.cap.spw2981910, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t216578 = call ptr @__mcompiler_own_resid__ow_list_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c14c, i1 %c7c, ptr %c8c)
 %t216579 = call ptr @resid_list_freeze(ptr %t216578)
@@ -453843,8 +453843,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t216580
 }
-@resid.cap.spw2981842 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2981975(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2981910 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2982043(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453904,7 +453904,7 @@ entry:
 %c18c = inttoptr i64 %c18b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2981975, ptr %cap_slot0
+store ptr @resid.cap.spw2982043, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t216632 = call ptr @__mcompiler_own_resid__ow_list_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c15c, i1 %c7c, ptr %c8c)
 %t216633 = call ptr @resid_list_freeze(ptr %t216632)
@@ -453912,8 +453912,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t216634
 }
-@resid.cap.spw2981975 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2982108(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2982043 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2982176(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -453973,7 +453973,7 @@ entry:
 %c18c = inttoptr i64 %c18b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2982108, ptr %cap_slot0
+store ptr @resid.cap.spw2982176, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t216686 = call ptr @__mcompiler_own_resid__ow_list_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c16c, i1 %c7c, ptr %c8c)
 %t216687 = call ptr @resid_list_freeze(ptr %t216686)
@@ -453981,8 +453981,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t216688
 }
-@resid.cap.spw2982108 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2982241(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2982176 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2982309(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -454042,7 +454042,7 @@ entry:
 %c18c = inttoptr i64 %c18b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2982241, ptr %cap_slot0
+store ptr @resid.cap.spw2982309, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t216740 = call ptr @__mcompiler_own_resid__ow_list_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c17c, i1 %c7c, ptr %c8c)
 %t216741 = call ptr @resid_list_freeze(ptr %t216740)
@@ -454050,8 +454050,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t216742
 }
-@resid.cap.spw2982241 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2982374(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2982309 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2982442(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -454111,7 +454111,7 @@ entry:
 %c18c = inttoptr i64 %c18b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2982374, ptr %cap_slot0
+store ptr @resid.cap.spw2982442, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t216794 = call ptr @__mcompiler_own_resid__ow_list_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c18c, i1 %c7c, ptr %c8c)
 %t216795 = call ptr @resid_list_freeze(ptr %t216794)
@@ -454119,7 +454119,7 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t216796
 }
-@resid.cap.spw2982374 = unnamed_addr constant [2 x i8] c"_\00"
+@resid.cap.spw2982442 = unnamed_addr constant [2 x i8] c"_\00"
 @.lty216947 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
 @.lty216976 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
 @.s217019 = private unnamed_addr constant [1 x i8] c"\00"
@@ -454134,7 +454134,7 @@ ret ptr %t216796
 @.lty217330 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
 @.lc217330 = private global ptr null
 @.lcd217330 = private unnamed_addr constant [8 x i64] [i64 0, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0]
-define ptr @spw2992162(ptr %envp) "probe-stack"="inline-asm" {
+define ptr @spw2992230(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -454191,7 +454191,7 @@ entry:
 %c16c = inttoptr i64 %c16b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2992162, ptr %cap_slot0
+store ptr @resid.cap.spw2992230, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t217360 = call ptr @__mcompiler_own_resid__ow_par_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c4c, ptr %c9c, i1 %c6c, ptr %c7c)
 %t217361 = call ptr @resid_list_freeze(ptr %t217360)
@@ -454199,8 +454199,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t217362
 }
-@resid.cap.spw2992162 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2992298(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2992230 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2992366(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -454257,7 +454257,7 @@ entry:
 %c16c = inttoptr i64 %c16b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2992298, ptr %cap_slot0
+store ptr @resid.cap.spw2992366, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t217411 = call ptr @__mcompiler_own_resid__ow_par_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c4c, ptr %c10c, i1 %c6c, ptr %c7c)
 %t217412 = call ptr @resid_list_freeze(ptr %t217411)
@@ -454265,8 +454265,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t217413
 }
-@resid.cap.spw2992298 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2992434(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2992366 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2992502(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -454323,7 +454323,7 @@ entry:
 %c16c = inttoptr i64 %c16b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2992434, ptr %cap_slot0
+store ptr @resid.cap.spw2992502, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t217462 = call ptr @__mcompiler_own_resid__ow_par_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c4c, ptr %c11c, i1 %c6c, ptr %c7c)
 %t217463 = call ptr @resid_list_freeze(ptr %t217462)
@@ -454331,8 +454331,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t217464
 }
-@resid.cap.spw2992434 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2992570(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2992502 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2992638(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -454389,7 +454389,7 @@ entry:
 %c16c = inttoptr i64 %c16b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2992570, ptr %cap_slot0
+store ptr @resid.cap.spw2992638, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t217513 = call ptr @__mcompiler_own_resid__ow_par_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c4c, ptr %c12c, i1 %c6c, ptr %c7c)
 %t217514 = call ptr @resid_list_freeze(ptr %t217513)
@@ -454397,8 +454397,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t217515
 }
-@resid.cap.spw2992570 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2992706(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2992638 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2992774(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -454455,7 +454455,7 @@ entry:
 %c16c = inttoptr i64 %c16b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2992706, ptr %cap_slot0
+store ptr @resid.cap.spw2992774, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t217564 = call ptr @__mcompiler_own_resid__ow_par_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c4c, ptr %c13c, i1 %c6c, ptr %c7c)
 %t217565 = call ptr @resid_list_freeze(ptr %t217564)
@@ -454463,8 +454463,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t217566
 }
-@resid.cap.spw2992706 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2992842(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2992774 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2992910(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -454521,7 +454521,7 @@ entry:
 %c16c = inttoptr i64 %c16b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2992842, ptr %cap_slot0
+store ptr @resid.cap.spw2992910, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t217615 = call ptr @__mcompiler_own_resid__ow_par_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c4c, ptr %c14c, i1 %c6c, ptr %c7c)
 %t217616 = call ptr @resid_list_freeze(ptr %t217615)
@@ -454529,8 +454529,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t217617
 }
-@resid.cap.spw2992842 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2992978(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2992910 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2993046(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -454587,7 +454587,7 @@ entry:
 %c16c = inttoptr i64 %c16b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2992978, ptr %cap_slot0
+store ptr @resid.cap.spw2993046, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t217666 = call ptr @__mcompiler_own_resid__ow_par_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c4c, ptr %c15c, i1 %c6c, ptr %c7c)
 %t217667 = call ptr @resid_list_freeze(ptr %t217666)
@@ -454595,8 +454595,8 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t217668
 }
-@resid.cap.spw2992978 = unnamed_addr constant [2 x i8] c"_\00"
-define ptr @spw2993114(ptr %envp) "probe-stack"="inline-asm" {
+@resid.cap.spw2993046 = unnamed_addr constant [2 x i8] c"_\00"
+define ptr @spw2993182(ptr %envp) "probe-stack"="inline-asm" {
 entry:
 %env = ptrtoint ptr %envp to i64
 %envbase = inttoptr i64 %env to ptr
@@ -454653,7 +454653,7 @@ entry:
 %c16c = inttoptr i64 %c16b to ptr
 %cap_set = alloca [1 x ptr]
 %cap_slot0 = getelementptr inbounds [1 x ptr], ptr %cap_set, i32 0, i32 0
-store ptr @resid.cap.spw2993114, ptr %cap_slot0
+store ptr @resid.cap.spw2993182, ptr %cap_slot0
 call void @resid_cap_enter(ptr %cap_set, i64 1)
 %t217717 = call ptr @__mcompiler_own_resid__ow_par_chunk(ptr %c0c, ptr %c1c, ptr %c2c, ptr %c3c, ptr %c4c, ptr %c16c, i1 %c6c, ptr %c7c)
 %t217718 = call ptr @resid_list_freeze(ptr %t217717)
@@ -454661,7 +454661,7 @@ call void @resid_cap_enter(ptr %cap_set, i64 1)
 call void @resid_cap_leave()
 ret ptr %t217719
 }
-@resid.cap.spw2993114 = unnamed_addr constant [2 x i8] c"_\00"
+@resid.cap.spw2993182 = unnamed_addr constant [2 x i8] c"_\00"
 @.s217878 = private unnamed_addr constant [1 x i8] c"\00"
 @.lty217886 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
 @.s217923 = private unnamed_addr constant [2 x i8] c" \00"

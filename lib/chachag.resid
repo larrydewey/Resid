@@ -244,8 +244,8 @@ pub Option(List(B)) chacha20poly1305g_decrypt(List(B) key, List(Int) nonce, List
 }
 
 // ── Packed public bytes ─────────────────────────────────────────────
-// Entry points whose public input is a List(UInt(8)) (one byte per
-// element, as a socket delivers it): at secret types the bytes are lifted
+// Entry points whose public input (data, and an AEAD's associated data)
+// is a List(UInt(8)) (one byte per element, as a socket delivers it): at secret types the bytes are lifted
 // into B without a copy (Word's w_lift_u8), so nothing is converted byte
 // by byte. Outputs stay in B.
 
@@ -268,8 +268,8 @@ pub List(B) poly1305g_u8(List(B) key, List(UInt(8)) msg) {
 @needs(Word(W, B), Wide512(P, B))
 @key(key)
 @nonce(nonce)
-pub List(B) chacha20poly1305g_seal_u8(List(B) key, List(Int) nonce, List(UInt(8)) plaintext, List(Int) aad) {
-    return chacha20poly1305g_seal(key, nonce, w_lift_u8(plaintext), aad);
+pub List(B) chacha20poly1305g_seal_u8(List(B) key, List(Int) nonce, List(UInt(8)) plaintext, List(UInt(8)) aad) {
+    return chacha20poly1305g_seal(key, nonce, w_lift_u8(plaintext), bytes_int(aad));
 }
 
 /// ChaCha20-Poly1305 open of packed ciphertext || tag: the plaintext in B
@@ -277,14 +277,14 @@ pub List(B) chacha20poly1305g_seal_u8(List(B) key, List(Int) nonce, List(UInt(8)
 /// key that is not 32 bytes, a nonce that is not 12, or an input shorter
 /// than a tag. The verdict is public (CtSame(B)).
 @needs(Word(W, B), Wide512(P, B), CtSame(B))
-pub Option(List(B)) chacha20poly1305g_decrypt_u8(List(B) key, List(Int) nonce, List(UInt(8)) ct_and_tag, List(Int) aad) {
+pub Option(List(B)) chacha20poly1305g_decrypt_u8(List(B) key, List(Int) nonce, List(UInt(8)) ct_and_tag, List(UInt(8)) aad) {
     Int clen = ct_and_tag.len() - 16;
     if (key.len() != 32 || nonce.len() != 12 || clen < 0) { return None; }
     List(B) all = w_lift_u8(ct_and_tag);
     List(B) ct = all[0..clen];
     List(W) st = chachag_state(key, 0, nonce);
     List(B) mackey = cg_block_st(st)[0..32];
-    if (!ct_same(p_poly1305_aead(mackey, aad, ct), all[clen..])) { return None; }
+    if (!ct_same(p_poly1305_aead(mackey, bytes_int(aad), ct), all[clen..])) { return None; }
     ListBuf(B) out = ListBuf();
     return Some(cg_xor_run(st, 1, ct, 0, out).finish());
 }

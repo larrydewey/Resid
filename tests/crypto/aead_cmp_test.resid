@@ -70,9 +70,9 @@ Str gcm_cases(Int s, Int n, Int i) {
     Str p = hex_encode(pt.bytes);
     Bool open = ohex(aes_gcmg_decrypt_with(hw, cl, k.bytes, iv.bytes, want, aad.bytes)) == p
         && sohex(aes_gcmg_decrypt_with(false, false, sk, iv.bytes, want, aad.bytes)) == p
-        && sohex(aes_gcmg_decrypt_u8_with(hw, cl, sk, iv.bytes, bytes_u8(want), aad.bytes)) == p;
+        && sohex(aes_gcmg_decrypt_u8_with(hw, cl, sk, iv.bytes, bytes_u8(want), bytes_u8(aad.bytes))) == p;
     List(Int) bad = flip(want, rnd_below(rnd_next(aad.s), want.len()));
-    Bool refused = sohex(aes_gcmg_decrypt_u8(sk, iv.bytes, bytes_u8(bad), aad.bytes)) == "none"
+    Bool refused = sohex(aes_gcmg_decrypt_u8(sk, iv.bytes, bytes_u8(bad), bytes_u8(aad.bytes))) == "none"
         && ohex(ref_aes_gcmg_decrypt_with(false, false, k.bytes, iv.bytes, bad, aad.bytes)) == "none"
         && sohex(aes_gcmg_decrypt_with(false, false, sk, iv.bytes, bad, aad.bytes)) == "none";
     if (!(sealed && open && refused)) { return f"case {i}: key {ksz} iv {ivlen} pt {pt.bytes.len()} aad {aad.bytes.len()} sealed {sealed} open {open} refused {refused}"; }
@@ -93,7 +93,7 @@ Str cc_cases(Int s, Int n, Int i) {
         && hex_encode(opened(chacha20poly1305g_seal(sk, nonce.bytes, secret_bytes(pt.bytes), aad.bytes))) == hex_encode(want);
     Str p = hex_encode(pt.bytes);
     Bool open = sohex(chacha20poly1305g_decrypt(sk, nonce.bytes, want, aad.bytes)) == p
-        && sohex(chacha20poly1305g_decrypt_u8(sk, nonce.bytes, bytes_u8(want), aad.bytes)) == p;
+        && sohex(chacha20poly1305g_decrypt_u8(sk, nonce.bytes, bytes_u8(want), bytes_u8(aad.bytes))) == p;
     List(Int) bad = flip(want, rnd_below(rnd_next(aad.s), want.len()));
     Bool refused = sohex(chacha20poly1305g_decrypt(sk, nonce.bytes, bad, aad.bytes)) == "none";
     // The bare cipher from a random block counter (it wraps mod 2^32), and the MAC.

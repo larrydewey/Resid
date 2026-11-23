@@ -31,7 +31,8 @@
 // summed under one reduction (x_clmul4); bytes move sixteen at a time
 // (x_be16, x_xor16). Open lifts the received bytes into B once and runs
 // both passes over them; the *_u8 entry points take packed public input
-// (List(UInt(8))) and lift it without a copy.
+// (List(UInt(8))) and lift it without a copy, and aes_gcmg_key expands a
+// key once for the *_k entry points.
 
 import "word.resid";
 import "crypto.resid";
@@ -464,7 +465,13 @@ X ag_ctr_block(X head, W c) {
 @needs(Word(W, B), Block128(X, W, B))
 GcmG(X, W) ag_gcm(AesKeyG(X, W) k, Bool clmul, List(Int) iv) {
     X z = x_lift((UInt(128)) 0);
-    X h = ag_swap(aesg_block(k, z), 0, z);
+    return ag_gcm_h(k, clmul, ag_swap(aesg_block(k, z), 0, z), iv);
+}
+
+// ag_gcm with the hash key H already computed (an AesGcmKeyG's).
+@needs(Word(W, B), Block128(X, W, B))
+GcmG(X, W) ag_gcm_h(AesKeyG(X, W) k, Bool clmul, X h, List(Int) iv) {
+    X z = x_lift((UInt(128)) 0);
     if (iv.len() == 12) {
         X head12 = x_lift(aesg_le_pack_pub(iv, 11, (UInt(128)) 0));
         W one = w_lift(1);
@@ -635,19 +642,21 @@ pub Option(List(B)) aes_gcmg_decrypt(List(B) key, List(Int) iv, List(Int) ct_and
 
 // ── Packed public bytes ─────────────────────────────────────────────
 //
-// Entry points whose public input is a List(UInt(8)) (one byte per
-// element, as a socket delivers it), so nothing is converted byte by
-// byte on the way in: at secret types the bytes are lifted into B without
+// Entry points whose public input -- plaintext or ciphertext and tag,
+// and the associated data -- is a List(UInt(8)) (one byte per element, as
+// a socket delivers it), so nothing is converted byte by byte on the way
+// in: at secret types the bytes are lifted into B without
 // a copy (Word's w_lift_u8). The output stays in B; at secret types the
-// caller declassifies a ciphertext to send it.
+// caller declassifies a ciphertext to send it, and
+// declassify(secret_join(ct), ...) is already the packed List(UInt(8)).
 
 /// AES-GCM encryption of packed public plaintext bytes: ciphertext || tag
 /// in B, or empty for a bad key or IV; otherwise as aes_gcmg_seal.
 @needs(Word(W, B), Block128(X, W, B))
 @key(key)
 @nonce(iv)
-pub List(B) aes_gcmg_seal_u8(List(B) key, List(Int) iv, List(UInt(8)) plaintext, List(Int) aad) {
-    return aes_gcmg_seal(key, iv, w_lift_u8(plaintext), aad);
+pub List(B) aes_gcmg_seal_u8(List(B) key, List(Int) iv, List(UInt(8)) plaintext, List(UInt(8)) aad) {
+    return aes_gcmg_seal(key, iv, w_lift_u8(plaintext), bytes_int(aad));
 }
 
 /// AES-GCM decryption of packed ciphertext || tag: the plaintext in B when
@@ -655,19 +664,72 @@ pub List(B) aes_gcmg_seal_u8(List(B) key, List(Int) iv, List(UInt(8)) plaintext,
 /// bad key, an empty IV or an input shorter than a tag. hw and clmul
 /// choose AES-NI and carry-less multiply, as in aes_gcmg_decrypt_with.
 @needs(Word(W, B), Block128(X, W, B), CtSame(B))
-pub Option(List(B)) aes_gcmg_decrypt_u8_with(Bool hw, Bool clmul, List(B) key, List(Int) iv, List(UInt(8)) ct_and_tag, List(Int) aad) {
-    List(W) rk = if (hw) { aesg_key_expand_hw(key) } else { aesg_key_expand(key) };
-    Int clen = ct_and_tag.len() - 16;
-    if (rk.len() == 0 || iv.len() == 0 || clen < 0) { return None; }
-    return ag_open_b(ag_gcm(aesg_keys_with(rk, hw), clmul, iv), w_lift_u8(ct_and_tag), clen, aad);
+pub Option(List(B)) aes_gcmg_decrypt_u8_with(Bool hw, Bool clmul, List(B) key, List(Int) iv, List(UInt(8)) ct_and_tag, List(UInt(8)) aad) {
+    return aes_gcmg_decrypt_k(aes_gcmg_key_with(hw, clmul, key), iv, ct_and_tag, aad);
 }
 
 /// AES-GCM decryption of packed ciphertext || tag as
 /// aes_gcmg_decrypt_u8_with, on AES-NI and carry-less multiply when the
 /// CPU has them.
 @needs(Word(W, B), Block128(X, W, B), CtSame(B))
-pub Option(List(B)) aes_gcmg_decrypt_u8(List(B) key, List(Int) iv, List(UInt(8)) ct_and_tag, List(Int) aad) {
+pub Option(List(B)) aes_gcmg_decrypt_u8(List(B) key, List(Int) iv, List(UInt(8)) ct_and_tag, List(UInt(8)) aad) {
     return aes_gcmg_decrypt_u8_with(resid_cpu_has_aesni(), resid_cpu_has_clmul(), key, iv, ct_and_tag, aad);
+}
+
+// ── A key expanded once ─────────────────────────────────────────────
+//
+// For a connection that seals or opens many messages under one key (an
+// SSH or TLS direction): the schedule, its AES-NI round keys and the hash
+// key H are computed once; each message then costs only its J0.
+
+/// An AES-GCM key expanded for many messages: the schedule (on AES-NI when
+/// k.hw), whether GHASH runs on carry-less multiply, the hash key H
+/// (big-endian packed), and whether the key had a valid length (16, 24 or
+/// 32 bytes). At secret types every part but the flags is secret.
+type AesGcmKeyG(X, W) = { AesKeyG(X, W) k; Bool clmul; X h; Bool ok; };
+
+/// The key `key` expanded for aes_gcmg_seal_k / aes_gcmg_decrypt_k; hw and
+/// clmul choose AES-NI and carry-less multiply. A key that is not 16, 24
+/// or 32 bytes gives a key with ok false, which seals nothing and opens
+/// nothing.
+@needs(Word(W, B), Block128(X, W, B))
+@key(key)
+pub AesGcmKeyG(X, W) aes_gcmg_key_with(Bool hw, Bool clmul, List(B) key) {
+    List(W) rk = if (hw) { aesg_key_expand_hw(key) } else { aesg_key_expand(key) };
+    AesKeyG(X, W) k = aesg_keys_with(rk, hw);
+    X z = x_lift((UInt(128)) 0);
+    X h = if (rk.len() == 0) { z } else { ag_swap(aesg_block(k, z), 0, z) };
+    return AesGcmKeyG {.k = k, .clmul = clmul, .h = h, .ok = rk.len() > 0};
+}
+
+/// The key `key` expanded as aes_gcmg_key_with, on AES-NI and carry-less
+/// multiply when the CPU has them.
+@needs(Word(W, B), Block128(X, W, B))
+@key(key)
+pub AesGcmKeyG(X, W) aes_gcmg_key(List(B) key) {
+    return aes_gcmg_key_with(resid_cpu_has_aesni(), resid_cpu_has_clmul(), key);
+}
+
+/// AES-GCM encryption under an expanded key: ciphertext || tag in B, or
+/// empty for a key that was not valid or an empty IV. The associated data
+/// is packed public bytes. Same output as aes_gcmg_seal.
+@needs(Word(W, B), Block128(X, W, B))
+@nonce(iv)
+pub List(B) aes_gcmg_seal_k(AesGcmKeyG(X, W) gk, List(Int) iv, List(B) plaintext, List(UInt(8)) aad) {
+    List(B) none = [];
+    if (!gk.ok || iv.len() == 0) { return none; }
+    return ag_seal_g(ag_gcm_h(gk.k, gk.clmul, gk.h, iv), plaintext, bytes_int(aad));
+}
+
+/// AES-GCM decryption under an expanded key of packed ciphertext || tag:
+/// the plaintext in B when the tag verifies (compared in constant time),
+/// None otherwise, or for a key that was not valid, an empty IV or an input
+/// shorter than a tag. The associated data is packed public bytes.
+@needs(Word(W, B), Block128(X, W, B), CtSame(B))
+pub Option(List(B)) aes_gcmg_decrypt_k(AesGcmKeyG(X, W) gk, List(Int) iv, List(UInt(8)) ct_and_tag, List(UInt(8)) aad) {
+    Int clen = ct_and_tag.len() - 16;
+    if (!gk.ok || iv.len() == 0 || clen < 0) { return None; }
+    return ag_open_b(ag_gcm_h(gk.k, gk.clmul, gk.h, iv), w_lift_u8(ct_and_tag), clen, bytes_int(aad));
 }
 
 // ── GCM with a 96-bit IV in B ───────────────────────────────────────
