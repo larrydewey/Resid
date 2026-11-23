@@ -342,13 +342,14 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/large_carry.resid -o "$W/large_c
 else
     fail=$((fail + 1)); echo "FAIL large objects carried through a loop: $(tail -1 "$W/large_carry.out" "$W/large_carry.log" 2>/dev/null | tr '\n' ' ')"
 fi
-# Loop regions for lists of sums and of 64-bit integers (lower.resid,
-# lr_move): six loops of two million steps whose carried state holds them
-# each keep a few hundred bytes live. Measured: under 20 MB with regions;
-# the compiler that gave these loops none (v0.13.0) needed 3.1 GB.
+# Loop regions for lists of sums, of 64-bit integers and of lists, and for
+# a loop returning a Result (lower.resid, lr_move and lr_region_ok): eight
+# loops of two million steps whose carried state holds them each keep a few
+# hundred bytes live. Measured: under 20 MB with regions; the compiler that
+# gave these loops none (v0.13.0) needed over 4 GB.
 if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/loop_shapes.resid -o "$W/loop_shapes") > "$W/loop_shapes.log" 2>&1 \
     && RESID_MEM_LIMIT=64 timeout 120 "$W/loop_shapes" > "$W/loop_shapes.out" 2>&1 \
-    && [ "$(tr '\n' ' ' < "$W/loop_shapes.out")" = "2000015 7999993 6 2000001 4 3999998 " ]; then
+    && [ "$(tr '\n' ' ' < "$W/loop_shapes.out")" = "2000015 7999993 6 2000001 4 3999998 3999998 5 " ]; then
     pass=$((pass + 1))
 else
     fail=$((fail + 1)); echo "FAIL loop regions for lists of sums and 64-bit integers: $(tail -1 "$W/loop_shapes.out" "$W/loop_shapes.log" 2>/dev/null | tr '\n' ' ')"

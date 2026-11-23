@@ -1,5 +1,6 @@
 // Loops whose carried state holds a list of sums or a list of 64-bit
-// integers (a big number's limbs), alone or inside records, sums and lists.
+// integers (a big number's limbs), alone or inside records, sums and lists,
+// and one that returns a Result while it carries such a list.
 // Each step drops most of what it carried and keeps some of it, so the
 // live data is a few hundred bytes, and what is kept has been moved by
 // many compactions before it is read at the end. With a region each loop
@@ -56,6 +57,19 @@ Int loop_seats(Int i, Int n, UInt(64) c, List(Seat) ss) {
     return loop_seats(i + 1, n, c + 1, [ss[1], Seat {.id = i, .st = st, .out = [ss[1].out[1], msg_of(i)]}]);
 }
 
+// A list of lists of sums.
+Int loop_lists(Int i, Int n, List(List(Msg)) ls) {
+    if (i >= n) { return msg_val(ls[1][0]) + msg_val(ls[0][1]) + ls.len(); }
+    return loop_lists(i + 1, n, [ls[1], [ls[1][1], MA(i)]]);
+}
+
+// A loop that returns a Result and carries limbs (a protocol round).
+Result(List(UInt(64)), Int) loop_result(Int i, Int n, UInt(64) c, List(UInt(64)) xs) {
+    if (i >= n) { return Ok(xs); }
+    if (xs.len() != 4) { return Err(i); }
+    return loop_result(i + 1, n, c + 1, [xs[1], xs[2], xs[3], top() - c]);
+}
+
 Int main() {
     Int n = 2000000;
     println(f"{loop_msgs(0, n, [MC, MC, MC, MC])}");
@@ -64,5 +78,8 @@ Int main() {
     println(f"{loop_offs(0, n, 0, [Off {.id = 0, .share = [1, 2]}, Off {.id = 0, .share = [1, 2]}])}");
     println(f"{loop_rows(0, n, 0, [[1, 2], [1, 2]])}");
     println(f"{loop_seats(0, n, 0, [Seat {.id = 0, .st = S2(0), .out = [MC, MC]}, Seat {.id = 0, .st = S2(0), .out = [MC, MC]}])}");
+    println(f"{loop_lists(0, n, [[MC, MC], [MC, MC]])}");
+    Int r = match (loop_result(0, n, 0, [1, 2, 3, 4])) { Ok(xs) => yes(xs[3] == top() - 1999999) + xs.len(), Err(e) => 0 - 1 };
+    println(f"{r}");
     return 0;
 }

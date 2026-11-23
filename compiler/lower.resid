@@ -5474,7 +5474,11 @@ Bool lr_region_ok(LW w, Int d, List(Str) ls, List(Str) tyl, Str rev) {
     // stack), would pay the region on every short call for no garbage.
     Bool newc = lr_new_changing(w.fs, ls, h + 1, tyl);
     Bool newr = lr_new_kind(w.fs, lw_text(w, lw_kid(w, d, 0)), []);
-    if ((newr && !newc) || (newc && lr_calls_self(ls, 0, "@" + w.g.ns[d].text + "("))) { return false; }
+    // A loop that returns one while it carries any heap value that changes
+    // is an accumulating loop, not a short call: its steps make garbage
+    // (a protocol round returning a Result kept every step's otherwise).
+    Bool carr = newc || (newr && lr_ptr_changing(ls, h + 1));
+    if ((newr && !carr) || (carr && lr_calls_self(ls, 0, "@" + w.g.ns[d].text + "("))) { return false; }
     return lr_phis_ok(ls, h + 1, lr_evac_tys(w.fs, tyl, 0, [])) && lr_exits_ok(ls, h + 1, rev != "") && lr_allocates(w, ls, h + 1);
 }
 
@@ -5487,6 +5491,15 @@ Bool lr_new_changing(Funcs fs, List(Str) ls, Int i, List(Str) tyl) {
     Int j = str_parse_int(str_slice(reg, 2, str_len(reg)));
     Bool hit = str_contains(l, " = phi ptr ") && j >= 0 && j < tyl.len() && !lr_same_in(str_split(l, "[ "), 2, reg) && lr_new_kind(fs, tyl[j], []);
     return hit || lr_new_changing(fs, ls, i + 1, tyl);
+}
+
+// A loop parameter held by pointer that some back edge changes.
+Bool lr_ptr_changing(List(Str) ls, Int i) {
+    if (i >= ls.len() || !str_contains(ls[i], " = phi ")) { return false; }
+    Str l = ls[i];
+    Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
+    Bool hit = str_contains(l, " = phi ptr ") && !lr_same_in(str_split(l, "[ "), 2, reg);
+    return hit || lr_ptr_changing(ls, i + 1);
 }
 
 // A call of the function itself left in its body (not the tail call).
@@ -7233,8 +7246,20 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
         // A list of sums: each element is a box (or a constant, which lies
         // in no region), moved by its sum's own mover.
         if (lr_is_sum(fs, et) && lr_sum_ok(fs, et, seen)) { return "@resid_mv_list_f(ptr %V, ptr @" + lr_sum_fn(et) + ", ptr %C)"; }
+        // A list of any other lists that move: each element by a small
+        // function that calls its list's move (lr_list_def, emitted with
+        // the sum movers and named as one).
+        if (str_has_prefix(et, "List(") && !is_list_fixed(et) && !seen.contains(et)) {
+            Str em = lr_move(fs, et, seen.concat([et]));
+            if (em != "" && em != "-") { return "@resid_mv_list_f(ptr %V, ptr @" + lr_sum_fn(et) + ", ptr %C)"; }
+        }
     }
     return "";
+}
+
+// The element mover of a list of lists of type t (a List): t's own move.
+List(Str) lr_list_def(Funcs fs, Str t) {
+    return ["define internal ptr @" + lr_sum_fn(t) + "(ptr %v, ptr %u) {", "entry:", "%r = call ptr " + lr_call(lr_move(fs, t, []), "%v", "%u"), "ret ptr %r", "}"];
 }
 
 // A list of integers of 33 to 64 bits (UInt(64), a big number's limbs):
@@ -7414,7 +7439,7 @@ Map(Str, Int) lr_set_add(Map(Str, Int) s, List(Str) xs, Int i) {
 
 List(Str) lr_sum_defs(Funcs fs, List(Str) ts, Int i, List(Str) acc) {
     if (i >= ts.len()) { return acc; }
-    return lr_sum_defs(fs, ts, i + 1, acc.concat(lr_sum_def(fs, ts[i])));
+    return lr_sum_defs(fs, ts, i + 1, acc.concat(if (str_has_prefix(ts[i], "List(")) { lr_list_def(fs, ts[i]) } else { lr_sum_def(fs, ts[i]) }));
 }
 
 // Every `@"resid.sum.evac.T"` in the lines: its T.
