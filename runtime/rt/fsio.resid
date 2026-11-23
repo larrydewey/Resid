@@ -1,0 +1,155 @@
+// Files in pieces (the filesystem provider's create, create_new,
+// write_handle, read_some, read_at, size and is_open), on the File boxes
+// of sys.resid. Kept in a file of its own, imported last, so the runtime
+// IR of every program that does not use them stays byte-identical.
+
+// sys.resid's helpers stay private to it (making them pub renames them in
+// every program's runtime IR), so the few this file needs are copied with
+// an fio_ prefix; fio_take is sys.resid's handle_take, the same box rules.
+Bool fio_path_ok(Int p) { return p != 0 && ld8(p) != 0; }
+Int fio_stat() { return resid_raw_tls("fio_stat", 144); }
+Bool fio_reg(Int mode) { return (mode & 61440) == 32768; }
+Int fio_b8(Bool b) { return if (b) { 1 } else { 0 }; }
+Int fio_empty() { return bl_from_bytes(0, 0); }
+Int fio_tag() { return 12; }   // sys.resid's file_tag
+
+Int fio_fd(Int h) {
+    if (h == 0 || ld32(h) != fio_tag() || ld32(h + 4) < 1) { return 0 - 1; }
+    return ld64(h + 16);
+}
+
+// The handle's fd, swapped atomically for `mark` (-1 closed, -2 held by a
+// call); -1 once closed. A slot held by a call is waited for, sleeping.
+Int fio_take(Int h, Int mark) {
+    Int fd = fio_fd(h);
+    if (fd == 0 - 2) {
+        Int ts = resid_raw_tls("fio_ts", 16);
+        _ = st64(ts, 0) + st64(ts + 8, 1000000);
+        _ = resid_raw_syscall(35, ts, 0, 0, 0, 0, 0);   // nanosleep 1 ms
+        return fio_take(h, mark);
+    }
+    if (fd < 0) { return 0 - 1; }
+    if (resid_raw_cas(h + 16, fd, mark)) { return fd; }
+    return fio_take(h, mark);
+}
+
+// The low bytes of a List(Int) as a heap buffer of n bytes.
+Int fio_list_bytes(Int l, Int n) {
+    Int buf = xmalloc(max(n, 1));
+    return bytes_range(l, 0, buf, n) * 0 + buf;
+}
+
+// create and create_new give a File open for writing (close-on-exec,
+// mode 0666 less the umask, as write_bytes), open one for reading: the
+// same box, closed by close or at the end of a `with`. A File whose open
+// failed holds -1 (is_open says so) and every verb on it fails.
+
+// The box open() makes for a path it cannot open (no open is tried for
+// a null path), given fd: made by sys.resid itself, so its type name is
+// that file's one constant ("File" again here would rename it in the
+// runtime IR of every program that opens a file).
+Int fs_handle(Int fd) {
+    Int h = rt_fs_open(0);
+    return st64(h + 16, if (fd < 0) { 0 - 1 } else { fd }) * 0 + h;
+}
+
+// O_WRONLY | O_CREAT | O_TRUNC, as write_bytes opens (sys.resid's o_write).
+Int o_trunc_w() { return 524288 | 1 | 64 | 512; }
+
+// O_WRONLY | O_CREAT | O_EXCL: never an existing file, nor a symbolic link
+// (even a dangling one), at the last component.
+Int o_create_new() { return 524288 | 1 | 64 | 128; }
+
+// Created, or an existing file truncated (a symbolic link is followed, as
+// write_bytes does).
+@export("resid_fs_create", "ptr(ptr)")
+pub Int rt_fs_create(Int path) { return fs_handle(if (fio_path_ok(path)) { sys_open(path, o_trunc_w(), 438) } else { 0 - 1 }); }
+
+// Created only when nothing is at the path (EEXIST otherwise).
+@export("resid_fs_create_new", "ptr(ptr)")
+pub Int rt_fs_create_new(Int path) { return fs_handle(if (fio_path_ok(path)) { sys_open(path, o_create_new(), 438) } else { 0 - 1 }); }
+
+// The handle holds an open file (held by a read in another thread counts).
+@export("resid_fs_is_open", "i8(ptr)")
+pub Int rt_fs_is_open(Int h) {
+    Int fd = fio_fd(h);
+    return fio_b8(fd >= 0 || fd == 0 - 2);
+}
+
+// The file's size in bytes, -1 when the handle is closed or the file is
+// not a regular file.
+@export("resid_fs_size", "i64(ptr)")
+pub Int rt_fs_size(Int h) {
+    Int fd = fio_take(h, 0 - 2);
+    if (fd < 0) { return 0 - 1; }
+    Int b = fio_stat();
+    Int sz = if (sc(5, fd, b, 0) == 0 && fio_reg(ld32(b + st_mode_at()))) { ld64(b + 48) } else { 0 - 1 };
+    return st64(h + 16, fd) * 0 + sz;
+}
+
+// All of the bytes (a List(Int)'s low bytes, or a packed List(UInt(8))
+// written from its own buffer) at the handle's offset; false on any
+// failure, a handle not open for writing included.
+@export("resid_fs_write_handle", "i8(ptr,ptr)")
+pub Int rt_fs_write_handle(Int h, Int l) {
+    Int fd = fio_take(h, 0 - 2);
+    if (fd < 0) { return 0; }
+    Int n = c_list_len(l);
+    Bool direct = n > 0 && lbytes(l) && lroot(l) != 0;
+    Bool ok = if (direct) { write_all(fd, lroot(l) + 24, n) } else { write_list(fd, l, n) };
+    return st64(h + 16, fd) * 0 + fio_b8(ok);
+}
+
+Bool write_list(Int fd, Int l, Int n) {
+    if (n <= 0) { return true; }
+    Int buf = fio_list_bytes(l, n);
+    Bool ok = write_all(fd, buf, n);
+    _ = c_free(buf);
+    return ok;
+}
+
+// The next n bytes from the handle's offset, which moves past them.
+@export("resid_fs_read_some", "ptr(ptr,i64)")
+pub Int rt_fs_read_some(Int h, Int n) { return read_piece(h, 0 - 1, n); }
+
+// n bytes at offset `at`; the handle's offset does not move.
+@export("resid_fs_read_at", "ptr(ptr,i64,i64)")
+pub Int rt_fs_read_at(Int h, Int at, Int n) { return if (at < 0) { fio_empty() } else { read_piece(h, at, n) }; }
+
+// Up to n bytes as a byte list, fewer only at the end of the file: read
+// sequentially when at < 0, else at offset `at` (pread). The buffer is
+// the list's own, sized by what is left of a regular file (64 KiB a call
+// for anything else, or a file that reports no size, as /proc does). A
+// read that fails closes the handle, after the bytes read before it: an
+// empty piece from a handle still open is the end of the file.
+Int read_piece(Int h, Int at, Int n) {
+    if (n <= 0) { return fio_empty(); }
+    Int fd = fio_take(h, 0 - 2);
+    if (fd < 0) { return fio_empty(); }
+    // A handle open for writing only cannot read: a failed read, at once.
+    Int fl = sc(72, fd, 3, 0);   // fcntl(F_GETFL)
+    if (fl < 0 || (fl & 3) == 1) { return sys_close(fd) * 0 + st64(h + 16, 0 - 1) * 0 + fio_empty(); }
+    Int b = fio_stat();
+    Bool reg = sc(5, fd, b, 0) == 0 && fio_reg(ld32(b + st_mode_at()));
+    Int sz = if (reg) { ld64(b + 48) } else { 0 };
+    Int pos = if (at >= 0) { at } else { sc(8, fd, 0, 1) };   // lseek(fd, 0, SEEK_CUR)
+    Int want = if (sz > 0 && pos >= 0) { min(n, max(sz - pos, 0)) } else { min(n, 65536) };
+    if (want <= 0) { return st64(h + 16, fd) * 0 + fio_empty(); }
+    Int f = bl_flat_new(want);
+    Int r = read_upto(fd, f + 24, 0, want, at);
+    Int got = if (r < 0) { 0 - r - 1 } else { r };
+    _ = if (r < 0) { sys_close(fd) * 0 + st64(h + 16, 0 - 1) } else { st64(h + 16, fd) };
+    if (got <= 0) { return fio_empty(); }
+    _ = st64(f, got) + st64(f + 16, got);
+    return bl_hdr(got, 0 - 1, f, 4);
+}
+
+// Bytes read into p until want or the end of the file; -(got + 1) when a
+// read fails.
+Int read_upto(Int fd, Int p, Int got, Int want, Int at) {
+    if (got >= want) { return got; }
+    Int r = if (at >= 0) { sc4(17, fd, p + got, want - got, at + got) } else { sc(0, fd, p + got, want - got) };   // pread64, read
+    if (r == 0) { return got; }
+    if (r < 0) { return 0 - got - 1; }
+    return read_upto(fd, p, got + r, want, at);
+}

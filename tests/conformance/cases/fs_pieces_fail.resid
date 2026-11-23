@@ -1,0 +1,31 @@
+// Failures through a File: a write that fails says so (Bool), and a read
+// that fails closes the handle, so an empty piece from a handle still
+// open is the end of the file and one from a closed handle is an error.
+import "word.resid";
+
+@requires(filesystem)
+Int main() {
+    // /dev/full: opening works, every write fails (ENOSPC).
+    File full = filesystem.create("/dev/full");
+    println(f"/dev/full: open {filesystem.is_open(full)} write {filesystem.write_handle(full, bytes_u8([1, 2, 3]))} wide {filesystem.write_handle(full, [1])} still open {filesystem.is_open(full)} close {filesystem.close(full)}");
+
+    // A handle opened for reading takes no writes.
+    File r = filesystem.open("@TMP@/in.txt");
+    println(f"write to a read handle: {filesystem.write_handle(r, [65])} file [{filesystem.read_all("@TMP@/in.txt")}] open {filesystem.is_open(r)} {filesystem.close(r)}");
+
+    // A handle opened for writing gives no reads: the failed read closes it.
+    File w = filesystem.create("@TMP@/w.bin");
+    Bool wrote = filesystem.write_handle(w, [1, 2, 3]);
+    println(f"read a write handle: {filesystem.read_some(w, 4).len()} open {filesystem.is_open(w)} write now {filesystem.write_handle(w, [4])} close {filesystem.close(w)} file {filesystem.read_bytes("@TMP@/w.bin")}");
+
+    // A directory opens for reading, but reading it fails.
+    File d = filesystem.open("@TMP@");
+    println(f"directory: open {filesystem.is_open(d)} read {filesystem.read_some(d, 4).len()} open {filesystem.is_open(d)}");
+    File d2 = filesystem.open("@TMP@");
+    println(f"directory at 0: {filesystem.read_at(d2, 0, 4).len()} open {filesystem.is_open(d2)} size {filesystem.size(d2)}");
+
+    // A missing file: never open.
+    File m = filesystem.open("@TMP@/missing");
+    println(f"missing: open {filesystem.is_open(m)} read {filesystem.read_some(m, 4).len()} size {filesystem.size(m)} close {filesystem.close(m)}");
+    return 0;
+}

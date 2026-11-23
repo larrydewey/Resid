@@ -1,0 +1,7 @@
+/dev/full: open true write false wide false still open true close true
+write to a read handle: false file [hi
+] open true true
+read a write handle: 0 open false write now false close false file [1, 2, 3]
+directory: open true read 0 open false
+directory at 0: 0 open false size -1
+missing: open false read 0 size -1 close false

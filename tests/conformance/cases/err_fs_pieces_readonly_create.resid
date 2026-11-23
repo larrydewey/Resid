@@ -1,0 +1,6 @@
+// create_new is a write even before anything is written.
+@requires(filesystem(readonly))
+Int main() {
+    File f = filesystem.create_new("/tmp/resid_err_fs_pieces_ro");
+    return 0;
+}
