@@ -3401,8 +3401,10 @@ wrap) is generic over Word(W, B) and Block128(X, W, B),
 records and parameters; round keys are a list of 32-bit
 words); lib/aesgcm.resid is its public copy. The AES-NI
 rounds and the carry-less multiply (aesni_enc_round,
-aesni_enc_last_round, gf128_mul_hw) take secrets, as they run
-in constant time, and keep the result secret. GCM open and
+aesni_enc_last_round, gf128_mul_hw, and gf128_mul4_hw, four
+products summed under one reduction for GHASH over four blocks)
+take secrets, as they run in constant time, and keep the result
+secret. GCM open and
 key unwrap publish one bit each through CtSame(B).
 ct_hide(x) on a secret x keeps it secret, and so does a cast to
 an integer type that holds every value of x (the same or a

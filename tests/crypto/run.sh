@@ -172,7 +172,11 @@ fi
 
 # SHA-3 / SHAKE (lib/keccakg.resid) against hashlib, and ML-KEM-768
 # (lib/mlkem.resid) against OpenSSL through cryptography (gen_sha3_mlkem.py).
-for t in sha3 mlkem; do
+# AES-GCM and ChaCha20-Poly1305 against cryptography and RFC 8439 appendix
+# A at both types, both paths and the packed entry points
+# (tools/gen_aead_ref.py), and against their v0.13.0 implementations on
+# random inputs (aead_cmp_test.resid, tests/crypto/aead_ref/).
+for t in sha3 mlkem aead aead_cmp; do
     if (cd "$ROOT" && "$COMPILER" test tests/crypto/${t}_test.resid) > "$W/$t.log" 2>&1 && grep -q "Failures: 0 " "$W/$t.log"; then
         pass=$((pass + 1))
     else

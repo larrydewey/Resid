@@ -617,9 +617,24 @@ Int b16_be8_raw(Int s) {
          | ((ld64(s + 32) & 255) << 24) | ((ld64(s + 40) & 255) << 16) | ((ld64(s + 48) & 255) << 8) | (ld64(s + 56) & 255);
 }
 
-// Bytes p..p + 16 of l as a 128-bit word, big-endian (a GHASH block).
+// Whether bytes p..p + 16 of the byte list l are in range.
+Bool b16_in(Int l, Int p) { return p >= 0 && p <= lcount(l) - 16; }
+
+// Bytes p..p + 16 of l as a 128-bit word, big-endian (a GHASH block). A
+// byte list's bytes in range inline into the caller (two loads); anything
+// else takes b16_be16_slow.
 @export("resid_bytes_be16", "i128(ptr,i64)")
+@inline
 pub UInt(128) rt_bytes_be16(Int l, Int p) {
+    if (lbytes(l) && b16_in(l, p)) {
+        Int q = lroot(l) + 24 + p;
+        return ((UInt(128)) wrapping_u64(bl_be8(q)) << (UInt(128)) 64) | (UInt(128)) wrapping_u64(bl_be8(q + 8));
+    }
+    return b16_be16_slow(l, p);
+}
+
+@noinline
+UInt(128) b16_be16_slow(Int l, Int p) {
     _ = b16_check(l, p);
     if (lbytes(l)) {
         Int q = lroot(l) + 24 + p;
@@ -635,8 +650,25 @@ pub UInt(128) rt_bytes_be16(Int l, Int p) {
 // Builder b with bytes p..p + 16 of l pushed, byte i XORed with bits
 // 8i..8i + 7 of ks (a CTR keystream block): room for all 16 made once,
 // then the slots written.
+// A byte builder with room for 16 more and a byte list's bytes in range
+// inline into the caller (two loads, two stores); anything else takes
+// b16_xor16_slow.
 @export("resid_bytes_xor16", "ptr(ptr,ptr,i64,i128)")
+@inline
 pub Int rt_bytes_xor16(Int b, Int l, Int p, UInt(128) ks) {
+    Int n = lcount(b);
+    Int f = lroot(b);
+    if (lbytes(b) && lbytes(l) && b16_in(l, p) && f != 0 && n + 16 <= ld64(f + 8)) {
+        Int s = lroot(l) + 24 + p;
+        _ = st64(f + 24 + n, ld64(s) ^ wrapping_i64(ks)) + st64(f + 32 + n, ld64(s + 8) ^ wrapping_i64(ks >> (UInt(128)) 64));
+        _ = st64(b, n + 16);
+        return st64(f, n + 16) * 0 + b;
+    }
+    return b16_xor16_slow(b, l, p, ks);
+}
+
+@noinline
+Int b16_xor16_slow(Int b, Int l, Int p, UInt(128) ks) {
     _ = b16_check(l, p);
     if (lbytes(b)) { return bl_xor16(b, l, p, wrapping_i64(ks), wrapping_i64(ks >> (UInt(128)) 64)); }
     Int n = lcount(b);

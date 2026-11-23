@@ -25,6 +25,13 @@
 // computes the S-box (the GF(2^8) inverse as x^254, then the affine map)
 // on four bytes at once, so no table is indexed by a secret. GHASH in
 // software multiplies with masks, not branches.
+//
+// On AES-NI / carry-less multiply, CTR runs four counter blocks a step
+// (four independent AES chains) and GHASH four blocks a step with H^4..H
+// summed under one reduction (x_clmul4); bytes move sixteen at a time
+// (x_be16, x_xor16). Open lifts the received bytes into B once and runs
+// both passes over them; the *_u8 entry points take packed public input
+// (List(UInt(8))) and lift it without a copy.
 
 import "word.resid";
 import "crypto.resid";
@@ -396,6 +403,32 @@ X ag_ghash(Bool clmul, X h, X y, List(B) data, Int off, Int n) {
     return ag_ghash(clmul, h, aesg_gf128(clmul, x_xor(y, blk), h), data, off + 16, n - 16);
 }
 
+// ag_ghash on carry-less multiply, four blocks per step with H^4..H
+// (h4, h3, h2, h): ((((y ^ c0) H ^ c1) H ^ c2) H ^ c3) H is
+// (y ^ c0) H^4 ^ c1 H^3 ^ c2 H^2 ^ c3 H, four independent products summed
+// before a single reduction (x_clmul4, gf128_mul4_hw) instead of a chain
+// of four multiplies each reduced.
+@needs(Word(W, B), Block128(X, W, B))
+X ag_ghash4(X h, X h2, X h3, X h4, X y, List(B) data, Int off, Int n) {
+    if (n < 64) { return ag_ghash(true, h, y, data, off, n); }
+    X c0 = x_be16(data, off);
+    X c1 = x_be16(data, off + 16);
+    X c2 = x_be16(data, off + 32);
+    X c3 = x_be16(data, off + 48);
+    X y2 = x_clmul4(x_xor(y, c0), h4, c1, h3, c2, h2, c3, h);
+    return ag_ghash4(h, h2, h3, h4, y2, data, off + 64, n - 64);
+}
+
+// GHASH over bytes [off, off + n) of data from y, aggregated four blocks
+// at a time when clmul holds.
+@needs(Word(W, B), Block128(X, W, B))
+X ag_ghash_fast(Bool clmul, X h, X y, List(B) data, Int off, Int n) {
+    if (!clmul || n < 64) { return ag_ghash(clmul, h, y, data, off, n); }
+    X h2 = x_clmul(h, h);
+    X h3 = x_clmul(h2, h);
+    return ag_ghash4(h, h2, h3, x_clmul(h3, h), y, data, off, n);
+}
+
 /// GHASH from `y` under hash key `h` over public bytes [`off`, `off` + `n`)
 /// of `data`, zero padded to whole blocks.
 /// For the associated data and a received ciphertext.
@@ -456,21 +489,39 @@ pub UInt(128) aesg_le_pack_pub(List(Int) b, Int i, UInt(128) v) {
 /// CTR keystream XOR over data[pos..], counting from c.
 @needs(Word(W, B), Block128(X, W, B))
 pub ListBuf(B) aesg_ctr(AesKeyG(X, W) k, X head, W c, List(B) data, Int pos, ListBuf(B) out) {
-    if (k.hw) { return ag_ctr_hw(k, head, c, data, pos, out); }
-    if (pos >= data.len()) { return out; }
-    X ks = aesg_block(k, ag_ctr_block(head, c));
-    Int left = data.len() - pos;
-    Int take = if (left < 16) { left } else { 16 };
-    return aesg_ctr(k, head, w_addk(c, 1), data, pos + take, if (take == 16) { ag_ctr16(ks, data, pos, out) } else { ag_ctr_bytes(ks, data, pos, 0, take, out) });
+    return aesg_ctr_n(k, head, c, data, pos, data.len(), out);
 }
 
-// aesg_ctr on AES-NI: whole blocks sixteen bytes at a time, then the tail.
+// aesg_ctr over data[pos..end) only.
 @needs(Word(W, B), Block128(X, W, B))
-ListBuf(B) ag_ctr_hw(AesKeyG(X, W) k, X head, W c, List(B) data, Int pos, ListBuf(B) out) {
-    if (pos >= data.len()) { return out; }
+ListBuf(B) aesg_ctr_n(AesKeyG(X, W) k, X head, W c, List(B) data, Int pos, Int end, ListBuf(B) out) {
+    if (k.hw) { return ag_ctr_hw(k, head, c, data, pos, end, out); }
+    if (pos >= end) { return out; }
+    X ks = aesg_block(k, ag_ctr_block(head, c));
+    Int left = end - pos;
+    Int take = if (left < 16) { left } else { 16 };
+    return aesg_ctr_n(k, head, w_addk(c, 1), data, pos + take, end, if (take == 16) { ag_ctr16(ks, data, pos, out) } else { ag_ctr_bytes(ks, data, pos, 0, take, out) });
+}
+
+// aesg_ctr_n on AES-NI: four counter blocks per pass while 64 bytes are
+// left (four independent AES chains the CPU overlaps), then whole blocks
+// sixteen bytes at a time, then the tail.
+@needs(Word(W, B), Block128(X, W, B))
+ListBuf(B) ag_ctr_hw(AesKeyG(X, W) k, X head, W c, List(B) data, Int pos, Int end, ListBuf(B) out) {
+    if (end - pos >= 64) {
+        X e0 = aesg_block_hw(k, ag_ctr_block(head, c));
+        X e1 = aesg_block_hw(k, ag_ctr_block(head, w_addk(c, 1)));
+        X e2 = aesg_block_hw(k, ag_ctr_block(head, w_addk(c, 2)));
+        X e3 = aesg_block_hw(k, ag_ctr_block(head, w_addk(c, 3)));
+        ListBuf(B) o1 = x_xor16(out, data, pos, e0);
+        ListBuf(B) o2 = x_xor16(o1, data, pos + 16, e1);
+        ListBuf(B) o3 = x_xor16(o2, data, pos + 32, e2);
+        return ag_ctr_hw(k, head, w_addk(c, 4), data, pos + 64, end, x_xor16(o3, data, pos + 48, e3));
+    }
+    if (pos >= end) { return out; }
     X ks = aesg_block_hw(k, ag_ctr_block(head, c));
-    if (data.len() - pos < 16) { return ag_ctr_bytes(ks, data, pos, 0, data.len() - pos, out); }
-    return ag_ctr_hw(k, head, w_addk(c, 1), data, pos + 16, x_xor16(out, data, pos, ks));
+    if (end - pos < 16) { return ag_ctr_bytes(ks, data, pos, 0, end - pos, out); }
+    return ag_ctr_hw(k, head, w_addk(c, 1), data, pos + 16, end, x_xor16(out, data, pos, ks));
 }
 
 // A whole keystream block applied, written out rather than looped.
@@ -478,38 +529,9 @@ ListBuf(B) ag_ctr_hw(AesKeyG(X, W) k, X head, W c, List(B) data, Int pos, ListBu
 ListBuf(B) ag_ctr16(X ks, List(B) d, Int p, ListBuf(B) out) { return x_xor16(out, d, p, ks); }
 
 @needs(Word(W, B), Block128(X, W, B))
-ListBuf(B) ag_ctr16_pub(X ks, List(Int) d, Int p, ListBuf(B) out) { return x_xor16_pub(out, d, p, ks); }
-
-@needs(Word(W, B), Block128(X, W, B))
 ListBuf(B) ag_ctr_bytes(X ks, List(B) data, Int pos, Int i, Int take, ListBuf(B) out) {
     if (i >= take) { return out; }
     return ag_ctr_bytes(ks, data, pos, i + 1, take, out.push(b_xor(data[pos + i], x_byte(ks, 8 * i))));
-}
-
-// ag_ctr_pub on AES-NI.
-@needs(Word(W, B), Block128(X, W, B))
-ListBuf(B) ag_ctr_pub_hw(AesKeyG(X, W) k, X head, W c, List(Int) data, Int pos, Int end, ListBuf(B) out) {
-    if (pos >= end) { return out; }
-    X ks = aesg_block_hw(k, ag_ctr_block(head, c));
-    if (end - pos < 16) { return ag_ctr_pub_bytes(ks, data, pos, 0, end - pos, out); }
-    return ag_ctr_pub_hw(k, head, w_addk(c, 1), data, pos + 16, end, x_xor16_pub(out, data, pos, ks));
-}
-
-// The same over public input (a received ciphertext): the output is B.
-@needs(Word(W, B), Block128(X, W, B))
-ListBuf(B) ag_ctr_pub(AesKeyG(X, W) k, X head, W c, List(Int) data, Int pos, Int end, ListBuf(B) out) {
-    if (k.hw) { return ag_ctr_pub_hw(k, head, c, data, pos, end, out); }
-    if (pos >= end) { return out; }
-    X ks = aesg_block(k, ag_ctr_block(head, c));
-    Int left = end - pos;
-    Int take = if (left < 16) { left } else { 16 };
-    return ag_ctr_pub(k, head, w_addk(c, 1), data, pos + take, end, if (take == 16) { ag_ctr16_pub(ks, data, pos, out) } else { ag_ctr_pub_bytes(ks, data, pos, 0, take, out) });
-}
-
-@needs(Word(W, B), Block128(X, W, B))
-ListBuf(B) ag_ctr_pub_bytes(X ks, List(Int) data, Int pos, Int i, Int take, ListBuf(B) out) {
-    if (i >= take) { return out; }
-    return ag_ctr_pub_bytes(ks, data, pos, i + 1, take, out.push(b_xork(x_byte(ks, 8 * i), data[pos + i])));
 }
 
 // The tag from the GHASH y of the associated data and ciphertext:
@@ -557,7 +579,7 @@ List(B) ag_seal_g(GcmG(X, W) g, List(B) plaintext, List(Int) aad) {
     ListBuf(B) ob = ListBuf();
     List(B) ct = aesg_ctr(g.k, g.j0head, w_addk(g.j0c, 1), plaintext, 0, ob).finish();
     X z = x_lift((UInt(128)) 0);
-    X y = ag_ghash(g.clmul, g.h, aesg_ghash_pub(g.clmul, g.h, z, aad, 0, aad.len()), ct, 0, ct.len());
+    X y = ag_ghash_fast(g.clmul, g.h, aesg_ghash_pub(g.clmul, g.h, z, aad, 0, aad.len()), ct, 0, ct.len());
     return ct.concat(ag_tag(g, y, aad.len(), ct.len()));
 }
 
@@ -583,15 +605,25 @@ pub Option(List(B)) aes_gcmg_decrypt_with(Bool hw, Bool clmul, List(B) key, List
 }
 
 // Open under prepared GCM state; clen is the ciphertext length (>= 0).
+// The received bytes are lifted into B once, so GHASH and CTR both read
+// them sixteen at a time.
 @needs(Word(W, B), Block128(X, W, B), CtSame(B))
 Option(List(B)) ag_open_g(GcmG(X, W) g, List(Int) ct_and_tag, Int clen, List(Int) aad) {
     if (clen > ag_max_len()) { return None; }
+    // Packed first (one tight loop), then into B without a copy at secret
+    // types: a fifth of the cost of lifting byte by byte.
+    return ag_open_b(g, w_lift_u8(bytes_u8(ct_and_tag)), clen, aad);
+}
+
+// ag_open_g over ciphertext || tag already in B.
+@needs(Word(W, B), Block128(X, W, B), CtSame(B))
+Option(List(B)) ag_open_b(GcmG(X, W) g, List(B) ct_and_tag, Int clen, List(Int) aad) {
+    if (clen > ag_max_len()) { return None; }
     X z = x_lift((UInt(128)) 0);
-    X y = aesg_ghash_pub(g.clmul, g.h, aesg_ghash_pub(g.clmul, g.h, z, aad, 0, aad.len()), ct_and_tag, 0, clen);
-    ListBuf(B) tb = ListBuf();
-    if (!ct_same(ag_tag(g, y, aad.len(), clen), w_lift_bytes(ct_and_tag[clen..], 0, tb))) { return None; }
+    X y = ag_ghash_fast(g.clmul, g.h, aesg_ghash_pub(g.clmul, g.h, z, aad, 0, aad.len()), ct_and_tag, 0, clen);
+    if (!ct_same(ag_tag(g, y, aad.len(), clen), ct_and_tag[clen..])) { return None; }
     ListBuf(B) ob = ListBuf();
-    return Some(ag_ctr_pub(g.k, g.j0head, w_addk(g.j0c, 1), ct_and_tag, 0, clen, ob).finish());
+    return Some(aesg_ctr_n(g.k, g.j0head, w_addk(g.j0c, 1), ct_and_tag, 0, clen, ob).finish());
 }
 
 /// AES-GCM decryption as aes_gcmg_decrypt_with, on AES-NI and carry-less
@@ -599,6 +631,43 @@ Option(List(B)) ag_open_g(GcmG(X, W) g, List(Int) ct_and_tag, Int clen, List(Int
 @needs(Word(W, B), Block128(X, W, B), CtSame(B))
 pub Option(List(B)) aes_gcmg_decrypt(List(B) key, List(Int) iv, List(Int) ct_and_tag, List(Int) aad) {
     return aes_gcmg_decrypt_with(resid_cpu_has_aesni(), resid_cpu_has_clmul(), key, iv, ct_and_tag, aad);
+}
+
+// ── Packed public bytes ─────────────────────────────────────────────
+//
+// Entry points whose public input is a List(UInt(8)) (one byte per
+// element, as a socket delivers it), so nothing is converted byte by
+// byte on the way in: at secret types the bytes are lifted into B without
+// a copy (Word's w_lift_u8). The output stays in B; at secret types the
+// caller declassifies a ciphertext to send it.
+
+/// AES-GCM encryption of packed public plaintext bytes: ciphertext || tag
+/// in B, or empty for a bad key or IV; otherwise as aes_gcmg_seal.
+@needs(Word(W, B), Block128(X, W, B))
+@key(key)
+@nonce(iv)
+pub List(B) aes_gcmg_seal_u8(List(B) key, List(Int) iv, List(UInt(8)) plaintext, List(Int) aad) {
+    return aes_gcmg_seal(key, iv, w_lift_u8(plaintext), aad);
+}
+
+/// AES-GCM decryption of packed ciphertext || tag: the plaintext in B when
+/// the tag verifies (compared in constant time), None otherwise, or for a
+/// bad key, an empty IV or an input shorter than a tag. hw and clmul
+/// choose AES-NI and carry-less multiply, as in aes_gcmg_decrypt_with.
+@needs(Word(W, B), Block128(X, W, B), CtSame(B))
+pub Option(List(B)) aes_gcmg_decrypt_u8_with(Bool hw, Bool clmul, List(B) key, List(Int) iv, List(UInt(8)) ct_and_tag, List(Int) aad) {
+    List(W) rk = if (hw) { aesg_key_expand_hw(key) } else { aesg_key_expand(key) };
+    Int clen = ct_and_tag.len() - 16;
+    if (rk.len() == 0 || iv.len() == 0 || clen < 0) { return None; }
+    return ag_open_b(ag_gcm(aesg_keys_with(rk, hw), clmul, iv), w_lift_u8(ct_and_tag), clen, aad);
+}
+
+/// AES-GCM decryption of packed ciphertext || tag as
+/// aes_gcmg_decrypt_u8_with, on AES-NI and carry-less multiply when the
+/// CPU has them.
+@needs(Word(W, B), Block128(X, W, B), CtSame(B))
+pub Option(List(B)) aes_gcmg_decrypt_u8(List(B) key, List(Int) iv, List(UInt(8)) ct_and_tag, List(Int) aad) {
+    return aes_gcmg_decrypt_u8_with(resid_cpu_has_aesni(), resid_cpu_has_clmul(), key, iv, ct_and_tag, aad);
 }
 
 // ── GCM with a 96-bit IV in B ───────────────────────────────────────

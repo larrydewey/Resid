@@ -111,7 +111,15 @@ Int run_one(List(Str) g, List(Str) t) {
         Bool opened = match pt { Some(p) => ct_equal(p, unhex(t[6])), None => false };
         // Sealing must give the same bytes whenever opening accepts.
         Bool sealed = ct_equal(aes_gcm_seal(key, iv, unhex(t[6]), aad), ctt);
-        if (opened != sealed) { return 0 - 2; }
+        // The secret copy, on AES-NI / carry-less multiply and in software,
+        // and the packed entry point must agree with the public one.
+        List(Secret(UInt(8))) skey = secret_bytes(key);
+        List(Secret(UInt(8))) want = secret_bytes(unhex(t[6]));
+        Bool hw = resid_cpu_has_aesni();
+        Bool cl = resid_cpu_has_clmul();
+        Bool shw = match aes_gcmg_decrypt_u8_with(hw, cl, skey, iv, bytes_u8(ctt), aad) { Some(p) => ct_same(p, want), None => false };
+        Bool ssw = match aes_gcmg_decrypt_with(false, false, skey, iv, ctt, aad) { Some(p) => ct_same(p, want), None => false };
+        if (opened != sealed || opened != shw || opened != ssw) { return 0 - 2; }
         return if (opened) { 1 } else { 0 };
     }
     if (kind == "kw") {
@@ -131,7 +139,11 @@ Int run_one(List(Str) g, List(Str) t) {
         List(Int) ctt = unhex(t[7]).concat(unhex(t[8]));
         Bool opened = chacha20poly1305_open(key, iv, ctt, aad) && ct_equal(chacha20poly1305_open_bytes(key, iv, ctt, aad), unhex(t[6]));
         Bool sealed = ct_equal(chacha20poly1305_seal(key, iv, unhex(t[6]), aad), ctt);
-        if (opened != sealed) { return 0 - 2; }
+        // The secret copy, through the Int and the packed entry points.
+        List(Secret(UInt(8))) want = secret_bytes(unhex(t[6]));
+        Bool sopened = match chacha20poly1305g_decrypt(secret_bytes(key), iv, ctt, aad) { Some(p) => ct_same(p, want), None => false };
+        Bool popened = match chacha20poly1305g_decrypt_u8(secret_bytes(key), iv, bytes_u8(ctt), aad) { Some(p) => ct_same(p, want), None => false };
+        if (opened != sealed || opened != sopened || opened != popened) { return 0 - 2; }
         return if (opened) { 1 } else { 0 };
     }
     if (kind == "cbc") {

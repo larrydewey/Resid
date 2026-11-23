@@ -1,0 +1,146 @@
+// The AEADs against their v0.13.0 implementations (tests/crypto/aead_ref/,
+// every name prefixed ref_) on random inputs: AES-GCM over random key
+// sizes, IV lengths, plaintext and associated-data lengths, on the
+// AES-NI / carry-less multiply path (where the CPU has them) and in
+// software, at public and secret types; ChaCha20-Poly1305, ChaCha20 and
+// Poly1305 likewise, with Poly1305 also on keys and messages of all-ones
+// bytes, where the limb carries are longest. The generator is a fixed
+// xorshift, so a failure reproduces.
+
+import "../../lib/aesgcmg.resid";
+import "../../lib/chachag.resid";
+import "../../lib/word.resid";
+import "../../lib/crypto.resid";
+import "aead_ref/aesgcmg_v013.resid";
+import "aead_ref/chachag_v013.resid";
+
+// xorshift64; the state is never 0.
+Int rnd_next(Int s) {
+    Int a = s ^ (s << 13);
+    Int b = a ^ ((a >> 7) & 144115188075855871);
+    return b ^ (b << 17);
+}
+
+type Rnd = { Int s; List(Int) bytes; };
+
+Rnd rnd_bytes(Int s, Int n, ListBuf(Int) acc) {
+    if (n <= 0) { return Rnd {.s = s, .bytes = acc.finish()}; }
+    Int t = rnd_next(s);
+    return rnd_bytes(t, n - 1, acc.push((t >> 11) & 255));
+}
+
+Int rnd_below(Int s, Int n) { return ((s >> 17) & 1073741823) % n; }
+
+@requires(declassify)
+List(Int) opened(List(Secret(UInt(8))) b) { return bytes_int(declassify(secret_join(b), "test compares implementations")); }
+
+Str ohex(Option(List(Int)) o) { return match o { Some(p) => hex_encode(p), None => "none" }; }
+
+@requires(declassify)
+Str sohex(Option(List(Secret(UInt(8)))) o) { return match o { Some(p) => hex_encode(opened(p)), None => "none" }; }
+
+List(Int) flip(List(Int) b, Int i) { return b[0..i].concat([b[i] ^ 1]).concat(b[i + 1..]); }
+
+// A plaintext length: mostly short, sometimes a few blocks of 64 and more.
+Int pick_len(Int s) {
+    Int r = rnd_below(s, 100);
+    return if (r < 70) { rnd_below(rnd_next(s), 200) } else if (r < 95) { 64 * rnd_below(rnd_next(s), 20) + rnd_below(rnd_next(rnd_next(s)), 3) } else { 1000 + rnd_below(rnd_next(s), 4000) };
+}
+
+// n random GCM cases from s: "" when every one agrees, else the first case that does not.
+@requires(declassify)
+Str gcm_cases(Int s, Int n, Int i) {
+    if (i >= n) { return ""; }
+    Int ksz = 16 + 8 * rnd_below(s, 3);
+    Int s1 = rnd_next(s);
+    Int ivlen = if (rnd_below(s1, 4) == 0) { 1 + rnd_below(rnd_next(s1), 40) } else { 12 };
+    Rnd k = rnd_bytes(rnd_next(s1), ksz, ListBuf());
+    Rnd iv = rnd_bytes(k.s, ivlen, ListBuf());
+    Rnd pt = rnd_bytes(iv.s, pick_len(iv.s), ListBuf());
+    Rnd aad = rnd_bytes(pt.s, rnd_below(pt.s, 41), ListBuf());
+    Bool hw = resid_cpu_has_aesni();
+    Bool cl = resid_cpu_has_clmul();
+    Bool sw = rnd_below(aad.s, 2) == 0;
+    List(Int) want = ref_aes_gcmg_seal_with(false, false, k.bytes, iv.bytes, pt.bytes, aad.bytes);
+    List(Secret(UInt(8))) sk = secret_bytes(k.bytes);
+    List(Int) got = aes_gcmg_seal_with(hw && !sw, cl && !sw, k.bytes, iv.bytes, pt.bytes, aad.bytes);
+    List(Int) sgot = opened(aes_gcmg_seal_with(hw, cl, sk, iv.bytes, secret_bytes(pt.bytes), aad.bytes));
+    List(Int) ssw = opened(aes_gcmg_seal_with(false, false, sk, iv.bytes, secret_bytes(pt.bytes), aad.bytes));
+    Bool sealed = hex_encode(got) == hex_encode(want) && hex_encode(sgot) == hex_encode(want) && hex_encode(ssw) == hex_encode(want);
+    Str p = hex_encode(pt.bytes);
+    Bool open = ohex(aes_gcmg_decrypt_with(hw, cl, k.bytes, iv.bytes, want, aad.bytes)) == p
+        && sohex(aes_gcmg_decrypt_with(false, false, sk, iv.bytes, want, aad.bytes)) == p
+        && sohex(aes_gcmg_decrypt_u8_with(hw, cl, sk, iv.bytes, bytes_u8(want), aad.bytes)) == p;
+    List(Int) bad = flip(want, rnd_below(rnd_next(aad.s), want.len()));
+    Bool refused = sohex(aes_gcmg_decrypt_u8(sk, iv.bytes, bytes_u8(bad), aad.bytes)) == "none"
+        && ohex(ref_aes_gcmg_decrypt_with(false, false, k.bytes, iv.bytes, bad, aad.bytes)) == "none"
+        && sohex(aes_gcmg_decrypt_with(false, false, sk, iv.bytes, bad, aad.bytes)) == "none";
+    if (!(sealed && open && refused)) { return f"case {i}: key {ksz} iv {ivlen} pt {pt.bytes.len()} aad {aad.bytes.len()} sealed {sealed} open {open} refused {refused}"; }
+    return gcm_cases(rnd_next(rnd_next(aad.s)), n, i + 1);
+}
+
+@requires(declassify)
+Str cc_cases(Int s, Int n, Int i) {
+    if (i >= n) { return ""; }
+    Rnd k = rnd_bytes(s, 32, ListBuf());
+    Rnd nonce = rnd_bytes(k.s, 12, ListBuf());
+    Rnd pt = rnd_bytes(nonce.s, pick_len(nonce.s), ListBuf());
+    Rnd aad = rnd_bytes(pt.s, rnd_below(pt.s, 41), ListBuf());
+    Int ctr = rnd_below(aad.s, 4294967296);
+    List(Secret(UInt(8))) sk = secret_bytes(k.bytes);
+    List(Int) want = ref_chacha20poly1305g_seal(k.bytes, nonce.bytes, pt.bytes, aad.bytes);
+    Bool sealed = hex_encode(chacha20poly1305g_seal(k.bytes, nonce.bytes, pt.bytes, aad.bytes)) == hex_encode(want)
+        && hex_encode(opened(chacha20poly1305g_seal(sk, nonce.bytes, secret_bytes(pt.bytes), aad.bytes))) == hex_encode(want);
+    Str p = hex_encode(pt.bytes);
+    Bool open = sohex(chacha20poly1305g_decrypt(sk, nonce.bytes, want, aad.bytes)) == p
+        && sohex(chacha20poly1305g_decrypt_u8(sk, nonce.bytes, bytes_u8(want), aad.bytes)) == p;
+    List(Int) bad = flip(want, rnd_below(rnd_next(aad.s), want.len()));
+    Bool refused = sohex(chacha20poly1305g_decrypt(sk, nonce.bytes, bad, aad.bytes)) == "none";
+    // The bare cipher from a random block counter (it wraps mod 2^32), and the MAC.
+    Bool xor = hex_encode(opened(chachag_xor(sk, ctr, nonce.bytes, secret_bytes(pt.bytes)))) == hex_encode(ref_chachag_xor(k.bytes, ctr, nonce.bytes, pt.bytes));
+    Bool mac = hex_encode(opened(poly1305g(sk, secret_bytes(pt.bytes)))) == hex_encode(ref_poly1305g(k.bytes, pt.bytes))
+        && hex_encode(poly1305g(k.bytes, pt.bytes)) == hex_encode(ref_poly1305g(k.bytes, pt.bytes));
+    if (!(sealed && open && refused && xor && mac)) { return f"case {i}: pt {pt.bytes.len()} aad {aad.bytes.len()} ctr {ctr} sealed {sealed} open {open} refused {refused} xor {xor} mac {mac}"; }
+    return cc_cases(rnd_next(rnd_next(aad.s)), n, i + 1);
+}
+
+List(Int) fill(Int n, Int v, ListBuf(Int) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return fill(n - 1, v, acc.push(v));
+}
+
+// Poly1305 on all-ones keys and messages (the largest r after clamping,
+// h near 2^130), and on random messages under them.
+@requires(declassify)
+Str poly_edges(Int s, Int n) {
+    if (n <= 0) { return ""; }
+    Int len = rnd_below(s, 300);
+    Rnd m = rnd_bytes(rnd_next(s), len, ListBuf());
+    // 255 | (s & 255) is 255, but only at run time: the key is not a constant.
+    Int ff = 255 | (s & 255);
+    List(Int) ones = fill(len, ff, ListBuf());
+    List(Int) key = fill(32, ff, ListBuf());
+    Int z = rnd_below(m.s, 32);
+    List(Int) key2 = fill(16, ff, ListBuf()).concat(fill(16, 0, ListBuf()));
+    Bool a = hex_encode(opened(poly1305g(secret_bytes(key), secret_bytes(ones)))) == hex_encode(ref_poly1305g(key, ones));
+    Bool b = hex_encode(poly1305g(key, m.bytes)) == hex_encode(ref_poly1305g(key, m.bytes));
+    Bool c = hex_encode(poly1305g(key2, ones)) == hex_encode(ref_poly1305g(key2, ones));
+    Bool d = hex_encode(poly1305g(flip(key, z), m.bytes)) == hex_encode(ref_poly1305g(flip(key, z), m.bytes));
+    if (!(a && b && c && d)) { return f"len {len}: {a} {b} {c} {d}"; }
+    return poly_edges(rnd_next(m.s), n - 1);
+}
+
+@requires(declassify)
+test "aes-gcm agrees with v0.13.0 on 300 random cases" {
+    expect(gcm_cases(rt 88172645463325252, 300, 0)).toEqual("");
+}
+
+@requires(declassify)
+test "chacha20-poly1305 agrees with v0.13.0 on 200 random cases" {
+    expect(cc_cases(rt 2685821657736338717, 200, 0)).toEqual("");
+}
+
+@requires(declassify)
+test "poly1305 agrees with v0.13.0 on all-ones keys and messages" {
+    expect(poly_edges(rt 1442695040888963407, 150)).toEqual("");
+}

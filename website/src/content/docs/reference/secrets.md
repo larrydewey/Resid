@@ -54,7 +54,7 @@ Int main() {
 | `&`, `\|`, `^` with integers; `<<` and `>>` by a public amount | `+ - *` (checked: overflow aborts, `E0254`) |
 | `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_i8` .. `wrapping_u512` conversions | `/`, `%`, comparisons, `&&`, `\|\|` (`E0255`) |
 | `ct_hide(x)` (an optimizer barrier for a mask) | |
-| `aesni_enc_round`, `aesni_enc_last_round`, `gf128_mul_hw` (constant-time instructions) | |
+| `aesni_enc_round`, `aesni_enc_last_round`, `gf128_mul_hw`, `gf128_mul4_hw` (constant-time instructions) | |
 | a cast to an integer type that holds every value (`(UInt(576)) b` for a `Secret(UInt(8))` `b`) | a cast that could lose a value, which is checked and aborts (`E0255`; use `wrapping_*`) |
 | reading a secret list at a public index | a secret index, range bound or shift amount (`E0255`) |
 | storing it in a record field or list | deciding an `if`, `while`, `match` or ternary (`E0255`) |
@@ -158,8 +158,11 @@ B)` (also in `lib/word.resid`): 128-bit blocks, `UInt(128)` or
 the schedule as a list of 32-bit words, and the 128-bit round keys the
 AES-NI path uses live in a record (`AesKeyG`). On a CPU with AES-NI /
 AESE and PCLMULQDQ / PMULL the rounds and GHASH run on
-`aesni_enc_round`, `aesni_enc_last_round` and `gf128_mul_hw`, which take
-secrets since they run in constant time; otherwise the software cipher
+`aesni_enc_round`, `aesni_enc_last_round`, `gf128_mul_hw` and
+`gf128_mul4_hw` (four products, `a0 b0 ^ a1 b1 ^ a2 b2 ^ a3 b3`, under
+one reduction: GHASH takes four blocks a step with H^4..H), which take
+secrets since they run in constant time; CTR runs four counter blocks a
+step. Otherwise the software cipher
 computes the S-box four bytes at a time in a 32-bit word and GHASH
 multiplies with masks. `lib/aesgcm.resid`'s API is the public copy. The
 IV, the associated data, the lengths, the received ciphertext and the

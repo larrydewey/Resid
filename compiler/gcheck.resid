@@ -1580,7 +1580,7 @@ GKT gk_call(GK k, Int id, Str exp) {
     if ((n == "secret_split" || n == "secret_join") && ck_fn_index(k.fs, n) < 0) { return sec_shape(k, id, n, exp); }
     if (n == "ct_select" && ck_fn_index(k.fs, n) < 0) { return sec_select(k, id, exp); }
     if (n == "ct_nonzero" && ck_fn_index(k.fs, n) < 0) { return sec_nonzero(k, id, exp); }
-    if (sec_liftable(n) && ck_fn_index(k.fs, n) < 0 && (argn == 2 || argn == 1)) {
+    if (sec_liftable(n) && ck_fn_index(k.fs, n) < 0 && (argn == 2 || argn == 1 || (argn == 8 && n == "gf128_mul4_hw"))) {
         GKA wa = gk_args(k, id, 0, gk_nopts(), 0, "", 0);
         if (wa.err != "") { return gterr(wa.k, wa.err, wa.at); }
         if (sec_any_arg(str_split(wa.tys, ","), 0)) { return sec_lift(wa.k, id, n, wa.tys, wa.count); }
@@ -6025,9 +6025,9 @@ GKT sec_shape(GK k, Int id, Str n, Str exp) {
 // ct_hide is the optimizer barrier for a mask built from a secret (a sign
 // mask, say): the value is unchanged and stays secret. The AES round and
 // carry-less multiply instructions (aesni_enc_round, aesni_enc_last_round,
-// gf128_mul_hw) run in constant time on the CPUs that have them, so a
+// gf128_mul_hw, gf128_mul4_hw) run in constant time on the CPUs that have them, so a
 // secret block or key goes through them and the result is secret.
-Bool sec_liftable(Str n) { return (str_starts_with(n, "wrapping_") && wrap_conv_type(n) != "") || n == "wrapping_add" || n == "wrapping_sub" || n == "wrapping_mul" || n == "wrapping_uadd" || n == "wrapping_usub" || n == "wrapping_umul" || n == "ct_hide" || n == "aesni_enc_round" || n == "aesni_enc_last_round" || n == "gf128_mul_hw"; }
+Bool sec_liftable(Str n) { return (str_starts_with(n, "wrapping_") && wrap_conv_type(n) != "") || n == "wrapping_add" || n == "wrapping_sub" || n == "wrapping_mul" || n == "wrapping_uadd" || n == "wrapping_usub" || n == "wrapping_umul" || n == "ct_hide" || n == "aesni_enc_round" || n == "aesni_enc_last_round" || n == "gf128_mul_hw" || n == "gf128_mul4_hw"; }
 
 // E0258: a secret integer wider than 32 bits stored in a list, builder,
 // vector, map or set, directly (List(Secret(Int))) or under a secret

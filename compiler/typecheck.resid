@@ -3043,6 +3043,12 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "UInt(128),UInt(128)") { return ERes {.pos = pos, .ty = "UInt(128)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects (UInt(128), UInt(128)), got (" + argtys + ")"};
     }
+    // gf128_mul4_hw(a0, b0, .., a3, b3): the four GF(2^128) products summed,
+    // one reduction (GHASH over four blocks).
+    if (name == "gf128_mul4_hw") {
+        if (argtys == "UInt(128),UInt(128),UInt(128),UInt(128),UInt(128),UInt(128),UInt(128),UInt(128)") { return ERes {.pos = pos, .ty = "UInt(128)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects eight UInt(128), got (" + argtys + ")"};
+    }
     // Sixteen bytes of a byte list at once (lib/word.resid's Block128):
     // resid_bytes_be16(xs, p) reads them big-endian into a 128-bit word,
     // resid_bytes_xor16(b, xs, p, ks) pushes them onto b, byte i XORed with bits
