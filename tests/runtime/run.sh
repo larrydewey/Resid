@@ -378,5 +378,14 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/builder_loops.resid -o "$W/build
 else
     fail=$((fail + 1)); echo "FAIL builders in loop regions: $(tail -1 "$W/builder_loops.out" "$W/builder_loops.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# Volatile raw loads and stores (lower.resid): two processes pass a counter
+# through a shared page, each polling with resid_raw_loadv64; a plain load
+# is hoisted out of the loop and the program never ends.
+if (cd "$ROOT/tests/runtime/internals" && "$COMPILER" runtime/rt/volatile_poll.resid --runtime-internals -o "$W/volatile_poll") > "$W/volatile_poll.log" 2>&1 \
+    && [ "$(timeout 60 "$W/volatile_poll")" = "45150 1 8 9" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL volatile raw loads: $(grep -m1 -i error "$W/volatile_poll.log")"
+fi
 echo "runtime: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

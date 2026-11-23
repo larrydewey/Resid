@@ -185,9 +185,11 @@ question apart from the boundary.
 
 ## 9. What the compiler and runtime need first
 
-- **A volatile (and an atomic) load.** A plain raw load in a polling loop
-  is hoisted out of it; the benchmark hung until it read with an atomic
-  add of zero. A region read must lower to a volatile load.
+- **A volatile load.** A plain raw load in a polling loop is hoisted out
+  of it; the benchmark hung until it read with an atomic add of zero.
+  Done as compiler-only primitives, `resid_raw_loadvN` and
+  `resid_raw_storevN` (PROGRESS 0zzb); a region read and write will
+  lower to them. An atomic load is not needed yet.
 - **Region writes as direct stores.** Building a record per command and
   then writing it doubled the encoding time.
 - **Bounded memory.** Loops that kept every step's garbage are the first

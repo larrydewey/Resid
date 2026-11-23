@@ -1,5 +1,6 @@
 // ring.c — the C baseline for runtime/rt/ringbench.resid (see run.sh).
-// -DRMW reads the ring with an atomic add of zero, as the Resid version must.
+// -DRMW reads the ring with an atomic add of zero, as the Resid version did
+// before the compiler had a volatile load (it now reads as this file does).
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>

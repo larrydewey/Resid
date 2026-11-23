@@ -3065,17 +3065,23 @@ GT lw_raw(LW w, Int id, Str n, List(Str) env, GT c) {
     Int t = g.tmp + 1;
     Str r = f"%t{t}";
     Str p = r + "p";
+    // loadvN / storevN are volatile: read or written each time and in
+    // order, whatever the optimizer knows about the address (memory another
+    // process or a device changes; a plain load in a polling loop is
+    // hoisted out of it).
     if (str_starts_with(op, "load")) {
         Int wd = lw_raw_width(op);
         Str it = f"i{wd}";
+        Str vol = if (str_starts_with(op, "loadv")) { "volatile " } else { "" };
         Str ext = if (wd == 64) { r + " = add i64 " + r + "w, 0" } else { r + " = zext " + it + " " + r + "w to i64" };
-        return lw_step(g, r, "Int", g.lines.concat([p + " = inttoptr i64 " + v[0] + " to ptr", r + "w = load " + it + ", ptr " + p + ", align 1", ext]), t);
+        return lw_step(g, r, "Int", g.lines.concat([p + " = inttoptr i64 " + v[0] + " to ptr", r + "w = load " + vol + it + ", ptr " + p + ", align 1", ext]), t);
     }
     if (str_starts_with(op, "store")) {
         Int wd = lw_raw_width(op);
         Str it = f"i{wd}";
+        Str vols = if (str_starts_with(op, "storev")) { "volatile " } else { "" };
         Str tr = if (wd == 64) { r + "w = add i64 " + v[1] + ", 0" } else { r + "w = trunc i64 " + v[1] + " to " + it };
-        return lw_step(g, r, "Int", g.lines.concat([p + " = inttoptr i64 " + v[0] + " to ptr", tr, "store " + it + " " + r + "w, ptr " + p + ", align 1", r + " = add i64 0, 0"]), t);
+        return lw_step(g, r, "Int", g.lines.concat([p + " = inttoptr i64 " + v[0] + " to ptr", tr, "store " + vols + it + " " + r + "w, ptr " + p + ", align 1", r + " = add i64 0, 0"]), t);
     }
     if (op == "copy" || op == "fill") {
         Str q = r + "q";

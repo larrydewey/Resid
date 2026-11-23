@@ -1,0 +1,38 @@
+// resid_raw_loadvN / resid_raw_storevN (compiler-only, E0220): volatile
+// reads and writes of memory another process changes. Two processes pass
+// a counter back and forth through a shared page, each waiting in a loop
+// that only reads. A plain resid_raw_load64 there is hoisted out of the
+// loop and never sees the other side's write, so this would not end
+// (run.sh gives it a timeout). The narrow widths are read back too.
+
+Int sys(Int n, Int a, Int b, Int c) { return resid_raw_syscall(n, a, b, c, 0, 0, 0); }
+
+Int wait_for(Int p, Int v) { if (resid_raw_loadv64(p) == v) { return v; } return wait_for(p, v); }
+
+// The child answers each request i (at s) by writing i at s + 64.
+Int serve(Int s, Int i, Int n) {
+    if (i > n) { return 0; }
+    _ = wait_for(s, i);
+    _ = resid_raw_storev64(s + 64, i);
+    return serve(s, i + 1, n);
+}
+
+Int ask(Int s, Int i, Int n, Int acc) {
+    if (i > n) { return acc; }
+    _ = resid_raw_storev64(s, i);
+    return ask(s, i + 1, n, acc + wait_for(s + 64, i));
+}
+
+Int main() {
+    Int s = resid_raw_syscall(9, 0, 4096, 3, 33, 0 - 1, 0);   // shared, anonymous
+    Int n = 300;
+    Int pid = sys(57, 0, 0, 0);
+    if (pid == 0) { _ = serve(s, 1, n); _ = sys(231, 0, 0, 0); }
+    Int total = ask(s, 1, n, 0);
+    _ = resid_raw_syscall(61, pid, 0, 0, 0, 0, 0);
+    _ = resid_raw_storev8(s + 128, 513);
+    _ = resid_raw_storev16(s + 136, 65537 + 7);
+    _ = resid_raw_storev32(s + 144, 4294967296 + 9);
+    println(f"{total} {resid_raw_loadv8(s + 128)} {resid_raw_loadv16(s + 136)} {resid_raw_loadv32(s + 144)}");
+    return 0;
+}

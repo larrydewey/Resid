@@ -139,6 +139,11 @@ region, with no diagnostic.
   `StrBuf` still has no move. Symbolon's `reshare_test.resid` with this:
   100 MB (2,298 MB on v0.13.0, 506 MB before builders moved), 38 s, and
   `--loop-report` names 65 loops there (234 before).
+- **Volatile raw loads and stores** (`resid_raw_loadv8/16/32/64`,
+  `resid_raw_storev8/16/32/64`; compiler-only, E0220): the first piece
+  of `PLAN-hardware-access.md`. A plain raw load in a polling loop is
+  hoisted out of it. Test: `tests/runtime/internals/runtime/rt/
+  volatile_poll.resid`; `bench/crossing` polls with them.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.
