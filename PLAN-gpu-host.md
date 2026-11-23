@@ -510,10 +510,14 @@ Open:
   cannot be confined is decided per case: move it into phase A, allow it
   narrowly, or refuse that driver version.
 - **Q6, a Resid userspace driver.** Not planned.
-- **Q8, the benchmark baseline.** The in-process baseline must call
-  Vulkan directly, so it cannot be Resid. Is a non-Resid benchmark
-  opponent acceptable, as the AWFY ports are? The alternative is to
-  compare against published numbers, which is less fair.
+
+Decided later the same day:
+- **D8, the benchmark baseline:** a non-Resid benchmark opponent under
+  `bench/gpu-host/baseline/`, reviewed like the AWFY ports, never part of
+  the product.
+
+**Paused (2026-11-23)** by the owner until Resid is ready. Next when
+resumed: an adversarial review of revision 3, then phase S1.
 
 ## 15. Review of revision 2 and how revision 3 answers it
 
