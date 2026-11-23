@@ -1252,6 +1252,14 @@ pub HttpLoopEnd(A) http_state_loop_until(Int lfd, A init, HttpTurn(A, K) closure
     return http_state_loop_while(lfd, plain_cfg(), init, handler, tick, keep, lim, max_conns);
 }
 
+// Closures of concrete type made outside the generic loops: a lambda in a
+// generic function whose type does not depend on the type parameters is
+// emitted once per instantiation under one name, and clang then refuses
+// the duplicate definition (examples/https_server instantiates the loop
+// twice).
+Bool closure(Int) hs_always() { return lambda(any_state) { true }; }
+Int closure(Int) hs_same() { return lambda(unchanged) { unchanged }; }
+
 /// Accept connections on the socket `lfd` and serve them all at once from
 /// one event loop, through the session `C` configures, with a handler that
 /// may stream; `max_conns` 0 means until the listener fails. Several loops
@@ -1264,9 +1272,7 @@ pub Int http_stream_loop_where(Int lfd, C conf, HttpOut(K) closure(HttpRequest) 
     List(HsConn(S, K, Int)) none = [];
     HttpTurn(Int, K) closure(Int, HttpRequest) h = lambda(a, q) { HttpTurn { .state = a, .out = handler(q) } };
     HttpStep(K) closure(Int, K) unused = lambda(a, k) { http_step_end(k, []) };
-    Bool closure(Int) always = lambda(a) { true };
-    Int closure(Int) same = lambda(a) { a };
-    HsTicker(Int, K) tk = HsTicker { .shared = false, .tick = unused, .keep = always, .idle_ms = -1, .idle = same };
+    HsTicker(Int, K) tk = HsTicker { .shared = false, .tick = unused, .keep = hs_always(), .idle_ms = -1, .idle = hs_same() };
     HttpLoopEnd(Int) end = hs_ev_loop(lfd, conf, 0, h, tk, lim, max_conns, none, 0, true);
     return end.accepted;
 }

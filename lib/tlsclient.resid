@@ -633,7 +633,9 @@ pub HttpsGet tls_https_request(Str url, Str name, TrustStore store, List(Str) al
     TlsDial d = tls_client_connect(host, port, tls_client_cfg_within(tls_client_cfg(asked, store, alpn), ms));
     if (d.err != "") { return https_failed(url + ": " + d.err); }
     Str clen = if (method == "GET" && body.len() == 0) { "" } else { f"Content-Length: {body.len()}\r\n" };
-    List(Int) req = str_to_bytes(method + " " + path + " HTTP/1.1\r\nHost: " + hostport + "\r\nUser-Agent: resid\r\nAccept: */*\r\n" + headers + clen + "Connection: close\r\n\r\n").concat(body);
+    // A User-Agent in `headers` replaces the default one.
+    Str ua = if (str_contains(str_to_lower(headers), "user-agent:")) { "" } else { "User-Agent: resid\r\n" };
+    List(Int) req = str_to_bytes(method + " " + path + " HTTP/1.1\r\nHost: " + hostport + "\r\n" + ua + "Accept: */*\r\n" + headers + clen + "Connection: close\r\n\r\n").concat(body);
     WireOut(TlsClient) sent = wire_send(d.conn, req);
     if (!sent.ok) {
         _ = wire_close(sent.conn);

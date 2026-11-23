@@ -196,7 +196,9 @@ pub Str http_recv_count(Int fd, Int n) {
 pub Str http_build_request(Str method, Str path, Str hostport, Str extra, Str conn) {
     Str r1 = method + " " + path + " HTTP/1.1\r\n";
     Str r2 = "Host: " + hostport + "\r\n";
-    Str r3 = "User-Agent: resid-http/2\r\nAccept: */*\r\nConnection: " + conn + "\r\n";
+    // A User-Agent in `extra` replaces the default one.
+    Str ua = if (str_contains(str_to_lower(extra), "user-agent:")) { "" } else { "User-Agent: resid-http/2\r\n" };
+    Str r3 = ua + "Accept: */*\r\nConnection: " + conn + "\r\n";
     return r1 + r2 + r3 + extra + "\r\n";
 }
 
