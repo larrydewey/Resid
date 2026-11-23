@@ -380,8 +380,10 @@ else
 fi
 # Volatile raw loads and stores (lower.resid): two processes pass a counter
 # through a shared page, each polling with resid_raw_loadv64; a plain load
-# is hoisted out of the loop and the program never ends.
-if (cd "$ROOT/tests/runtime/internals" && "$COMPILER" runtime/rt/volatile_poll.resid --runtime-internals -o "$W/volatile_poll") > "$W/volatile_poll.log" 2>&1 \
+# is hoisted out of the loop and the program never ends. Built from its own
+# directory (the entry's path must hold runtime/rt/), so the compiler is
+# told where its runtime is.
+if (cd "$ROOT/tests/runtime/internals" && RESID_HOME="$RH" "$COMPILER" runtime/rt/volatile_poll.resid --runtime-internals -o "$W/volatile_poll") > "$W/volatile_poll.log" 2>&1 \
     && [ "$(timeout 60 "$W/volatile_poll")" = "45150 1 8 9" ]; then
     pass=$((pass + 1))
 else

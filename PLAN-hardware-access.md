@@ -252,7 +252,7 @@ VirtioStatus s = dev.status;                       // one volatile read
 dev.status = VirtioStatus { .acknowledge = true, .driver = true,
                             .driver_ok = true, .features_ok = true,
                             .failed = false };      // one volatile write
-dev.irq = IrqStatus { .queue = Clear };            // config left as it is
+dev.irq = IrqStatus { .clear_queue = true };       // config left as it is
 ```
 
 - **Fields in order, low bit first; widths from their types**: `Bool`
@@ -264,11 +264,15 @@ dev.irq = IrqStatus { .queue = Clear };            // config left as it is
 - **`DeviceOwned(T)`**: the device owns the field. A read gives a `T`; a
   record literal that is written may not name it (as a literal never
   names a `Challenge(N)` field, labels §6.2), and it is written as zero.
-- **`DeviceLatch(Bool)`**: set by the device and cleared by writing one.
-  A read gives a `Bool`. In a written literal it is `Clear` or left out,
-  which writes zero and so keeps it. Writing back a value that was read
-  therefore never clears a pending event, the usual mistake with these
-  registers.
+- **`DeviceLatch(Bool) queue`**: set by the device and cleared by
+  writing one. It gives the record two fields: `queue`, which the device
+  owns (read it), and `clear_queue`, which the driver owns (a written
+  literal sets it to clear the bit, or leaves it out to keep it).
+  Writing back a value that was read therefore never clears a pending
+  event, the usual mistake with these registers. First accepted as one
+  field read as a `Bool` and written as `Clear`; changed on 2026-11-23
+  because that gives one field two types, a rule nothing else in the
+  language has, where two names need only the two rules above.
 - **A read and a write are whole values.** Each is one hardware access
   and visible in the source; nothing reads, modifies and writes behind
   the program. A written literal names every field it may name.
