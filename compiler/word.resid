@@ -4,36 +4,55 @@
 // one bit, a `UInt(K)` K bits, `@reserved(n);` n bits that nothing names.
 // The widths must add up to N.
 //
+// A field says whose it is by its type:
+//
+//   Bool f;                 read and written
+//   DeviceOwned(T) f;       the device sets it: read, and never named in a
+//                           literal (E0296); it is written as zero
+//   DriverOwned(T) f;       the driver sets it: named in a literal, and never
+//                           read (E0297, compiler/gcheck.resid)
+//   DeviceLatch(Bool) f;    set by the device and cleared by writing one: the
+//                           record gets `f`, which the device owns, and
+//                           `clear_f`, which the driver owns and may leave out
+//
 // Expansion runs on the merged text before parsing, after layout types
-// (layout.resid). The annotation and each `@reserved` are overwritten with
-// spaces, so every position and line stays where it was and the checker
-// sees a plain record; the generated functions are appended after the
-// program. For a type `VirtioStatus` (snake `virtio_status`) it writes:
+// (layout.resid). Each wrapper is taken out of the declaration, so the
+// checker sees a plain record, and `@word(N)` becomes `@word_modes(...)`,
+// which tells the checker which fields are never read. A literal of the
+// type gets the fields it may not or need not name, set to zero. Lines
+// stay where they were; the line of a `DeviceLatch` field, of the
+// annotation and of a completed literal grows. The generated functions are
+// appended after the program. For a type `VirtioStatus` (snake
+// `virtio_status`) it writes:
 //
 //   UInt(N) virtio_status_word(VirtioStatus r)        (the record as its word)
 //   VirtioStatus virtio_status_from_word(UInt(N) w)   (a word as the record)
 //
-// Reserved bits are written as zero and ignored when read, so with these
-// field types every word is some record and reading cannot fail.
+// Reserved bits and the device's fields are written as zero; reserved bits
+// are ignored when read and the driver's fields read as zero, so every
+// word is some record and reading cannot fail.
 //
-// This is the first stage: fields the device or the driver owns
-// (DeviceOwned, DriverOwned, DeviceLatch), sum-typed fields and
-// `@clears_on_read` are not here yet.
+// Not here yet: sum-typed fields and `@clears_on_read`.
 //
 // Imported by compiler/driver.resid.
 
 import "layout.resid";
 
-// A field: its name ("" for reserved bits), its type text, its width and
-// the bit it starts at.
-type WdF = { Str name; Str ty; Int bits; Int off; };
+// A field: its name ("" for reserved bits), its type text, its width, the
+// bit it starts at, and its mode: "" read and written, "r" the device's,
+// "w" the driver's, "o" the driver's and optional in a literal (the clear
+// half of a latch).
+type WdF = { Str name; Str ty; Int bits; Int off; Str mode; };
 
-// One scan step: the blanked text so far, where the scan is, what has been
-// generated, and an error (code "", when none).
-type WdS = { List(Str) out; Int i; Str gen; Str code; Str err; Int at; };
+// A word type that was declared: its name and fields.
+type WdT = { Str name; List(WdF) fs; };
 
-// The fields of one declaration as they are read: the fields, the blanked
-// body so far, the position, the next free bit, and an error.
+// One scan step: the rewritten text so far, where the scan is, what has
+// been generated, the types found, and an error (code "" when none).
+type WdS = { List(Str) out; Int i; Str gen; List(WdT) ts; Str code; Str err; Int at; };
+
+// The fields of one declaration as they are read: the fields, the
+// rewritten body so far, the position, the next free bit, and an error.
 type WdB = { List(WdF) fs; List(Str) out; Int i; Int bit; Str err; Int at; };
 
 Bool wd_space(Int c) { return c == 32 || c == 9 || c == 10 || c == 13; }
@@ -68,6 +87,20 @@ Str wd_blanked(Str s, Int i, Int b, StrBuf acc) {
     return wd_blanked(s, i + 1, b, if (str_char_at(s, i) == 10) { acc.push("\n") } else { acc.push(" ") });
 }
 
+// `text` in place of s[a..b]: padded with spaces to the length it replaces
+// when it is shorter, and followed by the newlines that were there.
+Str wd_in_place(Str s, Int a, Int b, Str text) {
+    return text + wd_pad(b - a - str_len(text) - wd_newlines(s, a, b, 0), StrBuf()) + wd_nl(wd_newlines(s, a, b, 0), StrBuf());
+}
+
+Str wd_pad(Int k, StrBuf acc) { if (k <= 0) { return acc.finish(); } return wd_pad(k - 1, acc.push(" ")); }
+Str wd_nl(Int k, StrBuf acc) { if (k <= 0) { return acc.finish(); } return wd_nl(k - 1, acc.push("\n")); }
+
+Int wd_newlines(Str s, Int i, Int b, Int acc) {
+    if (i >= b) { return acc; }
+    return wd_newlines(s, i + 1, b, if (str_char_at(s, i) == 10) { acc + 1 } else { acc });
+}
+
 Int wd_last_space(Str s, Int i) {
     if (i < 0) { return -1; }
     if (wd_space(str_char_at(s, i))) { return i; }
@@ -82,6 +115,16 @@ Int wd_bits(Str t) {
         return if (str_is_int(k) && str_parse_int(k) >= 1 && str_parse_int(k) <= 64) { str_parse_int(k) } else { 0 };
     }
     return 0;
+}
+
+// The wrapper around a field's type: "r" DeviceOwned, "w" DriverOwned,
+// "l" DeviceLatch, "" none.
+Str wd_wrap(Str t) {
+    if (!str_ends_with(t, ")")) { return ""; }
+    if (str_starts_with(t, "DeviceOwned(")) { return "r"; }
+    if (str_starts_with(t, "DriverOwned(")) { return "w"; }
+    if (str_starts_with(t, "DeviceLatch(")) { return "l"; }
+    return "";
 }
 
 // 2^k - 1 as text, k in 1..64 (the last is past Int's range).
@@ -107,16 +150,16 @@ Str wd_snake_at(Str s, Int i, Int n, StrBuf acc) {
     return wd_snake_at(s, i + 1, n, a1.push(str_from_code(if (wd_upper(c)) { c + 32 } else { c })));
 }
 
-WdS wd_bad(WdS st, Str msg, Int at) { return WdS {.out = st.out, .i = st.i, .gen = st.gen, .code = "E0295", .err = msg, .at = at}; }
+WdS wd_bad(WdS st, Str msg, Int at) { return WdS {.out = st.out, .i = st.i, .gen = st.gen, .ts = st.ts, .code = "E0295", .err = msg, .at = at}; }
 
 WdS wd_scan(Str s, WdS st) {
     Int n = str_len(s);
     Int k = ly_find_pub(s, "@word(", st.i);
-    if (k < 0 || st.err != "") { return WdS {.out = wd_copy(st.out, s, st.i, n), .i = n, .gen = st.gen, .code = st.code, .err = st.err, .at = st.at}; }
+    if (k < 0 || st.err != "") { return WdS {.out = wd_copy(st.out, s, st.i, n), .i = n, .gen = st.gen, .ts = st.ts, .code = st.code, .err = st.err, .at = st.at}; }
     if (!ly_line_start_pub(s, k)) {
-        return wd_scan(s, WdS {.out = wd_copy(st.out, s, st.i, k + 6), .i = k + 6, .gen = st.gen, .code = "", .err = "", .at = -1});
+        return wd_scan(s, WdS {.out = wd_copy(st.out, s, st.i, k + 6), .i = k + 6, .gen = st.gen, .ts = st.ts, .code = "", .err = "", .at = -1});
     }
-    return wd_scan(s, wd_decl(s, k, WdS {.out = wd_copy(st.out, s, st.i, k), .i = k, .gen = st.gen, .code = "", .err = "", .at = -1}));
+    return wd_scan(s, wd_decl(s, k, WdS {.out = wd_copy(st.out, s, st.i, k), .i = k, .gen = st.gen, .ts = st.ts, .code = "", .err = "", .at = -1}));
 }
 
 // `@word(N) [pub] type Name = { fields };` at k.
@@ -136,12 +179,17 @@ WdS wd_decl(Str s, Int k, WdS st) {
     Str name = str_trim(str_slice(s, t1 + 5, eq));
     Int cb = ly_close_brace_pub(s, ob);
     if (cb < 0) { return wd_bad(st, "word type " + name + " does not close", k); }
-    List(Str) o1 = wd_copy(wd_blank(st.out, s, k, e), s, e, ob + 1);
-    WdB b = wd_fields(s, ob + 1, cb - 1, name, WdB {.fs = [], .out = o1, .i = ob + 1, .bit = 0, .err = "", .at = -1});
+    WdB b = wd_fields(s, ob + 1, cb - 1, name, WdB {.fs = [], .out = [], .i = ob + 1, .bit = 0, .err = "", .at = -1});
     if (b.err != "") { return wd_bad(st, b.err, b.at); }
     if (b.bit != width) { return wd_bad(st, "word type " + name + f" is @word({width}) and its fields take {b.bit} bits: they must add up to {width} (use @reserved(n); for bits nothing defines)", k); }
     if (!wd_any_named(b.fs, 0)) { return wd_bad(st, "word type " + name + " has no field", k); }
-    return WdS {.out = b.out.concat(["}"]), .i = cb, .gen = st.gen + wd_gen(name, width, b.fs), .code = "", .err = "", .at = -1};
+    Str dup = wd_dup(b.fs, 0);
+    if (dup != "") { return wd_bad(st, "word type " + name + " has two fields named " + dup + " (a DeviceLatch field `f` also makes `clear_f`)", k); }
+    // The annotation: the modes the checker reads, or nothing.
+    Str modes = wd_modes(b.fs, 0, "");
+    List(Str) o1 = if (modes == "") { wd_blank(st.out, s, k, e) } else { st.out.concat([wd_in_place(s, k, e, "@word_modes(" + modes + ")")]) };
+    List(Str) o2 = wd_copy(o1, s, e, ob + 1).concat(b.out).concat(["}"]);
+    return WdS {.out = o2, .i = cb, .gen = st.gen + wd_gen(name, width, b.fs), .ts = st.ts.concat([WdT {.name = name, .fs = b.fs}]), .code = "", .err = "", .at = -1};
 }
 
 Bool wd_any_named(List(WdF) fs, Int i) {
@@ -149,9 +197,31 @@ Bool wd_any_named(List(WdF) fs, Int i) {
     return fs[i].name != "" || wd_any_named(fs, i + 1);
 }
 
+// A field name declared twice, or "".
+Str wd_dup(List(WdF) fs, Int i) {
+    if (i >= fs.len()) { return ""; }
+    if (fs[i].name != "" && wd_has(fs, fs[i].name, i + 1)) { return fs[i].name; }
+    return wd_dup(fs, i + 1);
+}
+
+Bool wd_has(List(WdF) fs, Str name, Int i) {
+    if (i >= fs.len()) { return false; }
+    return fs[i].name == name || wd_has(fs, name, i + 1);
+}
+
+// "f=r;g=w;h=o" for the fields that have a mode.
+Str wd_modes(List(WdF) fs, Int i, Str acc) {
+    if (i >= fs.len()) { return acc; }
+    WdF f = fs[i];
+    if (f.name == "" || f.mode == "") { return wd_modes(fs, i + 1, acc); }
+    Str one = f.name + "=" + f.mode;
+    return wd_modes(fs, i + 1, if (acc == "") { one } else { acc + ";" + one });
+}
+
 WdB wd_fail(WdB b, Str msg, Int at) { return WdB {.fs = b.fs, .out = b.out, .i = b.i, .bit = b.bit, .err = msg, .at = at}; }
 
-// Fields up to end (the closing brace); each `@reserved(n);` is blanked.
+// Fields up to end (the closing brace). A `@reserved(n);` is blanked and a
+// wrapped field is rewritten as the plain field or fields it stands for.
 WdB wd_fields(Str s, Int i, Int end, Str name, WdB b) {
     Int j = wd_ws(s, i, end);
     List(Str) o = wd_copy(b.out, s, i, j);
@@ -164,7 +234,7 @@ WdB wd_fields(Str s, Int i, Int end, Str name, WdB b) {
         if (e < 0 || !str_is_int(arg) || str_parse_int(arg) <= 0) { return wd_fail(b1, "@reserved(n) takes a positive number of bits (" + name + ")", j); }
         Int sc = wd_ws(s, e, end);
         if (sc >= end || str_char_at(s, sc) != 59) { return wd_fail(b1, "@reserved(n) stands alone: `@reserved(" + arg + ");`", j); }
-        WdF r = WdF {.name = "", .ty = "", .bits = str_parse_int(arg), .off = b.bit};
+        WdF r = WdF {.name = "", .ty = "", .bits = str_parse_int(arg), .off = b.bit, .mode = ""};
         return wd_fields(s, sc + 1, end, name, WdB {.fs = b.fs.concat([r]), .out = wd_blank(o, s, j, sc + 1), .i = sc + 1, .bit = b.bit + str_parse_int(arg), .err = "", .at = -1});
     }
     Int sc = wd_char(s, 59, j, end);
@@ -172,12 +242,27 @@ WdB wd_fields(Str s, Int i, Int end, Str name, WdB b) {
     Str decl = str_trim(str_slice(s, j, sc));
     Int sp = wd_last_space(decl, str_len(decl) - 1);
     if (sp < 0) { return wd_fail(b1, "a word's field is `Type name;` (" + name + ")", j); }
-    Str fty = str_trim(str_slice(decl, 0, sp));
+    Str fty0 = str_trim(str_slice(decl, 0, sp));
     Str fname = str_slice(decl, sp + 1, str_len(decl));
+    Str wrap = wd_wrap(fty0);
+    Str fty = if (wrap == "") { fty0 } else { str_trim(str_slice(fty0, 12, str_len(fty0) - 1)) };
     Int bits = wd_bits(fty);
-    if (bits == 0) { return wd_fail(b1, name + "." + fname + ": a word's field is a Bool or a UInt(N) of 1 to 64 bits, got `" + fty + "`", j); }
-    WdF f = WdF {.name = fname, .ty = fty, .bits = bits, .off = b.bit};
-    return wd_fields(s, sc + 1, end, name, WdB {.fs = b.fs.concat([f]), .out = wd_copy(o, s, j, sc + 1), .i = sc + 1, .bit = b.bit + bits, .err = "", .at = -1});
+    if (bits == 0) { return wd_fail(b1, name + "." + fname + ": a word's field is a Bool or a UInt(N) of 1 to 64 bits, alone or in DeviceOwned(...), DriverOwned(...) or DeviceLatch(Bool), got `" + fty0 + "`", j); }
+    if (wrap == "l" && fty != "Bool") { return wd_fail(b1, name + "." + fname + ": a DeviceLatch is one bit, `DeviceLatch(Bool)`, got `" + fty0 + "`", j); }
+    if (wrap == "") {
+        WdF f = WdF {.name = fname, .ty = fty, .bits = bits, .off = b.bit, .mode = ""};
+        return wd_fields(s, sc + 1, end, name, WdB {.fs = b.fs.concat([f]), .out = wd_copy(o, s, j, sc + 1), .i = sc + 1, .bit = b.bit + bits, .err = "", .at = -1});
+    }
+    if (wrap == "l") {
+        // Two fields over one bit: what the device shows, what the driver clears.
+        WdF seen = WdF {.name = fname, .ty = "Bool", .bits = 1, .off = b.bit, .mode = "r"};
+        WdF clr = WdF {.name = "clear_" + fname, .ty = "Bool", .bits = 1, .off = b.bit, .mode = "o"};
+        Str two = wd_in_place(s, j, sc + 1, "Bool " + fname + "; Bool clear_" + fname + ";");
+        return wd_fields(s, sc + 1, end, name, WdB {.fs = b.fs.concat([seen, clr]), .out = o.concat([two]), .i = sc + 1, .bit = b.bit + 1, .err = "", .at = -1});
+    }
+    WdF f = WdF {.name = fname, .ty = fty, .bits = bits, .off = b.bit, .mode = wrap};
+    Str plain = wd_in_place(s, j, sc + 1, fty + " " + fname + ";");
+    return wd_fields(s, sc + 1, end, name, WdB {.fs = b.fs.concat([f]), .out = o.concat([plain]), .i = sc + 1, .bit = b.bit + bits, .err = "", .at = -1});
 }
 
 // The two functions of word type `name`.
@@ -190,10 +275,13 @@ Str wd_gen(Str name, Int width, List(WdF) fs) {
     return head + pack + unpack;
 }
 
+// What is written: every field but the device's.
+Bool wd_written(WdF f) { return f.name != "" && f.mode != "r"; }
+
 Str wd_pack_binds(List(WdF) fs, Str wt, Int i, StrBuf acc) {
     if (i >= fs.len()) { return acc.finish(); }
     WdF f = fs[i];
-    if (f.name == "") { return wd_pack_binds(fs, wt, i + 1, acc); }
+    if (!wd_written(f)) { return wd_pack_binds(fs, wt, i + 1, acc); }
     Str v = if (f.ty == "Bool") { "if (__wd_r." + f.name + ") { 1 } else { 0 }" } else { "__wd_r." + f.name };
     return wd_pack_binds(fs, wt, i + 1, acc.push("    " + wt + f" __wd_f{i} = " + v + ";\n"));
 }
@@ -201,25 +289,161 @@ Str wd_pack_binds(List(WdF) fs, Str wt, Int i, StrBuf acc) {
 Str wd_pack_sum(List(WdF) fs, Int i, Str acc) {
     if (i >= fs.len()) { return if (acc == "") { "0" } else { acc }; }
     WdF f = fs[i];
-    if (f.name == "") { return wd_pack_sum(fs, i + 1, acc); }
+    if (!wd_written(f)) { return wd_pack_sum(fs, i + 1, acc); }
     Str one = if (f.off == 0) { f"__wd_f{i}" } else { f"(__wd_f{i} << {f.off})" };
     return wd_pack_sum(fs, i + 1, if (acc == "") { one } else { acc + " | " + one });
 }
 
+Str wd_zero(WdF f) { return if (f.ty == "Bool") { "false" } else { "0" }; }
+
+// What is read: every field but the driver's, which read as zero.
 Str wd_unpack(List(WdF) fs, Int i, Str acc) {
     if (i >= fs.len()) { return acc; }
     WdF f = fs[i];
     if (f.name == "") { return wd_unpack(fs, i + 1, acc); }
     Str sh = if (f.off == 0) { "__wd_w" } else { f"(__wd_w >> {f.off})" };
-    Str v = if (f.ty == "Bool") { "(" + sh + " & 1) == 1" } else { "(" + f.ty + ")(" + sh + " & " + wd_mask(f.bits) + ")" };
+    Str rd = if (f.ty == "Bool") { "(" + sh + " & 1) == 1" } else { "(" + f.ty + ")(" + sh + " & " + wd_mask(f.bits) + ")" };
+    Str v = if (f.mode == "w" || f.mode == "o") { wd_zero(f) } else { rd };
     Str one = "." + f.name + " = " + v;
     return wd_unpack(fs, i + 1, if (acc == "") { one } else { acc + ", " + one });
+}
+
+// ─── Literals ───────────────────────────────────────────────────────
+// A literal `Name { .f = e, ... }` of a word type with fields the device
+// owns may not name one (E0296), and gets each of them, and each clear
+// half it leaves out, set to zero: a record literal sets every field.
+
+// One step over the text for one type: the text so far, the position, an
+// error.
+type WdL = { List(Str) out; Int i; Str err; Int at; };
+
+Bool wd_completes(WdT t, Int i) {
+    if (i >= t.fs.len()) { return false; }
+    return t.fs[i].mode == "r" || t.fs[i].mode == "o" || wd_completes(t, i + 1);
+}
+
+// Whether position k lies in a line comment or a string of its line. Code
+// in the hole of an f-string (`f"{T { .a = 1 }}"`) is code.
+Bool wd_in_text(Str s, Int k) {
+    Int a = wd_line_start(s, k);
+    return wd_scan_line(s, a, k, 0, 0);
+}
+
+Int wd_line_start(Str s, Int k) {
+    if (k <= 0) { return 0; }
+    if (str_char_at(s, k - 1) == 10) { return k; }
+    return wd_line_start(s, k - 1);
+}
+
+// From the line's start to k, in mode m: 0 code, 1 a string, 2 an
+// f-string's text, 3 code in an f-string's hole (depth braces deep), 4 a
+// string inside a hole. True when k is not in code.
+Bool wd_scan_line(Str s, Int i, Int k, Int m, Int depth) {
+    if (i >= k) { return m == 1 || m == 2 || m == 4; }
+    Int c = str_char_at(s, i);
+    if ((m == 1 || m == 2 || m == 4) && c == 92) { return wd_scan_line(s, i + 2, k, m, depth); }
+    if (m == 0) {
+        if (c == 47 && i + 1 < k && str_char_at(s, i + 1) == 47) { return true; }
+        if (c == 34) { return wd_scan_line(s, i + 1, k, if (i > 0 && str_char_at(s, i - 1) == 102) { 2 } else { 1 }, 0); }
+        return wd_scan_line(s, i + 1, k, 0, 0);
+    }
+    if (m == 1) { return wd_scan_line(s, i + 1, k, if (c == 34) { 0 } else { 1 }, 0); }
+    if (m == 2) {
+        if (c == 34) { return wd_scan_line(s, i + 1, k, 0, 0); }
+        return wd_scan_line(s, i + 1, k, if (c == 123) { 3 } else { 2 }, if (c == 123) { 1 } else { 0 });
+    }
+    if (m == 3) {
+        if (c == 34) { return wd_scan_line(s, i + 1, k, 4, depth); }
+        if (c == 123) { return wd_scan_line(s, i + 1, k, 3, depth + 1); }
+        if (c == 125) { return wd_scan_line(s, i + 1, k, if (depth <= 1) { 2 } else { 3 }, depth - 1); }
+        return wd_scan_line(s, i + 1, k, 3, depth);
+    }
+    return wd_scan_line(s, i + 1, k, if (c == 34) { 3 } else { 4 }, depth);
+}
+
+// The parts of s between commas outside (), [], {} and strings.
+List(Str) wd_split_top(Str s) { return wd_split_at(s, 0, 0, 0, str_len(s), false, []); }
+
+List(Str) wd_split_at(Str s, Int i, Int a, Int depth, Int n, Bool instr, List(Str) acc) {
+    if (i >= n) { return acc.concat([str_slice(s, a, n)]); }
+    Int c = str_char_at(s, i);
+    if (instr && c == 92) { return wd_split_at(s, i + 2, a, depth, n, true, acc); }
+    if (c == 34) { return wd_split_at(s, i + 1, a, depth, n, !instr, acc); }
+    if (instr) { return wd_split_at(s, i + 1, a, depth, n, true, acc); }
+    if (c == 40 || c == 91 || c == 123) { return wd_split_at(s, i + 1, a, depth + 1, n, false, acc); }
+    if (c == 41 || c == 93 || c == 125) { return wd_split_at(s, i + 1, a, depth - 1, n, false, acc); }
+    if (c == 44 && depth == 0) { return wd_split_at(s, i + 1, i + 1, 0, n, false, acc.concat([str_slice(s, a, i)])); }
+    return wd_split_at(s, i + 1, a, depth, n, false, acc);
+}
+
+// The field names a literal's inside sets: each `.name = ...` part.
+List(Str) wd_named(List(Str) parts, Int i, List(Str) acc) {
+    if (i >= parts.len()) { return acc; }
+    Str p = str_trim(parts[i]);
+    if (str_len(p) < 2 || str_char_at(p, 0) != 46) { return wd_named(parts, i + 1, acc); }
+    Int e = wd_ident_end(p, 1, str_len(p));
+    return wd_named(parts, i + 1, acc.concat([str_slice(p, 1, e)]));
+}
+
+Int wd_ident_end(Str s, Int i, Int n) {
+    if (i >= n || !ly_ident_pub(str_char_at(s, i))) { return i; }
+    return wd_ident_end(s, i + 1, n);
+}
+
+// A field of the device's that the literal names, or "".
+Str wd_named_device(WdT t, List(Str) named, Int i) {
+    if (i >= t.fs.len()) { return ""; }
+    if (t.fs[i].mode == "r" && named.contains(t.fs[i].name)) { return t.fs[i].name; }
+    return wd_named_device(t, named, i + 1);
+}
+
+// ".f = false, .g = 0" for the fields the literal left to be filled.
+Str wd_fill(WdT t, List(Str) named, Int i, Str acc) {
+    if (i >= t.fs.len()) { return acc; }
+    WdF f = t.fs[i];
+    Bool add = (f.mode == "r" || f.mode == "o") && !named.contains(f.name);
+    if (!add) { return wd_fill(t, named, i + 1, acc); }
+    Str one = "." + f.name + " = " + wd_zero(f);
+    return wd_fill(t, named, i + 1, if (acc == "") { one } else { acc + ", " + one });
+}
+
+WdL wd_lits(Str s, WdT t, WdL st) {
+    Int n = str_len(s);
+    Int k = ly_find_pub(s, t.name, st.i);
+    if (k < 0 || st.err != "") { return WdL {.out = wd_copy(st.out, s, st.i, n), .i = n, .err = st.err, .at = st.at}; }
+    Int after = k + str_len(t.name);
+    Bool whole = (k == 0 || !ly_ident_pub(str_char_at(s, k - 1))) && !(after < n && ly_ident_pub(str_char_at(s, after)));
+    Int ob = wd_ws(s, after, n);
+    Bool lit = whole && ob < n && str_char_at(s, ob) == 123 && !wd_in_text(s, k);
+    Int cb = if (lit) { ly_close_brace_pub(s, ob) } else { -1 };
+    if (cb < 0) { return wd_lits(s, t, WdL {.out = wd_copy(st.out, s, st.i, after), .i = after, .err = "", .at = -1}); }
+    Str inner = str_slice(s, ob + 1, cb - 1);
+    List(Str) named = wd_named(wd_split_top(inner), 0, []);
+    Str dev = wd_named_device(t, named, 0);
+    if (dev != "") { return WdL {.out = st.out, .i = st.i, .err = t.name + "." + dev + " is DeviceOwned: the device sets it, so a literal cannot name it (it is written as zero)", .at = k}; }
+    Str fill = wd_fill(t, named, 0, "");
+    if (fill == "") { return wd_lits(s, t, WdL {.out = wd_copy(st.out, s, st.i, cb), .i = cb, .err = "", .at = -1}); }
+    Str body = str_trim(inner);
+    Str sep = if (body == "" || str_ends_with(body, ",")) { " " } else { ", " };
+    List(Str) o = wd_copy(st.out, s, st.i, cb - 1).concat([sep + fill + "}"]);
+    return wd_lits(s, t, WdL {.out = o, .i = cb, .err = "", .at = -1});
+}
+
+// Every type's literals completed, type after type.
+LyR wd_lits_all(Str s, List(WdT) ts, Int i) {
+    if (i >= ts.len()) { return LyR {.text = s, .code = "", .err = "", .at = -1}; }
+    if (!wd_completes(ts[i], 0)) { return wd_lits_all(s, ts, i + 1); }
+    WdL r = wd_lits(s, ts[i], WdL {.out = [], .i = 0, .err = "", .at = -1});
+    if (r.err != "") { return LyR {.text = s, .code = "E0296", .err = r.err, .at = r.at}; }
+    return wd_lits_all(str_join(r.out, ""), ts, i + 1);
 }
 
 /// Expand every word type in the merged text src.
 pub LyR wd_expand(Str src) {
     if (!str_contains(src, "@word(")) { return LyR {.text = src, .code = "", .err = "", .at = -1}; }
-    WdS st = wd_scan(src, WdS {.out = [], .i = 0, .gen = "", .code = "", .err = "", .at = -1});
+    WdS st = wd_scan(src, WdS {.out = [], .i = 0, .gen = "", .ts = [], .code = "", .err = "", .at = -1});
     if (st.err != "") { return LyR {.text = src, .code = st.code, .err = st.err, .at = st.at}; }
-    return LyR {.text = str_join(st.out, "") + st.gen, .code = "", .err = "", .at = -1};
+    LyR lits = wd_lits_all(str_join(st.out, ""), st.ts, 0);
+    if (lits.err != "") { return lits; }
+    return LyR {.text = lits.text + st.gen, .code = "", .err = "", .at = -1};
 }

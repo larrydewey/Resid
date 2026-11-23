@@ -1,0 +1,3 @@
+@word(8)
+type Reg = { DriverOwned(UInt(3)) op; DeviceOwned(Bool) busy; DeviceLatch(Bool) done; Bool on; @reserved(2); };
+Int main() { Reg r = Reg { .op = 1, .on = true, .busy = true }; return 0; }

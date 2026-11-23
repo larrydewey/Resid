@@ -108,6 +108,41 @@ when read, so every word is some record and reading cannot fail. A word
 type is not a layout type: its layout is this one, on every target. A
 malformed one is `E0295`.
 
-This is the first stage of device registers
-(`PLAN-hardware-access.md` §11): fields the device or the driver owns,
-sum-typed fields and reads with an effect are not here yet.
+### Whose field it is
+
+A device register has bits the device sets and bits the driver sets. A
+field says which by its type:
+
+| Field | Read | In a literal |
+|---|---|---|
+| `Bool f;`, `UInt(K) f;` | yes | must be named |
+| `DeviceOwned(T) f;` | yes | may not be named (`E0296`); written as zero |
+| `DriverOwned(T) f;` | never (`E0297`); reads as zero | must be named |
+| `DeviceLatch(Bool) f;` | `f`: yes. `clear_f`: never | `f` may not be named; `clear_f` may be left out |
+
+```resid
+@word(8)
+type IrqStatus = {
+    DeviceLatch(Bool) queue;      // set by the device, cleared by writing one
+    DeviceLatch(Bool) config;
+    Bool enable;
+    @reserved(5);
+};
+
+Int main() {
+    IrqStatus s = irq_status_from_word(7);
+    println(f"{s.queue} {s.config} {irq_status_word(s)}");                //> true true 4
+    println(f"{irq_status_word(IrqStatus { .clear_queue = true, .enable = true })}");   //> 5
+    return 0;
+}
+```
+
+A `DeviceLatch(Bool) f` is a bit the device sets and the driver clears by
+writing one. The record has `f`, which is read, and `clear_f`, which a
+literal sets to clear the bit or leaves out to keep it. Writing back a
+value that was read writes zero there, so it never clears an event the
+driver has not handled.
+
+This is the second stage of device registers
+(`PLAN-hardware-access.md` §11): sum-typed fields, reads with an effect
+and regions are not here yet.

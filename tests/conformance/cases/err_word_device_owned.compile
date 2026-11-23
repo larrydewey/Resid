@@ -1,0 +1,1 @@
+error[E0296]: Reg.busy is DeviceOwned: the device sets it, so a literal cannot name it

@@ -2528,12 +2528,32 @@ GK gk_bind_lparams(GK k, Int id, Int i, Int n, List(Str) pl) {
 
 // ─── Postfix: fields, indexing, methods ─────────────────────────────
 
+// A field of a packed word type that the driver owns (compiler/word.resid:
+// `DriverOwned(T) f`, or the `clear_f` of a `DeviceLatch`) is written and
+// never read: what the hardware returns there means nothing. The type's
+// `@word_modes(f=w;g=o;...)` names them; the generated `T_word`, which
+// packs the record it is given as `__wd_r`, is the one reader.
+Bool gk_word_unread(GK k, Str ty, Str f) {
+    Int d0 = k.sd.get(ty) else { -1 };
+    Int d = if (d0 >= 0) { d0 } else { k.sd.get(ty_head(ty)) else { -1 } };
+    if (d < 0) { return false; }
+    Str a = k.g.ns[d].aux;
+    Int at = str_find(a, "@word_modes(");
+    if (at < 0) { return false; }
+    Int e = str_find_char(a, 41, at);
+    List(Str) ents = str_split(str_slice(a, at + 12, if (e < 0) { str_len(a) } else { e }), ";");
+    return ents.contains(f + "=w") || ents.contains(f + "=o");
+}
+
+Str gk_word_unread_msg(Str ty, Str f) { return "E0297: " + ty + "." + f + " is the driver's to write and is never read (DriverOwned, or the clear half of a DeviceLatch)"; }
+
 GKT gk_field(GK k, Int id) {
     GKT b = gk_expr(k, gk_kid(k, id, 0), "");
     if (b.err != "") { return b; }
     Str f = k.g.ns[id].text;
     Str fty = gk_field_type(k, b.ty, f);
     if (fty == "") { return gterr(b.k, "field " + f + " not found in " + b.ty, id); }
+    if (gk_word_unread(k, b.ty, f) && k.g.ns[gk_kid(k, id, 0)].text != "__wd_r") { return gterr(b.k, gk_word_unread_msg(b.ty, f), id); }
     return gt(gk_mem(b.k, id, gk_sfield(k, b.ty, f)), fty, id);
 }
 
@@ -3480,6 +3500,7 @@ GKS gk_destr_names(GK k, Int id, Int i, Int n, Str ty) {
     Str f = k.g.ns[nm].text;
     Str fty = gk_field_type(k, ty, f);
     if (fty == "") { return gs_err(k, "unknown field " + f + " in " + ty, id); }
+    if (gk_word_unread(k, ty, f)) { return gs_err(k, gk_word_unread_msg(ty, f), id); }
     if (kg_shadows(k.rs, nm)) { return gk_shadow_err(k, id, f); }
     return gk_destr_names(gk_mem(gk_bind(k, nm, fty), nm, gk_sfield(k, ty, f)), id, i + 1, n, ty);
 }

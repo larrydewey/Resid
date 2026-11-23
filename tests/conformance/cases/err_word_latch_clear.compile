@@ -1,0 +1,1 @@
+error[E0297]: Reg.clear_done is the driver's to write and is never read

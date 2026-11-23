@@ -219,10 +219,10 @@ question apart from the boundary.
 
 ## 11. Step 1 proposal: packed word types
 
-**Accepted 2026-11-23 as a design. Stage A is built** (plain `Bool`
-and `UInt(K)` fields, `@reserved`, the two generated functions:
-`compiler/word.resid`); the wrappers, sum-typed fields, `take()` and
-`Region(T)` are not. How a register's
+**Accepted 2026-11-23 as a design. Stages A and B are built**
+(`compiler/word.resid`: `Bool` and `UInt(K)` fields, `@reserved`,
+`DeviceOwned`, `DriverOwned`, `DeviceLatch`, the two generated
+functions); sum-typed fields, `take()` and `Region(T)` are not. How a register's
 bits are declared. Three earlier forms (bit positions with access keywords in a
 new layout kind; whole words with masks; generated accessors) were put
 aside as unintuitive. This one uses what the language has: a register is
@@ -248,11 +248,11 @@ type IrqStatus = {
     @reserved(30);
 };
 
-VirtioStatus s = dev.status;                       // one volatile read
-dev.status = VirtioStatus { .acknowledge = true, .driver = true,
-                            .driver_ok = true, .features_ok = true,
-                            .failed = false };      // one volatile write
-dev.irq = IrqStatus { .clear_queue = true };       // config left as it is
+VirtioStatus s = device.read(dev, virtio_regs_status())?;     // one volatile read
+Bool a = device.write(dev, virtio_regs_status(),
+    VirtioStatus { .acknowledge = true, .driver = true, .driver_ok = true,
+                   .features_ok = true, .failed = false })?;   // one volatile write
+Bool b = device.write(dev, virtio_regs_irq(), IrqStatus { .clear_queue = true })?;   // config kept
 ```
 
 - **Fields in order, low bit first; widths from their types**: `Bool`
@@ -296,15 +296,15 @@ whose the field is, and suggests a value that does not change).
 Three further rules, decided the same day:
 
 - **A register that changes when it is read** is marked
-  `@clears_on_read`. A plain read of it is a compile error; `take()`
-  reads it once and gives the value, so a second read, or one added for
+  `@clears_on_read`. A plain `device.read` of it is a compile error;
+  `device.take` reads it once and gives the value, so a second read, or one added for
   a log line, does not compile.
 
   ```resid
   @word(32) @clears_on_read
   type IrqCause = { DeviceOwned(Bool) rx; DeviceOwned(Bool) tx; @reserved(30); };
 
-  IrqCause c = dev.cause.take();
+  IrqCause c = device.take(dev, nic_regs_cause())?;
   ```
 
   Rejected: no marking (a stray read is a silent bug); a linear value
@@ -332,6 +332,42 @@ Three further rules, decided the same day:
       @reserved(22);
   };
   ```
+
+**Register blocks and access** (decided 2026-11-23). Resid has no
+assignment, so the first examples here, written `dev.status = ...`,
+could not exist; they are corrected above.
+
+- A register block is a record of word types, each at a stated offset,
+  as a datasheet gives them. The compiler checks that none overlap and
+  that all lie inside the block; a gap is an offset nothing claims.
+
+  ```resid
+  @registers(size = 0x100)
+  type VirtioRegs = {
+      @at(0x00) DeviceMagic    magic;
+      @at(0x10) DeviceFeatures features;
+      @at(0x70) VirtioStatus   status;
+      @at(0x80) AddrLo         desc_lo;
+      @at(0x84) AddrHi         desc_hi;
+  };
+  ```
+
+  Rejected: registers in order with `@reserved(n)` gaps (one wrong count
+  moves every register after it); generated blocks only (no driver
+  until the generator exists).
+- For each register the compiler writes a typed handle
+  (`virtio_regs_status()`, a `Reg(VirtioStatus)`), and access is a
+  provider call under the `device` capability, as a filesystem call is:
+  `device.read(region, reg)` gives the value, `device.write(region,
+  reg, value)` says whether it happened, `device.take(region, reg)`
+  reads a `@clears_on_read` register. A start-up handshake, where each
+  read decides the next write, is a sequence of these.
+- The pure core of §1 (`(state, event) -> (state, operations)`) is a
+  library over these calls, for the steady state, where running a driver
+  against a device model with no hardware matters most. Rejected:
+  operations as values only (a handshake becomes a state machine with a
+  state for each step); calls only (nothing testable without a fake
+  device).
 
 First slice to build, before `Region(T)` exists: `@word(N)` types alone,
 with the packing the compiler generates exposed as two functions (a

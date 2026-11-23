@@ -1,0 +1,34 @@
+@word(32)
+type Command = {
+    DriverOwned(UInt(8)) opcode;    // written, never read
+    Bool busy_irq;                  // read and written
+    DeviceOwned(Bool) busy;         // read, never named in a literal
+    DeviceOwned(UInt(4)) level;
+    @reserved(18);
+};
+
+@word(8)
+type IrqStatus = {
+    DeviceLatch(Bool) queue;
+    DeviceLatch(Bool) config;
+    Bool enable;
+    @reserved(5);
+};
+
+Int main() {
+    // A write names what the driver may name; the device's fields are zero.
+    Command c = Command { .opcode = 3, .busy_irq = true };
+    UInt(32) w = command_word(c);
+    println(f"{w} {c.busy_irq} {c.busy} {c.level}");
+    // A read: opcode's bits are ignored, the device's fields come through.
+    Command r = command_from_word(4294967295);
+    println(f"{r.busy_irq} {r.busy} {r.level}");
+    // Writing back what was read writes the driver's fields as they read: zero.
+    println(f"{command_word(r)}");
+    // A latch: read `queue`, clear with `clear_queue`, or leave it out to keep.
+    IrqStatus s = irq_status_from_word(7);
+    println(f"{s.queue} {s.config} {s.enable} {irq_status_word(s)}");
+    IrqStatus ack = IrqStatus { .clear_queue = true, .enable = true };
+    println(f"{irq_status_word(ack)} {irq_status_word(IrqStatus { .enable = false, .clear_config = true, })} {irq_status_word(IrqStatus {.enable = true})}");
+    return 0;
+}

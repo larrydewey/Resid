@@ -1,0 +1,9 @@
+@word(8)
+type Reg = { DriverOwned(UInt(3)) op; DeviceOwned(Bool) busy; Bool on; @reserved(3); };
+Int main() {
+    // Reg { .busy = true } in a comment, and "Reg { .busy = true }" in a string, are left alone.
+    Str t = "Reg { .busy = true }";
+    Reg r = Reg { .op = 5, .on = true };
+    println(f"{t} {reg_word(r)} {reg_word(Reg { .op = 1, .on = false })}");
+    return 0;
+}

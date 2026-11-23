@@ -1,1 +1,1 @@
-error[E0295]: Str8.s: a word's field is a Bool or a UInt(N) of 1 to 64 bits, got `Str`
+error[E0295]: Str8.s: a word's field is a Bool or a UInt(N) of 1 to 64 bits

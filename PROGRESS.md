@@ -149,8 +149,19 @@ region, with no diagnostic.
   @reserved(n); };` with N of 8, 16, 32 or 64, fields from the low bit,
   widths adding up to N (E0295). A text expansion after layout types
   that writes `t_word` and `t_from_word`. Conformance: `word_types`,
-  `err_word_width`, `err_word_field`. Not yet: `DeviceOwned`,
-  `DriverOwned`, `DeviceLatch`, sum-typed fields, `@clears_on_read`.
+  `err_word_width`, `err_word_field`.
+- **Stage B: whose field it is.** `DeviceOwned(T)` (read; a literal may
+  not name it, E0296; written as zero), `DriverOwned(T)` (named in a
+  literal; never read, E0297) and `DeviceLatch(Bool) f` (the record gets
+  `f` for the device and an optional `clear_f` for the driver).
+  `word.resid` rewrites the declaration to plain fields, fills the
+  fields a literal may not or need not name, and leaves `@word_modes`
+  on the type, which `gk_field` and `gk_destr_names` in `gcheck.resid`
+  read. Conformance: `word_owned`, `word_literal_text`,
+  `err_word_device_owned`, `err_word_driver_owned`,
+  `err_word_latch_clear`. Known wart: a diagnostic on a completed
+  literal's line shows the fields that were filled in. Not yet:
+  sum-typed fields, `@clears_on_read`, `Region(T)`.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.
