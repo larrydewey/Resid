@@ -1,0 +1,3 @@
+@word(32)
+type Short = { Bool a; UInt(8) b; };
+Int main() { return 0; }

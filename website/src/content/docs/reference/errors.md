@@ -73,6 +73,7 @@ network]`.
 | `E0289` | an `@assumption` without a pin or reason, `assumed` or an assumption in the standard library, or `assumption_make`/`assumption_pinned` outside an `@assumption` function |
 | `E0293` | a program that issues challenges for several purposes with a decision that names none (`bind = "..."`), or a `bind` decision without exactly one ChallengeRecord |
 | `E0294` | an instance replacing one of the standard library's in a program that reaches `lib/verify/` |
+| `E0295` | a packed word type is malformed: `@word` not 8, 16, 32 or 64 or not on a record type, a field that is not a `Bool` or a `UInt(N)`, an annotation other than `@reserved(n);`, or widths that do not add up to the word |
 | `E0290` | a program that reaches `lib/verify/` built against a closure or runtime this compiler was not released with (or with `-rt`/`-rtr`); `--verify-lib-dev` lifts it |
 | `E0301` | a known value violates its constraint type |
 | `E0401` | a builder is not consumed on some path |

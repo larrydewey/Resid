@@ -9087,6 +9087,7 @@ import "native.resid";
 import "device.resid";
 import "labels.resid";
 import "layout.resid";
+import "word.resid";
 import "ekey.resid";
 import "attest.resid";
 import "verify_pins.resid";
@@ -10585,7 +10586,9 @@ Int main() {
     // library call (imp_hygiene).
     LyR atr = at_expand(imp_hygiene(rra.text, rra.map, depmap));
     LyR lyr0 = ly_expand(atr.text);
-    LyR lyr = if (atr.err != "") { atr } else { lyr0 };
+    LyR lyr1 = if (atr.err != "") { atr } else { lyr0 };
+    // Packed word types (compiler/word.resid), after layout types.
+    LyR lyr = if (lyr1.err != "") { lyr1 } else { wd_expand(lyr1.text) };
     Int lybad = if (lyr.err != "") { 1 } else { 0 };
     if (lyr.err != "") { diag_error(lyr.code, lyr.err, lyr.at + 1, 1, rra.text, rra.map, 0); }
     Str rtext = ds_desugar(with_builtin_types(lyr.text));

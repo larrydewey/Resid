@@ -144,6 +144,13 @@ region, with no diagnostic.
   of `PLAN-hardware-access.md`. A plain raw load in a polling loop is
   hoisted out of it. Test: `tests/runtime/internals/runtime/rt/
   volatile_poll.resid`; `bench/crossing` polls with them.
+- **Packed word types, stage A** (`compiler/word.resid`,
+  `PLAN-hardware-access.md` §11): `@word(N) type T = { Bool a; UInt(K) b;
+  @reserved(n); };` with N of 8, 16, 32 or 64, fields from the low bit,
+  widths adding up to N (E0295). A text expansion after layout types
+  that writes `t_word` and `t_from_word`. Conformance: `word_types`,
+  `err_word_width`, `err_word_field`. Not yet: `DeviceOwned`,
+  `DriverOwned`, `DeviceLatch`, sum-typed fields, `@clears_on_read`.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

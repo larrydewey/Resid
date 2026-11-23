@@ -219,7 +219,10 @@ question apart from the boundary.
 
 ## 11. Step 1 proposal: packed word types
 
-**Accepted 2026-11-23 as a design; not implemented.** How a register's
+**Accepted 2026-11-23 as a design. Stage A is built** (plain `Bool`
+and `UInt(K)` fields, `@reserved`, the two generated functions:
+`compiler/word.resid`); the wrappers, sum-typed fields, `take()` and
+`Region(T)` are not. How a register's
 bits are declared. Three earlier forms (bit positions with access keywords in a
 new layout kind; whole words with masks; generated accessors) were put
 aside as unintuitive. This one uses what the language has: a register is

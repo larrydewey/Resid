@@ -1,0 +1,225 @@
+// word.resid — packed word types (PLAN-hardware-access.md §11): a record
+// `type` marked `@word(N)` fits in one N-bit word (N is 8, 16, 32 or 64),
+// its fields in order from the low bit, each as wide as its type: a `Bool`
+// one bit, a `UInt(K)` K bits, `@reserved(n);` n bits that nothing names.
+// The widths must add up to N.
+//
+// Expansion runs on the merged text before parsing, after layout types
+// (layout.resid). The annotation and each `@reserved` are overwritten with
+// spaces, so every position and line stays where it was and the checker
+// sees a plain record; the generated functions are appended after the
+// program. For a type `VirtioStatus` (snake `virtio_status`) it writes:
+//
+//   UInt(N) virtio_status_word(VirtioStatus r)        (the record as its word)
+//   VirtioStatus virtio_status_from_word(UInt(N) w)   (a word as the record)
+//
+// Reserved bits are written as zero and ignored when read, so with these
+// field types every word is some record and reading cannot fail.
+//
+// This is the first stage: fields the device or the driver owns
+// (DeviceOwned, DriverOwned, DeviceLatch), sum-typed fields and
+// `@clears_on_read` are not here yet.
+//
+// Imported by compiler/driver.resid.
+
+import "layout.resid";
+
+// A field: its name ("" for reserved bits), its type text, its width and
+// the bit it starts at.
+type WdF = { Str name; Str ty; Int bits; Int off; };
+
+// One scan step: the blanked text so far, where the scan is, what has been
+// generated, and an error (code "", when none).
+type WdS = { List(Str) out; Int i; Str gen; Str code; Str err; Int at; };
+
+// The fields of one declaration as they are read: the fields, the blanked
+// body so far, the position, the next free bit, and an error.
+type WdB = { List(WdF) fs; List(Str) out; Int i; Int bit; Str err; Int at; };
+
+Bool wd_space(Int c) { return c == 32 || c == 9 || c == 10 || c == 13; }
+
+// Past white space and line comments.
+Int wd_ws(Str s, Int i, Int n) {
+    if (i >= n) { return n; }
+    Int c = str_char_at(s, i);
+    if (wd_space(c)) { return wd_ws(s, i + 1, n); }
+    if (c == 47 && i + 1 < n && str_char_at(s, i + 1) == 47) { return wd_ws(s, wd_eol(s, i, n), n); }
+    return i;
+}
+
+Int wd_eol(Str s, Int i, Int n) {
+    if (i >= n || str_char_at(s, i) == 10) { return i; }
+    return wd_eol(s, i + 1, n);
+}
+
+Int wd_char(Str s, Int c, Int i, Int n) {
+    if (i >= n) { return -1; }
+    if (str_char_at(s, i) == c) { return i; }
+    return wd_char(s, c, i + 1, n);
+}
+
+List(Str) wd_copy(List(Str) out, Str s, Int a, Int b) { return if (a >= b) { out } else { out.concat([str_slice(s, a, b)]) }; }
+
+// s[a..b] as spaces, its newlines kept.
+List(Str) wd_blank(List(Str) out, Str s, Int a, Int b) { return if (a >= b) { out } else { out.concat([wd_blanked(s, a, b, StrBuf())]) }; }
+
+Str wd_blanked(Str s, Int i, Int b, StrBuf acc) {
+    if (i >= b) { return acc.finish(); }
+    return wd_blanked(s, i + 1, b, if (str_char_at(s, i) == 10) { acc.push("\n") } else { acc.push(" ") });
+}
+
+Int wd_last_space(Str s, Int i) {
+    if (i < 0) { return -1; }
+    if (wd_space(str_char_at(s, i))) { return i; }
+    return wd_last_space(s, i - 1);
+}
+
+// The bits a field of type t takes, or 0 for a type a word cannot hold yet.
+Int wd_bits(Str t) {
+    if (t == "Bool") { return 1; }
+    if (str_starts_with(t, "UInt(") && str_ends_with(t, ")")) {
+        Str k = str_trim(str_slice(t, 5, str_len(t) - 1));
+        return if (str_is_int(k) && str_parse_int(k) >= 1 && str_parse_int(k) <= 64) { str_parse_int(k) } else { 0 };
+    }
+    return 0;
+}
+
+// 2^k - 1 as text, k in 1..64 (the last is past Int's range).
+Str wd_mask(Int k) {
+    if (k >= 64) { return "18446744073709551615"; }
+    if (k == 63) { return "9223372036854775807"; }
+    return f"{wd_pow2(k, 1) - 1}";
+}
+
+Int wd_pow2(Int k, Int acc) { if (k <= 0) { return acc; } return wd_pow2(k - 1, acc * 2); }
+
+Bool wd_upper(Int c) { return c >= 65 && c <= 90; }
+Bool wd_lower_or_digit(Int c) { return (c >= 97 && c <= 122) || (c >= 48 && c <= 57); }
+
+// VirtioStatus -> virtio_status.
+Str wd_snake(Str s) { return wd_snake_at(s, 0, str_len(s), StrBuf()); }
+
+Str wd_snake_at(Str s, Int i, Int n, StrBuf acc) {
+    if (i >= n) { return acc.finish(); }
+    Int c = str_char_at(s, i);
+    Bool brk = wd_upper(c) && i > 0 && (wd_lower_or_digit(str_char_at(s, i - 1)) || (i + 1 < n && wd_lower_or_digit(str_char_at(s, i + 1)) && wd_upper(str_char_at(s, i - 1))));
+    StrBuf a1 = if (brk) { acc.push("_") } else { acc };
+    return wd_snake_at(s, i + 1, n, a1.push(str_from_code(if (wd_upper(c)) { c + 32 } else { c })));
+}
+
+WdS wd_bad(WdS st, Str msg, Int at) { return WdS {.out = st.out, .i = st.i, .gen = st.gen, .code = "E0295", .err = msg, .at = at}; }
+
+WdS wd_scan(Str s, WdS st) {
+    Int n = str_len(s);
+    Int k = ly_find_pub(s, "@word(", st.i);
+    if (k < 0 || st.err != "") { return WdS {.out = wd_copy(st.out, s, st.i, n), .i = n, .gen = st.gen, .code = st.code, .err = st.err, .at = st.at}; }
+    if (!ly_line_start_pub(s, k)) {
+        return wd_scan(s, WdS {.out = wd_copy(st.out, s, st.i, k + 6), .i = k + 6, .gen = st.gen, .code = "", .err = "", .at = -1});
+    }
+    return wd_scan(s, wd_decl(s, k, WdS {.out = wd_copy(st.out, s, st.i, k), .i = k, .gen = st.gen, .code = "", .err = "", .at = -1}));
+}
+
+// `@word(N) [pub] type Name = { fields };` at k.
+WdS wd_decl(Str s, Int k, WdS st) {
+    Int n = str_len(s);
+    Int e = ly_close_pub(s, k + 5);
+    if (e < 0) { return wd_bad(st, "@word(...) does not close", k); }
+    Str arg = str_trim(str_slice(s, k + 6, e - 1));
+    if (arg != "8" && arg != "16" && arg != "32" && arg != "64") { return wd_bad(st, "@word takes 8, 16, 32 or 64 (what one hardware access carries), got `" + arg + "`", k); }
+    Int width = str_parse_int(arg);
+    Int t0 = wd_ws(s, e, n);
+    Int t1 = if (t0 + 4 <= n && str_slice(s, t0, t0 + 4) == "pub ") { wd_ws(s, t0 + 4, n) } else { t0 };
+    Bool isty = t1 + 5 <= n && str_slice(s, t1, t1 + 5) == "type ";
+    Int eq = if (isty) { wd_char(s, 61, t1, n) } else { -1 };
+    Int ob = if (eq < 0) { -1 } else { wd_ws(s, eq + 1, n) };
+    if (ob < 0 || ob >= n || str_char_at(s, ob) != 123) { return wd_bad(st, "@word marks a record type: `@word(" + arg + ") type Name = { ... };`", k); }
+    Str name = str_trim(str_slice(s, t1 + 5, eq));
+    Int cb = ly_close_brace_pub(s, ob);
+    if (cb < 0) { return wd_bad(st, "word type " + name + " does not close", k); }
+    List(Str) o1 = wd_copy(wd_blank(st.out, s, k, e), s, e, ob + 1);
+    WdB b = wd_fields(s, ob + 1, cb - 1, name, WdB {.fs = [], .out = o1, .i = ob + 1, .bit = 0, .err = "", .at = -1});
+    if (b.err != "") { return wd_bad(st, b.err, b.at); }
+    if (b.bit != width) { return wd_bad(st, "word type " + name + f" is @word({width}) and its fields take {b.bit} bits: they must add up to {width} (use @reserved(n); for bits nothing defines)", k); }
+    if (!wd_any_named(b.fs, 0)) { return wd_bad(st, "word type " + name + " has no field", k); }
+    return WdS {.out = b.out.concat(["}"]), .i = cb, .gen = st.gen + wd_gen(name, width, b.fs), .code = "", .err = "", .at = -1};
+}
+
+Bool wd_any_named(List(WdF) fs, Int i) {
+    if (i >= fs.len()) { return false; }
+    return fs[i].name != "" || wd_any_named(fs, i + 1);
+}
+
+WdB wd_fail(WdB b, Str msg, Int at) { return WdB {.fs = b.fs, .out = b.out, .i = b.i, .bit = b.bit, .err = msg, .at = at}; }
+
+// Fields up to end (the closing brace); each `@reserved(n);` is blanked.
+WdB wd_fields(Str s, Int i, Int end, Str name, WdB b) {
+    Int j = wd_ws(s, i, end);
+    List(Str) o = wd_copy(b.out, s, i, j);
+    if (j >= end) { return WdB {.fs = b.fs, .out = o, .i = end, .bit = b.bit, .err = "", .at = -1}; }
+    WdB b1 = WdB {.fs = b.fs, .out = o, .i = j, .bit = b.bit, .err = "", .at = -1};
+    if (str_char_at(s, j) == 64) {
+        if (!(j + 10 <= end && str_slice(s, j, j + 10) == "@reserved(")) { return wd_fail(b1, "a word's field takes no annotation but `@reserved(n);` (" + name + ")", j); }
+        Int e = ly_close_pub(s, j + 9);
+        Str arg = if (e < 0) { "" } else { str_trim(str_slice(s, j + 10, e - 1)) };
+        if (e < 0 || !str_is_int(arg) || str_parse_int(arg) <= 0) { return wd_fail(b1, "@reserved(n) takes a positive number of bits (" + name + ")", j); }
+        Int sc = wd_ws(s, e, end);
+        if (sc >= end || str_char_at(s, sc) != 59) { return wd_fail(b1, "@reserved(n) stands alone: `@reserved(" + arg + ");`", j); }
+        WdF r = WdF {.name = "", .ty = "", .bits = str_parse_int(arg), .off = b.bit};
+        return wd_fields(s, sc + 1, end, name, WdB {.fs = b.fs.concat([r]), .out = wd_blank(o, s, j, sc + 1), .i = sc + 1, .bit = b.bit + str_parse_int(arg), .err = "", .at = -1});
+    }
+    Int sc = wd_char(s, 59, j, end);
+    if (sc < 0) { return wd_fail(b1, "a word's field is `Type name;` (" + name + ")", j); }
+    Str decl = str_trim(str_slice(s, j, sc));
+    Int sp = wd_last_space(decl, str_len(decl) - 1);
+    if (sp < 0) { return wd_fail(b1, "a word's field is `Type name;` (" + name + ")", j); }
+    Str fty = str_trim(str_slice(decl, 0, sp));
+    Str fname = str_slice(decl, sp + 1, str_len(decl));
+    Int bits = wd_bits(fty);
+    if (bits == 0) { return wd_fail(b1, name + "." + fname + ": a word's field is a Bool or a UInt(N) of 1 to 64 bits, got `" + fty + "`", j); }
+    WdF f = WdF {.name = fname, .ty = fty, .bits = bits, .off = b.bit};
+    return wd_fields(s, sc + 1, end, name, WdB {.fs = b.fs.concat([f]), .out = wd_copy(o, s, j, sc + 1), .i = sc + 1, .bit = b.bit + bits, .err = "", .at = -1});
+}
+
+// The two functions of word type `name`.
+Str wd_gen(Str name, Int width, List(WdF) fs) {
+    Str sn = wd_snake(name);
+    Str wt = f"UInt({width})";
+    Str head = "\n// generated from @word(" + f"{width}" + ") " + name + "\n";
+    Str pack = "pub " + wt + " " + sn + "_word(" + name + " __wd_r) {\n" + wd_pack_binds(fs, wt, 0, StrBuf()) + "    return " + wd_pack_sum(fs, 0, "") + ";\n}\n";
+    Str unpack = "pub " + name + " " + sn + "_from_word(" + wt + " __wd_w) {\n    return " + name + " {" + wd_unpack(fs, 0, "") + "};\n}\n";
+    return head + pack + unpack;
+}
+
+Str wd_pack_binds(List(WdF) fs, Str wt, Int i, StrBuf acc) {
+    if (i >= fs.len()) { return acc.finish(); }
+    WdF f = fs[i];
+    if (f.name == "") { return wd_pack_binds(fs, wt, i + 1, acc); }
+    Str v = if (f.ty == "Bool") { "if (__wd_r." + f.name + ") { 1 } else { 0 }" } else { "__wd_r." + f.name };
+    return wd_pack_binds(fs, wt, i + 1, acc.push("    " + wt + f" __wd_f{i} = " + v + ";\n"));
+}
+
+Str wd_pack_sum(List(WdF) fs, Int i, Str acc) {
+    if (i >= fs.len()) { return if (acc == "") { "0" } else { acc }; }
+    WdF f = fs[i];
+    if (f.name == "") { return wd_pack_sum(fs, i + 1, acc); }
+    Str one = if (f.off == 0) { f"__wd_f{i}" } else { f"(__wd_f{i} << {f.off})" };
+    return wd_pack_sum(fs, i + 1, if (acc == "") { one } else { acc + " | " + one });
+}
+
+Str wd_unpack(List(WdF) fs, Int i, Str acc) {
+    if (i >= fs.len()) { return acc; }
+    WdF f = fs[i];
+    if (f.name == "") { return wd_unpack(fs, i + 1, acc); }
+    Str sh = if (f.off == 0) { "__wd_w" } else { f"(__wd_w >> {f.off})" };
+    Str v = if (f.ty == "Bool") { "(" + sh + " & 1) == 1" } else { "(" + f.ty + ")(" + sh + " & " + wd_mask(f.bits) + ")" };
+    Str one = "." + f.name + " = " + v;
+    return wd_unpack(fs, i + 1, if (acc == "") { one } else { acc + ", " + one });
+}
+
+/// Expand every word type in the merged text src.
+pub LyR wd_expand(Str src) {
+    if (!str_contains(src, "@word(")) { return LyR {.text = src, .code = "", .err = "", .at = -1}; }
+    WdS st = wd_scan(src, WdS {.out = [], .i = 0, .gen = "", .code = "", .err = "", .at = -1});
+    if (st.err != "") { return LyR {.text = src, .code = st.code, .err = st.err, .at = st.at}; }
+    return LyR {.text = str_join(st.out, "") + st.gen, .code = "", .err = "", .at = -1};
+}

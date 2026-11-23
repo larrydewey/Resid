@@ -74,3 +74,40 @@ A layout field may not hold a type only the runtime builds
 `@check` (`E0273`). Everything else that is malformed is `E0272`.
 `Secret` fields and `Challenge(N)` request fields arrive with channels
 (phase 3 of the plan).
+
+## Packed word types
+
+A **word type** is a record marked `@word(N)` that fits in one N-bit
+word (N is 8, 16, 32 or 64). Its fields lie in order from the low bit,
+each as wide as its type: a `Bool` is one bit, a `UInt(K)` K bits, and
+`@reserved(n);` stands for n bits that nothing names. The widths must
+add up to N.
+
+```resid
+@word(16)
+type QueueCtl = {
+    UInt(10) size;
+    UInt(2) mode;
+    @reserved(3);
+    Bool enabled;
+};
+
+Int main() {
+    QueueCtl q = QueueCtl { .size = 1023, .mode = 2, .enabled = true };
+    UInt(16) w = queue_ctl_word(q);
+    QueueCtl r = queue_ctl_from_word(w);
+    println(f"{w} {r.size} {r.mode} {r.enabled}");     //> 35839 1023 2 true
+    return 0;
+}
+```
+
+For a type `QueueCtl` the compiler writes `queue_ctl_word(QueueCtl) ->
+UInt(16)` and `queue_ctl_from_word(UInt(16)) -> QueueCtl`; no code
+shifts or masks by hand. Reserved bits are written as zero and ignored
+when read, so every word is some record and reading cannot fail. A word
+type is not a layout type: its layout is this one, on every target. A
+malformed one is `E0295`.
+
+This is the first stage of device registers
+(`PLAN-hardware-access.md` §11): fields the device or the driver owns,
+sum-typed fields and reads with an effect are not here yet.

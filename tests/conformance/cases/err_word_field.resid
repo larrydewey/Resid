@@ -1,0 +1,3 @@
+@word(8)
+type Str8 = { Str s; @reserved(7); };
+Int main() { return 0; }

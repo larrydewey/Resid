@@ -1,0 +1,43 @@
+@word(32)
+type VirtioStatus = {
+    Bool acknowledge;     // the guest found the device
+    Bool driver;
+    Bool driver_ok;
+    Bool features_ok;
+    @reserved(2);
+    Bool needs_reset;
+    Bool failed;
+    @reserved(24);
+};
+
+@word(16)
+pub type QueueCtl = {
+    UInt(10) size;
+    UInt(2) mode;
+    @reserved(3);
+    Bool enabled;
+};
+
+@word(64)
+type Wide = { UInt(64) all; };
+
+@word(8)
+type Small = { UInt(3) lo; @reserved(1); UInt(4) hi; };
+
+Int main() {
+    VirtioStatus s = VirtioStatus { .acknowledge = true, .driver = true, .driver_ok = false, .features_ok = true, .needs_reset = false, .failed = true };
+    UInt(32) w = virtio_status_word(s);
+    VirtioStatus t = virtio_status_from_word(w);
+    println(f"{w} {t.acknowledge} {t.driver} {t.driver_ok} {t.features_ok} {t.needs_reset} {t.failed}");
+    VirtioStatus u = virtio_status_from_word(4294967295);
+    println(f"{virtio_status_word(u)}");
+    QueueCtl q = QueueCtl { .size = 1023, .mode = 2, .enabled = true };
+    UInt(16) qw = queue_ctl_word(q);
+    QueueCtl q2 = queue_ctl_from_word(qw);
+    println(f"{qw} {q2.size} {q2.mode} {q2.enabled} {queue_ctl_word(queue_ctl_from_word(65535))}");
+    Wide x = wide_from_word(18446744073709551615);
+    println(f"{wide_word(x)} {x.all}");
+    Small m = small_from_word(255);
+    println(f"{m.lo} {m.hi} {small_word(m)} {small_word(Small { .lo = 5, .hi = 9 })}");
+    return 0;
+}
