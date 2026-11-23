@@ -48,7 +48,7 @@ capabilities.
 
 | Family | Grants |
 |---|---|
-| `filesystem` | the `filesystem.*` provider: `read_all`, `write_all`, `read_bytes`, `write_bytes`, `append_bytes`, `write_secret`, `exists`, `is_dir`, `list_dir`, `create_dir`, `remove`, `rename`, `size`, `modified_ms`, `sha256`, `open` / `read_handle` / `close` |
+| `filesystem` | the `filesystem.*` provider: `read_all`, `write_all`, `read_bytes`, `write_bytes`, `append_bytes`, `write_secret`, `exists`, `is_dir`, `list_dir`, `create_dir`, `remove`, `rename`, `size`, `modified_ms`, `read_range`, `write_at`, `sync`, `truncate`, `sha256`, `open` / `read_handle` / `close` |
 | `environment` | `environment.get(name)`, `environment.has(name)` |
 | `args` | `args.count()`, `args.get(i)` |
 | `process` | `process.run(cmd)` and the native debugger builtins |

@@ -2487,7 +2487,10 @@ GT lw_provider(LW w, Int id, Str pname, Str m, List(Str) env, GT c) {
     if (nargs == 1) { return lw_rawify_ret(lw_rt1(a1, ll_ty(rty), "@" + sym + "(" + ll_ty(a1.ty) + " " + a1.val + ")", rty)); }
     GT a2 = lw_expr(w, lw_kid(w, id, 2), env, a1);
     if (a2.err != "") { return a2; }
-    return lw_rawify_ret(lw_rt1(a2, ll_ty(rty), "@" + sym + "(" + ll_ty(a1.ty) + " " + a1.val + ", " + ll_ty(a2.ty) + " " + a2.val + ")", rty));
+    if (nargs == 2) { return lw_rawify_ret(lw_rt1(a2, ll_ty(rty), "@" + sym + "(" + ll_ty(a1.ty) + " " + a1.val + ", " + ll_ty(a2.ty) + " " + a2.val + ")", rty)); }
+    GT a3 = lw_expr(w, lw_kid(w, id, 3), env, a2);
+    if (a3.err != "") { return a3; }
+    return lw_rawify_ret(lw_rt1(a3, ll_ty(rty), "@" + sym + "(" + ll_ty(a1.ty) + " " + a1.val + ", " + ll_ty(a2.ty) + " " + a2.val + ", " + ll_ty(a3.ty) + " " + a3.val + ")", rty));
 }
 
 // Indexing: fixed-capacity values, maps, list elements and slices.

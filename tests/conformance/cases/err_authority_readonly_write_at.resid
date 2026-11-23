@@ -1,0 +1,6 @@
+// write_at, sync and truncate write: a read-only grant does not cover them.
+@requires(filesystem(readonly))
+Int main() {
+    if (filesystem.write_at("/tmp/resid_authority_readonly_write_at", 0, [1])) { return 1; }
+    return 0;
+}

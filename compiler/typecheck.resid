@@ -3758,6 +3758,7 @@ Bool is_write_verb(Str family, Str verb) {
     if (family == "filesystem" && (verb == "write_hex" || verb == "append_hex")) { return true; }
     if (family == "filesystem" && verb == "create_dir") { return true; }
     if (family == "filesystem" && (verb == "remove" || verb == "rename")) { return true; }
+    if (family == "filesystem" && (verb == "write_at" || verb == "sync" || verb == "truncate")) { return true; }
     if (family == "process" && verb == "run") { return true; }
     if (family == "clock" && verb == "sleep_ns") { return true; }
     return false;
@@ -4187,6 +4188,7 @@ Bool is_prov_verb_filesystem(Str v) {
     if (v == "is_dir") { return true; }
     if (v == "create_dir") { return true; }
     if (v == "remove" || v == "rename" || v == "size" || v == "modified_ms") { return true; }
+    if (v == "read_range" || v == "write_at" || v == "sync" || v == "truncate") { return true; }
     return false;
 }
 

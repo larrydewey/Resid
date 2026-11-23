@@ -2625,6 +2625,10 @@ Str gk_provider_params(Str fam, Str m) {
     if (m == "read_handle" || m == "close") { return "File"; }
     if (m == "write_all" || m == "write_hex" || m == "append_hex" || m == "rename") { return "Str,Str"; }
     if (m == "write_bytes" || m == "write_secret" || m == "append_bytes") { return "Str,List(Int)"; }
+    if (m == "read_range") { return "Str,Int,Int"; }
+    if (m == "write_at") { return "Str,Int,List(Int)"; }
+    if (m == "sync") { return "Str"; }
+    if (m == "truncate") { return "Str,Int"; }
     return "?";
 }
 
@@ -2643,7 +2647,7 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
     GK k = a.k;
     if (str_contains(a.tys, "Secret(")) { return gterr(k, "E0255: " + fam + "." + m + " takes public values, got (" + a.tys + "); declassify the secret first" + (if (m == "write_secret") { " (write_secret keeps the file readable by its owner only)" } else { "" }), id); }
     // Bytes to write may be packed, one to a byte (read_bytes_u8).
-    Bool packed = fam == "filesystem" && (m == "write_bytes" || m == "write_secret" || m == "append_bytes") && a.tys == "Str,List(UInt(8))";
+    Bool packed = fam == "filesystem" && (((m == "write_bytes" || m == "write_secret" || m == "append_bytes") && a.tys == "Str,List(UInt(8))") || (m == "write_at" && (a.tys == "Str,Int,List(UInt(8))" || a.tys == "Str,Int(64),List(UInt(8))")));
     Bool fits = want == "?" || a.tys == want || packed || (a.count == wl.len() && params_accept(want, a.tys, a.count));
     if (!fits) { return gterr(k, fam + "." + m + " expects (" + want + "), got (" + a.tys + ")", id); }
     if (fam == "environment" && m == "get") { return gt(k, "Str", id); }
@@ -2658,6 +2662,8 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
         if (m == "append_bytes" || m == "write_hex" || m == "append_hex") { return gt(k, "Bool", id); }
         if (m == "remove" || m == "rename") { return gt(k, "Bool", id); }
         if (m == "size" || m == "modified_ms") { return gt(k, "Int", id); }
+        if (m == "read_range") { return gt(k, "List(Int)", id); }
+        if (m == "write_at" || m == "sync" || m == "truncate") { return gt(k, "Bool", id); }
     }
     if (fam == "args" && m == "count") { return gt(k, "Int", id); }
     if (fam == "args" && m == "get") { return gt(k, "Str", id); }
