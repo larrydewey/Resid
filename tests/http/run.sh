@@ -21,6 +21,11 @@ if (cd "$ROOT" && "$COMPILER" tests/http/stream.resid -o "$W/st") > "$W/st.log" 
     && timeout 60 "$W/st" > "$W/st.out" 2>&1 && cmp -s "$W/st.out" stream.out; then ok
 else bad "stream: $(grep -m1 -i error "$W/st.log") $(diff "$W/st.out" stream.out 2>/dev/null | head -4 | tr '\n' ' ')"; fi
 
+# A stateful loop's idle hook: the state moves on without a request.
+if (cd "$ROOT" && "$COMPILER" tests/http/idle.resid -o "$W/il") > "$W/il.log" 2>&1 \
+    && timeout 60 "$W/il" > "$W/il.out" 2>&1 && cmp -s "$W/il.out" idle.out; then ok
+else bad "idle: $(grep -m1 -i error "$W/il.log") $(diff "$W/il.out" idle.out 2>/dev/null | head -4 | tr '\n' ' ')"; fi
+
 # A stateful loop: requests change the state, a live stream sees it.
 if (cd "$ROOT" && "$COMPILER" tests/http/state.resid -o "$W/sl") > "$W/sl.log" 2>&1 \
     && timeout 60 "$W/sl" > "$W/sl.out" 2>&1 && cmp -s "$W/sl.out" state.out; then ok

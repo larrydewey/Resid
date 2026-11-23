@@ -873,7 +873,7 @@ type HttpTurn(A, K) = { A state; HttpOut(K) out; };
 /// How live streams step in a stateful loop: `shared` makes every stream
 /// step with `tick` from the current application state; otherwise each
 /// stream keeps its own `HttpStream.next`.
-type HsTicker(A, K) = { Bool shared; HttpStep(K) closure(A, K) tick; Bool closure(A) keep; };
+type HsTicker(A, K) = { Bool shared; HttpStep(K) closure(A, K) tick; Bool closure(A) keep; Int idle_ms; A closure(A) idle; };
 
 /// A connection and the application state after stepping it.
 type HsRes(S, K, A) = { HsConn(S, K, A) c; A app; };
@@ -1168,6 +1168,7 @@ HttpLoopEnd(A) hs_ev_loop(Int lfd, C conf, A app, HttpTurn(A, K) closure(A, Http
     // A stateful loop ends when its state says so (keep false): every
     // connection is closed and the loop returns.
     Bool closure(A) keep = tk.keep;
+    A closure(A) idle = tk.idle;
     if (!keep(app)) {
         _ = hs_ev_close_all(cs, 0);
         return HttpLoopEnd { .accepted = accepted, .state = app };
@@ -1178,10 +1179,13 @@ HttpLoopEnd(A) hs_ev_loop(Int lfd, C conf, A app, HttpTurn(A, K) closure(A, Http
     List(Int) lead_want = if (accepting) { [1] } else { [] };
     List(Int) fds = lead.concat(hs_ev_fds(cs, 0, ListBuf()));
     List(Int) wants = lead_want.concat(hs_ev_wants(cs, 0, ListBuf()));
-    List(Int) ready = resid_tcp_poll(fds, wants, -1);
+    List(Int) ready = resid_tcp_poll(fds, wants, tk.idle_ms);
     Int off = lead.len();
     ListBuf(HsConn(S, K, A)) start = ListBuf();
-    HsRound(S, K, A) round = hs_ev_each(conf, cs, ready, off, 0, start, app, handler, tk, lim);
+    // Each wake, before any request, the state may move on its own (work
+    // done elsewhere, timers): `idle`, at least every `idle_ms`.
+    A app1 = if (tk.idle_ms >= 0) { idle(app) } else { app };
+    HsRound(S, K, A) round = hs_ev_each(conf, cs, ready, off, 0, start, app1, handler, tk, lim);
     List(HsConn(S, K, A)) kept = round.conns;
     Bool listen_ready = accepting && ready.len() > 0 && (ready[0] & 1) != 0;
     if (!listen_ready) {
@@ -1213,7 +1217,20 @@ pub HttpLoopEnd(A) http_state_loop_where(Int lfd, C conf, A init, HttpTurn(A, K)
 @requires(network(readonly))
 pub HttpLoopEnd(A) http_state_loop_while(Int lfd, C conf, A init, HttpTurn(A, K) closure(A, HttpRequest) handler, HttpStep(K) closure(A, K) tick, Bool closure(A) keep, HttpLimits lim, Int max_conns) {
     List(HsConn(S, K, A)) none = [];
-    HsTicker(A, K) tk = HsTicker { .shared = true, .tick = tick, .keep = keep };
+    A closure(A) same = lambda(a) { a };
+    HsTicker(A, K) tk = HsTicker { .shared = true, .tick = tick, .keep = keep, .idle_ms = -1, .idle = same };
+    return hs_ev_loop(lfd, conf, init, handler, tk, lim, max_conns, none, 0, true);
+}
+
+/// As `http_state_loop_while`, with `idle(state)` run each time the loop
+/// wakes, and the loop waking at least every `idle_ms` milliseconds: the
+/// state moves on without a request (results of work done in other
+/// threads, timers). `idle` must be cheap when there is nothing to do.
+@needs(Session(S, C))
+@requires(network(readonly))
+pub HttpLoopEnd(A) http_state_loop_idle(Int lfd, C conf, A init, HttpTurn(A, K) closure(A, HttpRequest) handler, HttpStep(K) closure(A, K) tick, Bool closure(A) keep, A closure(A) idle, Int idle_ms, HttpLimits lim, Int max_conns) {
+    List(HsConn(S, K, A)) none = [];
+    HsTicker(A, K) tk = HsTicker { .shared = true, .tick = tick, .keep = keep, .idle_ms = max(0, idle_ms), .idle = idle };
     return hs_ev_loop(lfd, conf, init, handler, tk, lim, max_conns, none, 0, true);
 }
 
@@ -1221,6 +1238,12 @@ pub HttpLoopEnd(A) http_state_loop_while(Int lfd, C conf, A init, HttpTurn(A, K)
 @requires(network(readonly))
 pub HttpLoopEnd(A) http_state_loop(Int lfd, A init, HttpTurn(A, K) closure(A, HttpRequest) handler, HttpStep(K) closure(A, K) tick, HttpLimits lim, Int max_conns) {
     return http_state_loop_where(lfd, plain_cfg(), init, handler, tick, lim, max_conns);
+}
+
+/// `http_state_loop_idle` over plain TCP.
+@requires(network(readonly))
+pub HttpLoopEnd(A) http_state_loop_every(Int lfd, A init, HttpTurn(A, K) closure(A, HttpRequest) handler, HttpStep(K) closure(A, K) tick, Bool closure(A) keep, A closure(A) idle, Int idle_ms, HttpLimits lim, Int max_conns) {
+    return http_state_loop_idle(lfd, plain_cfg(), init, handler, tick, keep, idle, idle_ms, lim, max_conns);
 }
 
 /// `http_state_loop_while` over plain TCP.
@@ -1242,7 +1265,8 @@ pub Int http_stream_loop_where(Int lfd, C conf, HttpOut(K) closure(HttpRequest) 
     HttpTurn(Int, K) closure(Int, HttpRequest) h = lambda(a, q) { HttpTurn { .state = a, .out = handler(q) } };
     HttpStep(K) closure(Int, K) unused = lambda(a, k) { http_step_end(k, []) };
     Bool closure(Int) always = lambda(a) { true };
-    HsTicker(Int, K) tk = HsTicker { .shared = false, .tick = unused, .keep = always };
+    Int closure(Int) same = lambda(a) { a };
+    HsTicker(Int, K) tk = HsTicker { .shared = false, .tick = unused, .keep = always, .idle_ms = -1, .idle = same };
     HttpLoopEnd(Int) end = hs_ev_loop(lfd, conf, 0, h, tk, lim, max_conns, none, 0, true);
     return end.accepted;
 }
