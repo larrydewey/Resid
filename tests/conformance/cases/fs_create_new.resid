@@ -1,0 +1,32 @@
+// filesystem.create_new never replaces anything: an existing file, a
+// symbolic link (even a dangling one) and a directory are refused, the
+// handle is not open, writes through it fail and the file is untouched.
+// A path with nothing there is created.
+import "word.resid";
+
+@requires(filesystem, process)
+Int main() {
+    Str have = "@TMP@/in.txt";
+    File f = filesystem.create_new(have);
+    println(f"existing: open {filesystem.is_open(f)} write {filesystem.write_handle(f, [1, 2])} close {filesystem.close(f)} kept [{filesystem.read_all(have)}]");
+
+    Int ln = process.run("/bin/ln -s @TMP@/nowhere @TMP@/dangling");
+    File g = filesystem.create_new("@TMP@/dangling");
+    println(f"dangling link: {ln} open {filesystem.is_open(g)} target made {filesystem.exists("@TMP@/nowhere")}");
+
+    File d = filesystem.create_new("@TMP@");
+    println(f"directory: open {filesystem.is_open(d)}");
+    File e = filesystem.create_new("");
+    println(f"empty path: open {filesystem.is_open(e)}");
+    File m = filesystem.create_new("@TMP@/no/such/dir/x");
+    println(f"missing directory: open {filesystem.is_open(m)} write {filesystem.write_handle(m, bytes_u8([1]))}");
+
+    Str fresh = "@TMP@/fresh.bin";
+    with (File n = filesystem.create_new(fresh)) {
+        println(f"fresh: open {filesystem.is_open(n)} write {filesystem.write_handle(n, bytes_u8([7, 8, 9]))}");
+    }
+    println(f"fresh file {filesystem.read_bytes(fresh)}");
+    File again = filesystem.create_new(fresh);
+    println(f"second time: open {filesystem.is_open(again)} file {filesystem.read_bytes(fresh)}");
+    return 0;
+}

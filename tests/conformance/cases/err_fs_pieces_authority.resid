@@ -1,0 +1,7 @@
+// The piecewise file verbs need a grant like every provider verb (E0219).
+Bool save(File f) { return filesystem.write_handle(f, [1]); }
+
+Int main() {
+    File f = filesystem.create("/tmp/resid_err_fs_pieces");
+    return 0;
+}

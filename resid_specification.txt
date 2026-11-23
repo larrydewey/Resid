@@ -2007,6 +2007,21 @@ bytes a hex string spells), sha256 (a file's SHA-256 as 32 bytes,
 computed without materializing its contents), exists, is_dir,
 list_dir, create_dir (write), open, read_handle, close.
 
+Files in pieces, through one File handle: create (write; created,
+or an existing file truncated) and create_new (write; refuses
+anything already at the path, a symbolic link included, as
+O_EXCL) open a File for writing; write_handle(f, bytes) (write;
+a List(Int) or a List(UInt(8)); false on any failure) writes all
+of bytes at its offset. read_some(f, n) gives the next n bytes as
+a List(UInt(8)), fewer only at the end of the file and empty
+there; read_at(f, offset, n) the n bytes at offset (empty past
+the end) without moving the offset; size(f) the file's size (-1
+when closed or not a regular file); is_open(f) whether f holds an
+open file. A failed open gives a File that is not open; a failed
+read closes the File, so an empty piece from an open File is the
+end of the file. Copies of a File name the same open file; close
+or the end of a `with` closes it.
+
 clock verbs: now_ns (nanoseconds since the Unix epoch, as one
 Int, so 1677-09-21 to 2262-04-11), now_sec (whole seconds,
 over the whole range of Int), monotonic_ns (nanoseconds from

@@ -1,0 +1,19 @@
+writes true true true true open true size 7
+close true open false write after close false
+file [1, 2, 3, 4, 5, 255, 10]
+size 7 open true
+at 2: [3, 4, 5]
+[1, 2, 3]
+[4, 5, 255]
+[10]
+3 pieces, 7 bytes, open true
+again at end: [] open true
+at 0: [1, 2, 3, 4, 5, 255, 10]
+at 6: [10]
+at 7 (end): []
+at 1000 (past end): []
+n 0: [] negative offset: [] open true
+close true read after close [] size -1
+rewrite true
+file [42]
+big true true 40000 same true end 0 true

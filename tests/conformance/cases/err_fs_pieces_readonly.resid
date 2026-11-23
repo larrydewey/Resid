@@ -1,0 +1,9 @@
+// A read-only grant reads through a File but writes through none: create,
+// create_new and write_handle are writes.
+@requires(filesystem(readonly))
+Int main() {
+    File f = filesystem.open("/etc/hostname");
+    List(UInt(8)) p = filesystem.read_at(f, 0, 4);
+    Bool w = filesystem.write_handle(f, p);
+    return 0;
+}
