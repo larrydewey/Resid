@@ -5,7 +5,7 @@ extends device access (`PLAN-device-access.md`, spec §49) from single
 descriptor calls to stateful hardware work: user-space drivers, GPU work,
 and freestanding programs (firmware, a kernel). It records the decisions
 of the design discussion of 2026-11-23, the measurements that tested
-them, and the order of work. In-kernel Linux modules are deferred (§11).
+them, and the order of work. In-kernel Linux modules are deferred (§12).
 
 **What "guaranteed" means here** is what it means in `SECURITY.md`: every
 claim names the code that enforces it and the test that fails if it
@@ -35,7 +35,7 @@ function interface; real-time guarantees.
 | Interrupts | Events as values on a channel, polled on hot paths and waited for when idle; a restricted `@isr` class only for freestanding top halves | Preemptive handlers in ordinary code (the largest addition to the type system) |
 | Hardware interfaces | Behaviors with manifest-bound instances: `Platform`, `Gpu`, `Block`, `Net`, `Audio`, `Input` | One interface per vendor |
 | Who may declare one | Driver packages, bound in the manifest to the devices they name (PCI ids, paths), recorded in provenance; E0260 relaxes for them only | Any code under a grant (a wide grant dependencies could ask for); standard library only (too slow to add a device) |
-| Definitions | `resid-devgen` extended (SVD, device tree, PCI capabilities, DRM and VFIO uapi) and bitfield layouts with access modes (`ro`, `wo`, `rw`, `w1c`, must-be-one) | Hand-written layouts only (drift) |
+| Definitions | `resid-devgen` extended (SVD, device tree, PCI capabilities, DRM and VFIO uapi) and packed word types for registers (§11, proposed) | Hand-written layouts only (drift) |
 | Labels | A region read is External; layout checks are the total parser | A device-scoped label; Internal after attestation (both later, on the attestation plan) |
 | GPU | A `Gpu` behavior; vendor instances written in Resid; virtio-gpu first | A confined host running a vendor's C driver (kept only as a possible fallback instance) |
 | Freestanding trust root | `Platform` behavior; instances: seL4, and a bare-metal platform package | A native IR shim (the most dangerous code would not be Resid) |
@@ -59,8 +59,8 @@ IOMMU domain goes). Only the minting layer creates them.
 
 A value the device supplied (a ring index, a length) is External. Using
 one to index a region without a check that bounds it is a compile error,
-not a run-time abort: this is the classic driver bug, and the bitfield
-`@check` machinery of the labels plan is where it is caught.
+not a run-time abort: this is the classic driver bug, and the `@check`
+machinery of the labels plan is where it is caught.
 
 ## 3. Drivers
 
@@ -127,8 +127,8 @@ kept rare by the authority split of §1.
 
 ## 6. Order of work
 
-1. Bitfield layouts with access modes; a volatile load in the compiler
-   (§9).
+1. A volatile load in the compiler (done, §9); how a register's bits
+   are declared (proposed, §11).
 2. `Region(T)` and the driver process, VFIO BAR mapping only.
 3. `Irq` over eventfd (MSI-X).
 4. `Dma(T)` with an IOMMU domain.
@@ -217,7 +217,79 @@ question apart from the boundary.
 | Platform instance wrong (freestanding) | small, pinned, reviewed; seL4 as an instance replaces our stub with a verified kernel | the trusted base |
 | Speculative reads across a boundary | separate address spaces everywhere | what hardware leaves |
 
-## 11. Open questions
+## 11. Step 1 proposal: packed word types
+
+**Proposed 2026-11-23, not accepted.** How a register's bits are
+declared. Three earlier forms (bit positions with access keywords in a
+new layout kind; whole words with masks; generated accessors) were put
+aside as unintuitive. This one uses what the language has: a register is
+a record that fits in one word.
+
+```resid
+@word(32)
+type VirtioStatus = {
+    Bool acknowledge;
+    Bool driver;
+    Bool driver_ok;
+    Bool features_ok;
+    @reserved(2);
+    DeviceOwned(Bool) needs_reset;
+    Bool failed;
+    @reserved(24);
+};
+
+@word(32)
+type IrqStatus = {
+    DeviceLatch(Bool) queue;       // set by the device, cleared by writing 1
+    DeviceLatch(Bool) config;
+    @reserved(30);
+};
+
+VirtioStatus s = dev.status;                       // one volatile read
+dev.status = VirtioStatus { .acknowledge = true, .driver = true,
+                            .driver_ok = true, .features_ok = true,
+                            .failed = false };      // one volatile write
+dev.irq = IrqStatus { .queue = Clear };            // config left as it is
+```
+
+- **Fields in order, low bit first; widths from their types**: `Bool`
+  one bit, `UInt(N)` N bits, a sum type without payloads the bits its
+  variants need. `@reserved(n)` is n bits here (bytes in a wire format).
+  The widths must add up to the word: a compile error otherwise, and a
+  value read that names no variant of a sum is an error value, as a bad
+  reply is.
+- **`DeviceOwned(T)`**: the device owns the field. A read gives a `T`; a
+  record literal that is written may not name it (as a literal never
+  names a `Challenge(N)` field, labels §6.2), and it is written as zero.
+- **`DeviceLatch(Bool)`**: set by the device and cleared by writing one.
+  A read gives a `Bool`. In a written literal it is `Clear` or left out,
+  which writes zero and so keeps it. Writing back a value that was read
+  therefore never clears a pending event, the usual mistake with these
+  registers.
+- **A read and a write are whole values.** Each is one hardware access
+  and visible in the source; nothing reads, modifies and writes behind
+  the program. A written literal names every field it may name.
+- **Labels**: a value read is External (§2); its fields are well-typed
+  External values.
+- **Lowering**: one `resid_raw_loadvN` or `resid_raw_storevN` (§9) and
+  shifts and masks the compiler writes.
+
+How this meets labels §7: that plan allows no bit fields in a layout type
+because a C bit field's layout is the implementation's, and a wire format
+must match C. A packed word has one layout, which Resid defines, and it
+is a new kind of type, not a change to `c_abi`, `le` or `be`. Using one
+as a field of a wire format (SNP's `KEY_SEL` as a named field, where
+device access R2.2a writes `(root_key_select >> 1) & 3`) would be a later
+step, since it changes parsers that are tested.
+
+`DeviceOwned` was chosen over `DeviceSet` (which reads as a `Set` of
+devices) and `ReadOnly` (which says what the program may not do, not
+whose the field is, and suggests a value that does not change).
+
+Not settled: a register whose read has an effect (read-to-clear);
+registers wider than 64 bits; fields that are write-only.
+
+## 12. Open questions
 
 1. Does virtio-gpu let a driver process pass a command buffer on unread,
    or must something on our side validate it? (No longer a speed
