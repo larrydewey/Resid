@@ -873,7 +873,7 @@ type HttpTurn(A, K) = { A state; HttpOut(K) out; };
 /// How live streams step in a stateful loop: `shared` makes every stream
 /// step with `tick` from the current application state; otherwise each
 /// stream keeps its own `HttpStream.next`.
-type HsTicker(A, K) = { Bool shared; HttpStep(K) closure(A, K) tick; };
+type HsTicker(A, K) = { Bool shared; HttpStep(K) closure(A, K) tick; Bool closure(A) keep; };
 
 /// A connection and the application state after stepping it.
 type HsRes(S, K, A) = { HsConn(S, K, A) c; A app; };
@@ -1152,12 +1152,26 @@ HsAccepted(S, K, A) hs_ev_accept(Int lfd, C conf, HttpLimits lim, List(HsConn(S,
     return hs_ev_accept(lfd, conf, lim, hs_ev_admit(cs, c, lim), accepted + 1, max_conns, budget - 1);
 }
 
+@requires(network(readonly))
+Int hs_ev_close_all(List(HsConn(S, K, A)) cs, Int i) {
+    if (i >= cs.len()) { return i; }
+    _ = resid_tcp_close(cs[i].fd);
+    return hs_ev_close_all(cs, i + 1);
+}
+
 /// How a stateful loop ended: connections accepted, and the final state.
 type HttpLoopEnd(A) = { Int accepted; A state; };
 
 @needs(Session(S, C))
 @requires(network(readonly))
 HttpLoopEnd(A) hs_ev_loop(Int lfd, C conf, A app, HttpTurn(A, K) closure(A, HttpRequest) handler, HsTicker(A, K) tk, HttpLimits lim, Int max_conns, List(HsConn(S, K, A)) cs, Int accepted, Bool open) {
+    // A stateful loop ends when its state says so (keep false): every
+    // connection is closed and the loop returns.
+    Bool closure(A) keep = tk.keep;
+    if (!keep(app)) {
+        _ = hs_ev_close_all(cs, 0);
+        return HttpLoopEnd { .accepted = accepted, .state = app };
+    }
     Bool accepting = open && (max_conns <= 0 || accepted < max_conns);
     if (!accepting && cs.len() == 0) { return HttpLoopEnd { .accepted = accepted, .state = app }; }
     List(Int) lead = if (accepting) { [lfd] } else { [] };
@@ -1188,8 +1202,18 @@ HttpLoopEnd(A) hs_ev_loop(Int lfd, C conf, A app, HttpTurn(A, K) closure(A, Http
 @needs(Session(S, C))
 @requires(network(readonly))
 pub HttpLoopEnd(A) http_state_loop_where(Int lfd, C conf, A init, HttpTurn(A, K) closure(A, HttpRequest) handler, HttpStep(K) closure(A, K) tick, HttpLimits lim, Int max_conns) {
+    Bool closure(A) always = lambda(a) { true };
+    return http_state_loop_while(lfd, conf, init, handler, tick, always, lim, max_conns);
+}
+
+/// As `http_state_loop_where`, ending (every connection closed) once
+/// `keep(state)` is false; it is asked each time the loop wakes. A server
+/// uses it to stop cleanly, e.g. to be restarted by its supervisor.
+@needs(Session(S, C))
+@requires(network(readonly))
+pub HttpLoopEnd(A) http_state_loop_while(Int lfd, C conf, A init, HttpTurn(A, K) closure(A, HttpRequest) handler, HttpStep(K) closure(A, K) tick, Bool closure(A) keep, HttpLimits lim, Int max_conns) {
     List(HsConn(S, K, A)) none = [];
-    HsTicker(A, K) tk = HsTicker { .shared = true, .tick = tick };
+    HsTicker(A, K) tk = HsTicker { .shared = true, .tick = tick, .keep = keep };
     return hs_ev_loop(lfd, conf, init, handler, tk, lim, max_conns, none, 0, true);
 }
 
@@ -1197,6 +1221,12 @@ pub HttpLoopEnd(A) http_state_loop_where(Int lfd, C conf, A init, HttpTurn(A, K)
 @requires(network(readonly))
 pub HttpLoopEnd(A) http_state_loop(Int lfd, A init, HttpTurn(A, K) closure(A, HttpRequest) handler, HttpStep(K) closure(A, K) tick, HttpLimits lim, Int max_conns) {
     return http_state_loop_where(lfd, plain_cfg(), init, handler, tick, lim, max_conns);
+}
+
+/// `http_state_loop_while` over plain TCP.
+@requires(network(readonly))
+pub HttpLoopEnd(A) http_state_loop_until(Int lfd, A init, HttpTurn(A, K) closure(A, HttpRequest) handler, HttpStep(K) closure(A, K) tick, Bool closure(A) keep, HttpLimits lim, Int max_conns) {
+    return http_state_loop_while(lfd, plain_cfg(), init, handler, tick, keep, lim, max_conns);
 }
 
 /// Accept connections on the socket `lfd` and serve them all at once from
@@ -1211,7 +1241,8 @@ pub Int http_stream_loop_where(Int lfd, C conf, HttpOut(K) closure(HttpRequest) 
     List(HsConn(S, K, Int)) none = [];
     HttpTurn(Int, K) closure(Int, HttpRequest) h = lambda(a, q) { HttpTurn { .state = a, .out = handler(q) } };
     HttpStep(K) closure(Int, K) unused = lambda(a, k) { http_step_end(k, []) };
-    HsTicker(Int, K) tk = HsTicker { .shared = false, .tick = unused };
+    Bool closure(Int) always = lambda(a) { true };
+    HsTicker(Int, K) tk = HsTicker { .shared = false, .tick = unused, .keep = always };
     HttpLoopEnd(Int) end = hs_ev_loop(lfd, conf, 0, h, tk, lim, max_conns, none, 0, true);
     return end.accepted;
 }
