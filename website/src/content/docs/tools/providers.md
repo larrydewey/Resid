@@ -38,6 +38,10 @@ answer to "what time is it" is knowledge the program does not have. See
 | `write_hex(path, hex)`, `append_hex(path, hex)` | `Bool` | write |
 | `write_secret(path, bytes)` | `Bool`: created readable by the owner only; a symlink is refused | write |
 | `create_dir(path)` | `Bool` | write |
+| `remove(path)` | `Bool` | write (a file or an empty directory) |
+| `rename(from, to)` | `Bool` | write (atomic within one file system) |
+| `size(path)` | `Int` | read (bytes; -1 when it cannot be read) |
+| `modified_ms(path)` | `Int` | read (ms since the epoch; -1 likewise) |
 
 `filesystem(readonly)` grants the read verbs only.
 

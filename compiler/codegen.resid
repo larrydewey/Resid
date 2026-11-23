@@ -3999,6 +3999,10 @@ Str p_sym(Str pname, Str meth) {
         if (meth == "is_dir") { return "resid_fs_is_dir"; }
         if (meth == "list_dir") { return "resid_fs_list_dir"; }
         if (meth == "create_dir") { return "resid_fs_create_dir_all"; }
+        if (meth == "remove") { return "resid_fs_remove"; }
+        if (meth == "rename") { return "resid_fs_rename"; }
+        if (meth == "size") { return "resid_fs_size"; }
+        if (meth == "modified_ms") { return "resid_fs_modified_ms"; }
     }
     if (pname == "process") {
         if (meth == "run") { return "resid_process_run"; }
@@ -4036,6 +4040,8 @@ Str p_rty(Str pname, Str meth) {
         if (meth == "is_dir") { return "Bool"; }
         if (meth == "list_dir") { return "List(Str)"; }
         if (meth == "create_dir") { return "Bool"; }
+        if (meth == "remove" || meth == "rename") { return "Bool"; }
+        if (meth == "size" || meth == "modified_ms") { return "Int"; }
     }
     if (pname == "process") {
         if (meth == "run") { return "Int"; }
@@ -4066,6 +4072,8 @@ Int p_nargs(Str pname, Str meth) {
         if (meth == "is_dir") { return 1; }
         if (meth == "list_dir") { return 1; }
         if (meth == "create_dir") { return 1; }
+        if (meth == "remove" || meth == "size" || meth == "modified_ms") { return 1; }
+        if (meth == "rename") { return 2; }
     }
     if (pname == "process") {
         if (meth == "run") { return 1; }

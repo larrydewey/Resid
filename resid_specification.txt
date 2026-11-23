@@ -2005,7 +2005,11 @@ write_secret (write; owner-only mode 0600, no symlink
 follow), append_bytes (write), write_hex and append_hex (write; the
 bytes a hex string spells), sha256 (a file's SHA-256 as 32 bytes,
 computed without materializing its contents), exists, is_dir,
-list_dir, create_dir (write), open, read_handle, close.
+list_dir, create_dir (write), remove (write; a file or an empty
+directory), rename (write; atomic within one file system), size (a
+file's size in bytes, -1 when it cannot be read), modified_ms (its
+modification time in ms since the Unix epoch, -1 likewise), open,
+read_handle, close.
 
 clock verbs: now_ns (nanoseconds since the Unix epoch, as one
 Int, so 1677-09-21 to 2262-04-11), now_sec (whole seconds,
