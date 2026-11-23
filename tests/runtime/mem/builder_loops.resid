@@ -1,0 +1,47 @@
+// Loops that carry a ListBuf and allocate at each step: each makes about
+// 300 bytes of garbage a step and pushes one element, for half a million
+// steps. With a region the garbage goes at each compaction and the builder
+// is moved with what it holds (run.sh sets RESID_MEM_LIMIT); without one
+// every step's garbage stayed until the loop returned. The results are
+// read back in full, so an element lost or damaged by a move changes the
+// sums printed.
+
+type Pt = { Int x; Int y; };                 // stored inline
+type Named = { Str name; List(Int) at; };    // stored by pointer
+type Msg = MA(Int) | MB(Str) | MC;
+
+Int junk(Int i) { List(Int) t = [i, i + 1, i + 2, i + 3, i + 4, i + 5, i + 6, i + 7, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i]; return t[i % 28] + t.len(); }
+UInt(64) top() { return 18446744073709551615; }
+Int msg_val(Msg m) { return match (m) { MA(x) => x, MB(s) => str_len(s), MC => 1 }; }
+
+List(Int) ints(Int i, Int n, ListBuf(Int) b) { if (i >= n) { return b.finish(); } return ints(i + 1, n, b.push(junk(i) - 28)); }
+List(UInt(64)) limbs(Int i, Int n, UInt(64) c, ListBuf(UInt(64)) b) { if (i >= n) { return b.finish(); } Int j = junk(i); return limbs(i + 1, n, c + 1, b.push(top() - c)); }
+List(UInt(8)) bytes(Int i, Int n, UInt(8) c, ListBuf(UInt(8)) b) { if (i >= n) { return b.finish(); } Int j = junk(i); return bytes(i + 1, n, if (c == 250) { 0 } else { c + 1 }, b.push(c)); }
+List(Str) strs(Int i, Int n, ListBuf(Str) b) { if (i >= n) { return b.finish(); } Int j = junk(i); return strs(i + 1, n, b.push(f"s{i}")); }
+List(Pt) pts(Int i, Int n, ListBuf(Pt) b) { if (i >= n) { return b.finish(); } return pts(i + 1, n, b.push(Pt {.x = junk(i), .y = i})); }
+List(Named) named(Int i, Int n, ListBuf(Named) b) { if (i >= n) { return b.finish(); } Int j = junk(i); return named(i + 1, n, b.push(Named {.name = f"n{i}", .at = [i, j]})); }
+List(Msg) msgs(Int i, Int n, ListBuf(Msg) b) { if (i >= n) { return b.finish(); } Int j = junk(i); return msgs(i + 1, n, b.push(if (i % 3 == 0) { MA(i) } else { if (i % 3 == 1) { MB(f"m{i}") } else { MC } })); }
+List(List(Int)) rows(Int i, Int n, ListBuf(List(Int)) b) { if (i >= n) { return b.finish(); } Int j = junk(i); return rows(i + 1, n, b.push([i, j, i + j])); }
+
+Int sum_ints(List(Int) xs, Int i, Int acc) { if (i >= xs.len()) { return acc; } return sum_ints(xs, i + 1, acc + xs[i]); }
+Int ok_limbs(List(UInt(64)) xs, Int i, UInt(64) c, Int acc) { if (i >= xs.len()) { return acc; } return ok_limbs(xs, i + 1, c + 1, acc + (if (xs[i] == top() - c) { 1 } else { 0 })); }
+Int ok_bytes(List(UInt(8)) xs, Int i, UInt(8) c, Int acc) { if (i >= xs.len()) { return acc; } return ok_bytes(xs, i + 1, if (c == 250) { 0 } else { c + 1 }, acc + (if (xs[i] == c) { 1 } else { 0 })); }
+Int sum_strs(List(Str) xs, Int i, Int acc) { if (i >= xs.len()) { return acc; } return sum_strs(xs, i + 1, acc + str_len(xs[i]) + str_char_at(xs[i], str_len(xs[i]) - 1)); }
+Int sum_pts(List(Pt) xs, Int i, Int acc) { if (i >= xs.len()) { return acc; } return sum_pts(xs, i + 1, acc + xs[i].x - xs[i].y); }
+Int sum_named(List(Named) xs, Int i, Int acc) { if (i >= xs.len()) { return acc; } return sum_named(xs, i + 1, acc + str_len(xs[i].name) + xs[i].at[0] - xs[i].at[1]); }
+Int sum_msgs(List(Msg) xs, Int i, Int acc) { if (i >= xs.len()) { return acc; } return sum_msgs(xs, i + 1, acc + msg_val(xs[i])); }
+Int sum_rows(List(List(Int)) xs, Int i, Int acc) { if (i >= xs.len()) { return acc; } return sum_rows(xs, i + 1, acc + xs[i][2] - xs[i][1] - xs[i][0] + xs[i].len()); }
+
+@requires(clock(readonly))
+Int main() {
+    Int n = 500000 + clock.monotonic_ns() % 1;
+    println(f"{sum_ints(ints(0, n, ListBuf()), 0, 0)}");
+    println(f"{ok_limbs(limbs(0, n, 0, ListBuf()), 0, 0, 0)}");
+    println(f"{ok_bytes(bytes(0, n, 0, ListBuf()), 0, 0, 0)}");
+    println(f"{sum_strs(strs(0, n, ListBuf()), 0, 0)}");
+    println(f"{sum_pts(pts(0, n, ListBuf()), 0, 0)}");
+    println(f"{sum_named(named(0, n, ListBuf()), 0, 0)}");
+    println(f"{sum_msgs(msgs(0, n, ListBuf()), 0, 0)}");
+    println(f"{sum_rows(rows(0, n, ListBuf()), 0, 0)}");
+    return 0;
+}

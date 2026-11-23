@@ -128,8 +128,19 @@ region, with no diagnostic.
   `ListBuf` (no move), 36 return a sum and carry only scalars, and the
   protocol drivers of the test and of `lib/cggmp*.resid` (`ps2_all`,
   `ps3_all`, `a1_all`, `a2_all`, `kg3_all`) carry a `Map(Int, record)`.
+- **Builders**: a `ListBuf(T)` moves as the `List(T)` it will be (a
+  flat list until it is finished), so a loop that carries one and
+  allocates has a region; one that only pushes has none, as before
+  (`lr_allocates`). A loop pushing an Int and making 350 bytes of garbage
+  a step: 386 MB -> 37 MB over a million steps. 1,013 of the compiler's
+  own loops have a region (793 before); it compiles itself in the same
+  time (99-102 s against 104-108 s). Test: `builder_loops.resid`, eight
+  element kinds, checked against the previous compiler's output. A
+  `StrBuf` still has no move. Symbolon's `reshare_test.resid` with this:
+  100 MB (2,298 MB on v0.13.0, 506 MB before builders moved), 38 s, and
+  `--loop-report` names 65 loops there (234 before).
 - Not done: the full re-share in the cosigner is unmeasured; moves for
-  maps with record values and for builders; the report as an error.
+  maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.
 
 ### 0zza. Large objects in loop regions; packed file reads (2026-11-20)

@@ -7319,6 +7319,11 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
     Str base = lr_evac_fn(t);
     if (base != "") { return base; }
     if (lr_list_wide(t)) { return "@resid_mv_list(ptr %V, ptr %C)"; }
+    // A builder is a flat list until it is finished, and moves as the
+    // list it will be does (its buffer copied with its capacity, so the
+    // next pushes still fit; rt_listbuf_new_k). A loop that pushes and
+    // allocates nothing else gets no region anyway (lr_allocates).
+    if (str_has_prefix(t, "ListBuf(") && str_ends_with(t, ")")) { return lr_move(fs, "List(" + str_slice(t, 8, str_len(t) - 1) + ")", seen); }
     if (struct_index(fs, t) >= 0 && lr_rec_ok(fs, t, seen)) { return "@" + lr_rec_fn(t) + "(ptr %V, ptr %C)"; }
     if (is_fn_type(t)) { return "@resid_mv_clo(ptr %V, ptr %C)"; }
     if (lr_is_sum(fs, t) && lr_sum_ok(fs, t, seen)) { return "@" + lr_sum_fn(t) + "(ptr %V, ptr %C)"; }

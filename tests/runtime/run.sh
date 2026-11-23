@@ -367,5 +367,16 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/loop_report.resid -o "$W/loop_re
 else
     fail=$((fail + 1)); echo "FAIL loop report: $(grep '^note: loop: \|rror' "$W/loop_report.log" | head -3 | tr '\n' ' ')"
 fi
+# Builders in loop regions (lower.resid, lr_move): eight loops that carry
+# a ListBuf and allocate at each step, their results read back in full.
+# Measured: 306 MB, nearly all of it the eight results; the compiler that
+# gave a loop carrying a builder no region needed 620 MB.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/builder_loops.resid -o "$W/builder_loops") > "$W/builder_loops.log" 2>&1 \
+    && RESID_MEM_LIMIT=420 timeout 120 "$W/builder_loops" > "$W/builder_loops.out" 2>&1 \
+    && [ "$(tr '\n' ' ' < "$W/builder_loops.out")" = "125000250002 500000 500000 29638890 14500002 -11111112 41667879633 1500000 " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL builders in loop regions: $(tail -1 "$W/builder_loops.out" "$W/builder_loops.log" 2>/dev/null | tr '\n' ' ')"
+fi
 echo "runtime: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
