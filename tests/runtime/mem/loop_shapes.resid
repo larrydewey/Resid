@@ -1,0 +1,68 @@
+// Loops whose carried state holds a list of sums or a list of 64-bit
+// integers (a big number's limbs), alone or inside records, sums and lists.
+// Each step drops most of what it carried and keeps some of it, so the
+// live data is a few hundred bytes, and what is kept has been moved by
+// many compactions before it is read at the end. With a region each loop
+// stays within a few MB (run.sh sets RESID_MEM_LIMIT); without one, two
+// million steps keep between 200 and 700 MB each.
+
+type Msg = MA(Int) | MB(Str) | MC;
+type Batch = { List(Int) from; Int round; List(Msg) msgs; };
+type Off = { Int id; List(UInt(64)) share; };
+type St = S1(List(UInt(64))) | S2(Int);
+type Seat = { Int id; St st; List(Msg) out; };
+
+UInt(64) top() { return 18446744073709551615; }
+Int msg_val(Msg m) { return match (m) { MA(x) => x, MB(s) => str_len(s), MC => 1 }; }
+Msg msg_of(Int i) { return if (i % 3 == 0) { MA(i) } else { if (i % 3 == 1) { MB(f"m{i}") } else { MC } }; }
+UInt(64) seven() { return 7; }
+UInt(64) st_limb(St s) { return match (s) { S1(xs) => xs[0], S2(k) => seven() }; }
+Int yes(Bool b) { return if (b) { 1 } else { 0 }; }
+
+// A list of sums.
+Int loop_msgs(Int i, Int n, List(Msg) ms) {
+    if (i >= n) { return msg_val(ms[0]) + msg_val(ms[1]) + msg_val(ms[2]) + msg_val(ms[3]); }
+    return loop_msgs(i + 1, n, [ms[1], ms[2], ms[3], msg_of(i)]);
+}
+
+// Records with a list-of-sums field.
+Int loop_batches(Int i, Int n, List(Batch) bs) {
+    if (i >= n) { return bs[1].round + msg_val(bs[1].msgs[0]) + msg_val(bs[0].msgs[1]) + bs[0].from[0]; }
+    return loop_batches(i + 1, n, [bs[1], Batch {.from = [i, i + 1], .round = i, .msgs = [bs[1].msgs[1], MA(i)]}]);
+}
+
+// A list of 64-bit limbs, values past the immediate range.
+Int loop_limbs(Int i, Int n, UInt(64) c, List(UInt(64)) xs) {
+    if (i >= n) { return yes(xs[0] == top() - (c - 4)) + yes(xs[3] == top() - (c - 1)) + xs.len(); }
+    return loop_limbs(i + 1, n, c + 1, [xs[1], xs[2], xs[3], top() - c]);
+}
+
+// Records with a limb list.
+Int loop_offs(Int i, Int n, UInt(64) c, List(Off) os) {
+    if (i >= n) { return yes(os[1].share[0] == top() - (c - 2)) + yes(os[0].share[1] == top() - (c - 2)) + os[1].id; }
+    return loop_offs(i + 1, n, c + 1, [os[1], Off {.id = i, .share = [os[1].share[1], top() - c]}]);
+}
+
+// A list of limb lists.
+Int loop_rows(Int i, Int n, UInt(64) c, List(List(UInt(64))) ys) {
+    if (i >= n) { return yes(ys[1][0] == top() - (c - 2)) + yes(ys[0][1] == top() - (c - 2)) + ys.len(); }
+    return loop_rows(i + 1, n, c + 1, [ys[1], [ys[1][1], top() - c]]);
+}
+
+// A session's seats: a sum holding limbs, and what the seat said.
+Int loop_seats(Int i, Int n, UInt(64) c, List(Seat) ss) {
+    if (i >= n) { return yes(st_limb(ss[1].st) == top() - (c - 1)) + yes(st_limb(ss[0].st) == seven()) + msg_val(ss[1].out[0]) + ss[0].id; }
+    St st = if (i % 2 == 1) { S1([top() - c, st_limb(ss[1].st)]) } else { S2(i) };
+    return loop_seats(i + 1, n, c + 1, [ss[1], Seat {.id = i, .st = st, .out = [ss[1].out[1], msg_of(i)]}]);
+}
+
+Int main() {
+    Int n = 2000000;
+    println(f"{loop_msgs(0, n, [MC, MC, MC, MC])}");
+    println(f"{loop_batches(0, n, [Batch {.from = [0], .round = 0, .msgs = [MC, MC]}, Batch {.from = [0], .round = 0, .msgs = [MC, MC]}])}");
+    println(f"{loop_limbs(0, n, 0, [1, 2, 3, 4])}");
+    println(f"{loop_offs(0, n, 0, [Off {.id = 0, .share = [1, 2]}, Off {.id = 0, .share = [1, 2]}])}");
+    println(f"{loop_rows(0, n, 0, [[1, 2], [1, 2]])}");
+    println(f"{loop_seats(0, n, 0, [Seat {.id = 0, .st = S2(0), .out = [MC, MC]}, Seat {.id = 0, .st = S2(0), .out = [MC, MC]}])}");
+    return 0;
+}

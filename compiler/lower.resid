@@ -7220,6 +7220,7 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
     if (t == "Str") { return "@resid_mv_str(ptr %V, ptr %C)"; }
     Str base = lr_evac_fn(t);
     if (base != "") { return base; }
+    if (lr_list_wide(t)) { return "@resid_mv_list(ptr %V, ptr %C)"; }
     if (struct_index(fs, t) >= 0 && lr_rec_ok(fs, t, seen)) { return "@" + lr_rec_fn(t) + "(ptr %V, ptr %C)"; }
     if (is_fn_type(t)) { return "@resid_mv_clo(ptr %V, ptr %C)"; }
     if (lr_is_sum(fs, t) && lr_sum_ok(fs, t, seen)) { return "@" + lr_sum_fn(t) + "(ptr %V, ptr %C)"; }
@@ -7228,9 +7229,23 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
         if (struct_index(fs, et) >= 0 && lr_rec_ok(fs, et, seen)) { return "@resid_mv_list_f(ptr %V, ptr @" + lr_rec_fn(et) + ", ptr %C)"; }
         // A list of lists of words: each element moves as a list of words
         // does (resid_mv_list, the element mover list writes use too).
-        if (lr_list_word(et)) { return "@resid_mv_list_f(ptr %V, ptr @resid_mv_list, ptr %C)"; }
+        if (lr_list_word(et) || lr_list_wide(et)) { return "@resid_mv_list_f(ptr %V, ptr @resid_mv_list, ptr %C)"; }
+        // A list of sums: each element is a box (or a constant, which lies
+        // in no region), moved by its sum's own mover.
+        if (lr_is_sum(fs, et) && lr_sum_ok(fs, et, seen)) { return "@resid_mv_list_f(ptr %V, ptr @" + lr_sum_fn(et) + ", ptr %C)"; }
     }
     return "";
+}
+
+// A list of integers of 33 to 64 bits (UInt(64), a big number's limbs):
+// its slots hold the values themselves (lst_raw's kind 1, as a List(Int)),
+// so resid_mv_list copies them without reading one. Never secret ones
+// (E0258 keeps those out of lists). Only the moves ask this: lr_list_word
+// also chooses map kinds and fused pushes, which stay as they were.
+Bool lr_list_wide(Str t) {
+    if (!str_has_prefix(t, "List(") || is_list_fixed(t)) { return false; }
+    Str e = str_slice(t, 5, str_len(t) - 1);
+    return !str_starts_with(e, "Secret(") && !lr_word_ty(e) && lst_raw(e) == 1;
 }
 
 Bool lr_fx_flat(Str t) {
