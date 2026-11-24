@@ -45,6 +45,14 @@ answer to "what time is it" is knowledge the program does not have. See
 | `write_hex(path, hex)`, `append_hex(path, hex)` | `Bool` | write |
 | `write_secret(path, bytes)` | `Bool`: created readable by the owner only; a symlink is refused | write |
 | `create_dir(path)` | `Bool` | write |
+| `remove(path)` | `Bool` | write (a file or an empty directory) |
+| `rename(from, to)` | `Bool` | write (atomic within one file system) |
+| `size(path)` | `Int`: the size of the file at a path, without opening it (`size` takes a path or a `File`) | read (bytes; -1 when it cannot be read) |
+| `modified_ms(path)` | `Int` | read (ms since the epoch; -1 likewise) |
+| `read_range(path, off, n)` | `List(Int)` | read (up to `n` bytes at `off`; fewer at the end, none when it cannot be read) |
+| `write_at(path, off, bytes)` | `Bool` | write (in place; the file created when missing; not durable until `sync`) |
+| `sync(path)` | `Bool` | write (fsync: a file's data, or a directory's entries, reach the disk) |
+| `truncate(path, len)` | `Bool` | write (cut, or extended with zeros, to `len` bytes) |
 
 `filesystem(readonly)` grants the read verbs only.
 

@@ -1,0 +1,7 @@
+200 text/event-stream
+3
+7
+12
+data: 0 .. data: 12
+total 12
+accepted 5, final state 12

@@ -2005,7 +2005,15 @@ write_secret (write; owner-only mode 0600, no symlink
 follow), append_bytes (write), write_hex and append_hex (write; the
 bytes a hex string spells), sha256 (a file's SHA-256 as 32 bytes,
 computed without materializing its contents), exists, is_dir,
-list_dir, create_dir (write), open, read_handle, close.
+list_dir, create_dir (write), remove (write; a file or an empty
+directory), rename (write; atomic within one file system), size (a
+file's size in bytes, -1 when it cannot be read), modified_ms (its
+modification time in ms since the Unix epoch, -1 likewise),
+read_range (up to n bytes at an offset; fewer at the end, none when
+it cannot be read), write_at (write; bytes at an offset, the file
+created when missing), sync (write; fsync of a file or a directory),
+truncate (write; a file cut or zero-extended to a length), open,
+read_handle, close.
 
 Files in pieces, through one File handle: create (write; created,
 or an existing file truncated) and create_new (write; refuses

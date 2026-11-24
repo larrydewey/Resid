@@ -1,0 +1,11 @@
+// filesystem.size takes a path or an open File: both give the file's size.
+@requires(filesystem)
+Int main() {
+    Str p = "@TMP@/size_both.bin";
+    Bool w = filesystem.write_bytes(p, [1, 2, 3, 4, 5]);
+    File f = filesystem.open(p);
+    println(f"path {filesystem.size(p)} file {filesystem.size(f)} missing {filesystem.size("@TMP@/no_such_file")}");
+    Bool c = filesystem.close(f);
+    println(f"closed {filesystem.size(f)}");
+    return 0;
+}

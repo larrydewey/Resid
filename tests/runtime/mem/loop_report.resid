@@ -1,0 +1,31 @@
+// --loop-report names a loop that allocates and has no region, and why
+// (run.sh greps the two notes). Both reasons here are deliberate rules of
+// lr_region_ok, so they stay as movers are added.
+
+// Returns a sum and carries only scalars: taken for a short call.
+Result(Int, Str) probe(Int i, Int n, Int acc) {
+    if (i >= n) { return Ok(acc); }
+    Str s = f"step {i} of {n}";
+    if (str_len(s) == 0) { return Err(s); }
+    return probe(i + 1, n, acc + str_len(s));
+}
+
+// Carries a StrBuf.
+Str join(Int i, Int n, StrBuf b) {
+    if (i >= n) { return b.finish(); }
+    return join(i + 1, n, b.push(f"{i * 3},"));
+}
+
+// Carries a list and returns a scalar: has a region, so no note.
+Int total(Int i, Int n, List(Int) xs) {
+    if (i >= n) { return xs.len(); }
+    return total(i + 1, n, [i, i + 1, xs.len()]);
+}
+
+@requires(clock(readonly))
+Int main() {
+    Int n = 1000 + clock.monotonic_ns() % 7;
+    Int a = match (probe(0, n, 0)) { Ok(v) => v, Err(e) => 0 - 1 };
+    println(f"{a > 0} {str_len(join(0, n, StrBuf())) > 0} {total(0, n, [])}");
+    return 0;
+}

@@ -342,5 +342,50 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/large_carry.resid -o "$W/large_c
 else
     fail=$((fail + 1)); echo "FAIL large objects carried through a loop: $(tail -1 "$W/large_carry.out" "$W/large_carry.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# Loop regions for lists of sums, of 64-bit integers and of lists, and for
+# a loop returning a Result (lower.resid, lr_move and lr_region_ok): eight
+# loops of two million steps whose carried state holds them each keep a few
+# hundred bytes live. Measured: under 20 MB with regions; the compiler that
+# gave these loops none (v0.13.0) needed over 4 GB.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/loop_shapes.resid -o "$W/loop_shapes") > "$W/loop_shapes.log" 2>&1 \
+    && RESID_MEM_LIMIT=64 timeout 120 "$W/loop_shapes" > "$W/loop_shapes.out" 2>&1 \
+    && [ "$(tr '\n' ' ' < "$W/loop_shapes.out")" = "2000015 7999993 6 2000001 4 3999998 3999998 5 " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL loop regions for lists of sums and 64-bit integers: $(tail -1 "$W/loop_shapes.out" "$W/loop_shapes.log" 2>/dev/null | tr '\n' ' ')"
+fi
+# --loop-report (lower.resid, The loop report): a loop that allocates and
+# has no region is named with its reason; without the flag nothing is said.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/loop_report.resid -o "$W/loop_report" --loop-report) > "$W/loop_report.log" 2>&1 \
+    && [ "$(grep -c '^note: loop: ' "$W/loop_report.log")" = 2 ] \
+    && grep -q '^note: loop: probe keeps .*: it returns Result(Int, Str) and carries no heap value that changes' "$W/loop_report.log" \
+    && grep -q '^note: loop: join keeps .*: it carries a StrBuf' "$W/loop_report.log" \
+    && (cd "$ROOT" && "$COMPILER" tests/runtime/mem/loop_report.resid -o "$W/loop_report2") > "$W/loop_report2.log" 2>&1 \
+    && ! grep -q '^note: loop: ' "$W/loop_report2.log" \
+    && [ "$("$W/loop_report")" = "true true 3" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL loop report: $(grep '^note: loop: \|rror' "$W/loop_report.log" | head -3 | tr '\n' ' ')"
+fi
+# Builders in loop regions (lower.resid, lr_move): eight loops that carry
+# a ListBuf and allocate at each step, their results read back in full.
+# Measured: 306 MB, nearly all of it the eight results; the compiler that
+# gave a loop carrying a builder no region needed 620 MB.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/builder_loops.resid -o "$W/builder_loops") > "$W/builder_loops.log" 2>&1 \
+    && RESID_MEM_LIMIT=420 timeout 120 "$W/builder_loops" > "$W/builder_loops.out" 2>&1 \
+    && [ "$(tr '\n' ' ' < "$W/builder_loops.out")" = "125000250002 500000 500000 29638890 14500002 -11111112 41667879633 1500000 " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL builders in loop regions: $(tail -1 "$W/builder_loops.out" "$W/builder_loops.log" 2>/dev/null | tr '\n' ' ')"
+fi
+# Volatile raw loads and stores (lower.resid): two processes pass a counter
+# through a shared page, each polling with resid_raw_loadv64; a plain load
+# is hoisted out of the loop and the program never ends.
+if (cd "$ROOT/tests/runtime/internals" && "$COMPILER" runtime/rt/volatile_poll.resid --runtime-internals -o "$W/volatile_poll") > "$W/volatile_poll.log" 2>&1 \
+    && [ "$(timeout 60 "$W/volatile_poll")" = "45150 1 8 9" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL volatile raw loads: $(grep -m1 -i error "$W/volatile_poll.log")"
+fi
 echo "runtime: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

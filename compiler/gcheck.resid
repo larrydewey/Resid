@@ -2620,14 +2620,19 @@ Str gk_provider_params(Str fam, Str m) {
     if (fam == "process" && m == "run") { return "Str"; }
     if (fam == "clock") { if (m == "sleep_ns") { return "Int"; } return "?"; }
     if (fam != "filesystem") { return "?"; }
-    Bool path = m == "read_all" || m == "exists" || m == "is_dir" || m == "create_dir" || m == "open" || m == "list_dir" || m == "read_bytes" || m == "read_bytes_u8" || m == "sha256" || m == "create" || m == "create_new";
+    Bool path = m == "read_all" || m == "exists" || m == "is_dir" || m == "create_dir" || m == "open" || m == "list_dir" || m == "read_bytes" || m == "read_bytes_u8" || m == "sha256" || m == "create" || m == "create_new" || m == "remove" || m == "modified_ms";
     if (path) { return "Str"; }
+    // size takes an open File or a path (gk_provider accepts the path).
     if (m == "read_handle" || m == "close" || m == "is_open" || m == "size") { return "File"; }
     if (m == "write_handle") { return "File,List(Int)"; }
     if (m == "read_some") { return "File,Int"; }
     if (m == "read_at") { return "File,Int,Int"; }
-    if (m == "write_all" || m == "write_hex" || m == "append_hex") { return "Str,Str"; }
+    if (m == "write_all" || m == "write_hex" || m == "append_hex" || m == "rename") { return "Str,Str"; }
     if (m == "write_bytes" || m == "write_secret" || m == "append_bytes") { return "Str,List(Int)"; }
+    if (m == "read_range") { return "Str,Int,Int"; }
+    if (m == "write_at") { return "Str,Int,List(Int)"; }
+    if (m == "sync") { return "Str"; }
+    if (m == "truncate") { return "Str,Int"; }
     return "?";
 }
 
@@ -2646,8 +2651,11 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
     GK k = a.k;
     if (str_contains(a.tys, "Secret(")) { return gterr(k, "E0255: " + fam + "." + m + " takes public values, got (" + a.tys + "); declassify the secret first" + (if (m == "write_secret") { " (write_secret keeps the file readable by its owner only)" } else { "" }), id); }
     // Bytes to write may be packed, one to a byte (read_bytes_u8).
-    Bool packed = fam == "filesystem" && (((m == "write_bytes" || m == "write_secret" || m == "append_bytes") && a.tys == "Str,List(UInt(8))") || (m == "write_handle" && a.tys == "File,List(UInt(8))"));
-    Bool fits = want == "?" || a.tys == want || packed || (a.count == wl.len() && params_accept(want, a.tys, a.count));
+    Bool packed = fam == "filesystem" && (((m == "write_bytes" || m == "write_secret" || m == "append_bytes") && a.tys == "Str,List(UInt(8))") || (m == "write_handle" && a.tys == "File,List(UInt(8))")
+        || (m == "write_at" && (a.tys == "Str,Int,List(UInt(8))" || a.tys == "Str,Int(64),List(UInt(8))")));
+    // filesystem.size(path): the size of the file at a path, as size(File) is an open file's.
+    Bool by_path = fam == "filesystem" && m == "size" && a.tys == "Str";
+    Bool fits = want == "?" || a.tys == want || packed || by_path || (a.count == wl.len() && params_accept(want, a.tys, a.count));
     if (!fits) { return gterr(k, fam + "." + m + " expects (" + want + "), got (" + a.tys + ")", id); }
     if (fam == "environment" && m == "get") { return gt(k, "Str", id); }
     if (fam == "filesystem") {
@@ -2663,8 +2671,11 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
         // from one (empty at the end of the file).
         if (m == "create" || m == "create_new") { return gt(k, "File", id); }
         if (m == "is_open" || m == "write_handle") { return gt(k, "Bool", id); }
-        if (m == "size") { return gt(k, "Int", id); }
         if (m == "read_some" || m == "read_at") { return gt(k, "List(UInt(8))", id); }
+        if (m == "remove" || m == "rename") { return gt(k, "Bool", id); }
+        if (m == "size" || m == "modified_ms") { return gt(k, "Int", id); }
+        if (m == "read_range") { return gt(k, "List(Int)", id); }
+        if (m == "write_at" || m == "sync" || m == "truncate") { return gt(k, "Bool", id); }
     }
     if (fam == "args" && m == "count") { return gt(k, "Int", id); }
     if (fam == "args" && m == "get") { return gt(k, "Str", id); }

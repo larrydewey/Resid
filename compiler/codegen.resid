@@ -960,7 +960,7 @@ Str fam_head(Str ty) {
 // precision, 34 for a bare `Dec` or an `m` literal) is static.
 // Typed and linear-accumulator map/set entry points (see lin_* below).
 List(Str) hdr_map_typed() {
-    return ["declare ptr @resid_map_transient(ptr)", "declare ptr @resid_map_freeze(ptr)", "declare ptr @resid_map_put(ptr, i8, i8, i64, i8, i64)", "declare ptr @resid_map_del(ptr, i8, i8, i64)", "declare ptr @resid_set_put(ptr, i8, i8, i64)", "declare i128 @resid_map_find(ptr, i8, i64, i8)", "declare i8 @resid_map_has(ptr, i8, i64)", "declare ptr @resid_rec_new(i64, i8)", "declare ptr @resid_rec_reuse(ptr, i64)", "declare void @resid_rec_share(ptr)", "declare ptr @resid_str_keep(ptr)", "declare ptr @resid_map_evac(ptr, i8, i8)", "declare ptr @resid_list_evac(ptr)", "declare ptr @resid_dec_evac(ptr)", "declare i64 @resid_loop_enter()", "declare ptr @resid_list_rec_slot(ptr, i8, i64, i64)", "declare i1 @resid_loop_due(i64)", "declare i64 @resid_loop_due2(i64)", "declare ptr @resid_loop_own_move(i64, ptr, i64, i8)", "declare ptr @resid_loop_move(i64, i64)", "declare ptr @resid_loop_exit(i64, i64)", "declare ptr @resid_mv_str(ptr, ptr)", "declare ptr @resid_mv_list(ptr, ptr)", "declare ptr @resid_mv_list_f(ptr, ptr, ptr)", "declare ptr @resid_mv_map(ptr, i8, i8, ptr)", "declare ptr @resid_mv_rec(ptr, i64, i8, ptr)", "declare ptr @resid_mv_dec(ptr, ptr)", "declare ptr @resid_mv_box(ptr, ptr)", "declare void @resid_mv_leave()", "declare ptr @resid_mv_word(ptr, ptr)", "declare ptr @resid_mv_clo(ptr, ptr)", "declare ptr @resid_map_list_push(ptr, i8, i8, i64, ptr, ptr)", "declare ptr @resid_map_format_k(ptr, i8, i8)"];
+    return ["declare ptr @resid_map_transient(ptr)", "declare ptr @resid_map_freeze(ptr)", "declare ptr @resid_map_put(ptr, i8, i8, i64, i8, i64)", "declare ptr @resid_map_del(ptr, i8, i8, i64)", "declare ptr @resid_set_put(ptr, i8, i8, i64)", "declare i128 @resid_map_find(ptr, i8, i64, i8)", "declare i8 @resid_map_has(ptr, i8, i64)", "declare ptr @resid_rec_new(i64, i8)", "declare ptr @resid_rec_reuse(ptr, i64)", "declare void @resid_rec_share(ptr)", "declare ptr @resid_str_keep(ptr)", "declare ptr @resid_map_evac(ptr, i8, i8)", "declare ptr @resid_list_evac(ptr)", "declare ptr @resid_dec_evac(ptr)", "declare i64 @resid_loop_enter()", "declare ptr @resid_list_rec_slot(ptr, i8, i64, i64)", "declare i1 @resid_loop_due(i64)", "declare i64 @resid_loop_due2(i64)", "declare ptr @resid_loop_own_move(i64, ptr, i64, i8)", "declare ptr @resid_loop_move(i64, i64)", "declare ptr @resid_loop_exit(i64, i64)", "declare ptr @resid_mv_str(ptr, ptr)", "declare ptr @resid_mv_list(ptr, ptr)", "declare ptr @resid_mv_list_f(ptr, ptr, ptr)", "declare ptr @resid_mv_map(ptr, i8, i8, ptr)", "declare ptr @resid_mv_map_f(ptr, i8, ptr, ptr)", "declare ptr @resid_mv_rec(ptr, i64, i8, ptr)", "declare ptr @resid_mv_dec(ptr, ptr)", "declare ptr @resid_mv_box(ptr, ptr)", "declare void @resid_mv_leave()", "declare ptr @resid_mv_word(ptr, ptr)", "declare ptr @resid_mv_clo(ptr, ptr)", "declare ptr @resid_map_list_push(ptr, i8, i8, i64, ptr, ptr)", "declare ptr @resid_map_format_k(ptr, i8, i8)"];
 }
 
 // Runtime declarations added after the long hdr_core lists; both mains
@@ -4006,6 +4006,13 @@ Str p_sym(Str pname, Str meth) {
         if (meth == "is_dir") { return "resid_fs_is_dir"; }
         if (meth == "list_dir") { return "resid_fs_list_dir"; }
         if (meth == "create_dir") { return "resid_fs_create_dir_all"; }
+        if (meth == "remove") { return "resid_fs_remove"; }
+        if (meth == "rename") { return "resid_fs_rename"; }
+        if (meth == "modified_ms") { return "resid_fs_modified_ms"; }
+        if (meth == "read_range") { return "resid_fs_read_range"; }
+        if (meth == "write_at") { return "resid_fs_write_at"; }
+        if (meth == "sync") { return "resid_fs_sync"; }
+        if (meth == "truncate") { return "resid_fs_truncate"; }
     }
     if (pname == "process") {
         if (meth == "run") { return "resid_process_run"; }
@@ -4047,6 +4054,10 @@ Str p_rty(Str pname, Str meth) {
         if (meth == "is_dir") { return "Bool"; }
         if (meth == "list_dir") { return "List(Str)"; }
         if (meth == "create_dir") { return "Bool"; }
+        if (meth == "remove" || meth == "rename") { return "Bool"; }
+        if (meth == "size" || meth == "modified_ms") { return "Int"; }
+        if (meth == "read_range") { return "List(Int)"; }
+        if (meth == "write_at" || meth == "sync" || meth == "truncate") { return "Bool"; }
     }
     if (pname == "process") {
         if (meth == "run") { return "Int"; }
@@ -4080,6 +4091,11 @@ Int p_nargs(Str pname, Str meth) {
         if (meth == "is_dir") { return 1; }
         if (meth == "list_dir") { return 1; }
         if (meth == "create_dir") { return 1; }
+        if (meth == "remove" || meth == "size" || meth == "modified_ms") { return 1; }
+        if (meth == "rename") { return 2; }
+        if (meth == "sync") { return 1; }
+        if (meth == "truncate") { return 2; }
+        if (meth == "read_range" || meth == "write_at") { return 3; }
     }
     if (pname == "process") {
         if (meth == "run") { return 1; }

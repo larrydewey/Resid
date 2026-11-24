@@ -1604,10 +1604,11 @@ Int elem_move(Int p, Int ctx) {
 Int elem_move_ptr(Int p, Int ctx) {
     if (p == 0 || ult(p, 4096) || !mv_src(ctx, p)) { return p; }
     if (!is_boxed(p)) { return str_move(p, ctx); }
-    // A scalar box: header and payload (at most 16 bytes) copied whole.
+    // A scalar box: header and payload copied whole (16 bytes at most, or
+    // a wide integer's limbs).
     Int st = stype(p);
-    if (st < 1 || st > 5) { return p; }
-    Int n = if (st >= 4) { 40 } else { 32 };
+    if (st < 1 || (st > 5 && st != 7)) { return p; }
+    Int n = if (st == 7) { 24 + wide_limbs(box_type(p)) * 8 } else { if (st >= 4) { 40 } else { 32 } };
     Int q = mv_alloc(ctx, n);
     return mcopy(q, p, n) * 0 + q;
 }
@@ -1621,17 +1622,22 @@ Int str_move(Int p, Int ctx) {
 }
 
 // Kinds 4 and 5 (from the compiler): a string / a list of scalars or
-// strings, stored as kind 0.
+// strings, stored as kind 0. A larger k is a compiled mover (`resid.mv.T`,
+// resid_mv_map_f): a map whose values are records, sums, maps or lists of
+// records moves each value by it.
 Int word_move(Int k, Int w, Int ctx) {
     if (k == 4) { return str_move(w, ctx); }
     if (k == 5) { return list_move(w, 0, ctx); }
+    if (k >= 4096) { return resid_raw_call2(k, w, ctx); }
     return w;
 }
 
 Int pvec_move(Int n, Int level, Int ek, Int ctx) {
     if (n == 0 || !mv_src(ctx, n)) { return n; }
+    Int f = fw_get(ctx, n);
+    if (f != 0) { return f; }
     Int cap = ld64(n);
-    Int c = mv_alloc(ctx, 8 + cap * 8);
+    Int c = fw_put(ctx, n, mv_alloc(ctx, 8 + cap * 8));
     _ = st64(c, cap);
     return move_items(n, c, 0, cap, level, ek, ctx) * 0 + c;
 }
@@ -1656,9 +1662,11 @@ Int list_move(Int l, Int ek0, Int ctx) {
     Bool adopt = root != 0 && ltransient(l) && ld64(resid_raw_tls("rg_compact", 8)) != 0 && !mv_src(ctx, root);
     Int nroot = if (adopt) { flat_copy(root, n, ek, ctx) } else { if (lflat(l) && root != 0) { flat_move(root, n, ek, ctx) } else { if (root != 0) { pvec_move(root, lshift(l), ek, ctx) } else { root } } };
     if (nroot == root && !mv_src(ctx, l)) { return l; }
+    Int f = fw_get(ctx, l);
+    if (f != 0) { return f; }
     Int out = mv_alloc(ctx, 32);
     _ = mcopy(out, l, 32);
-    return st64(out + 16, nroot) * 0 + out;
+    return fw_put(ctx, l, st64(out + 16, nroot) * 0 + out);
 }
 
 // A flat buffer outside the moving regions keeps its place; the slots
@@ -1701,14 +1709,25 @@ Int move_elems(Int f, Int g, Int i, Int n, Int ek, Int ctx) {
 // moved by the compiled resid.rec.evac.T that calls this.
 Int rec_move(Int v, Int size, Int hdr, Int ctx) {
     if (v == 0 || !mv_src(ctx, v)) { return v; }
+    Int f = fw_get(ctx, v);
+    if (f != 0) { return f; }
     if (hdr != 0) {
         Int h = mv_alloc(ctx, size + 8);
         _ = mcopy(h, v - 8, size + 8);
-        return h + 8;
+        return fw_put(ctx, v, h + 8);
     }
     Int c = mv_alloc(ctx, size);
-    return mcopy(c, v, size) * 0 + c;
+    return fw_put(ctx, v, mcopy(c, v, size) * 0 + c);
 }
+
+// A loop's move copies a record, map or list reached twice once (fwd_get),
+// so what the carried state shares stays shared: a value reached by many
+// paths (a summary held in two maps, a map inside many records) would
+// otherwise be copied once per path, and its copies again at the next
+// compaction. Only a loop's own moves (rg_mv_loop) forward; a write
+// barrier's move is one value into one place.
+Int fw_get(Int ctx, Int v) { return if (ctx == resid_raw_tls("rg_mv_loop", 24)) { fwd_get(v) } else { 0 }; }
+Int fw_put(Int ctx, Int v, Int c) { return if (ctx == resid_raw_tls("rg_mv_loop", 24)) { fwd_put(v, c) } else { c }; }
 
 // A pointer-form Dec.
 Int dec_move(Int v, Int ctx) {
@@ -1720,9 +1739,11 @@ Int dec_move(Int v, Int ctx) {
 
 Int hnode_move(Int n, Int kf, Int vf, Int ctx) {
     if (n == 0 || !mv_src(ctx, n)) { return n; }
+    Int f = fw_get(ctx, n);
+    if (f != 0) { return f; }
     Int nd = node_nd(n);
     Int nn = node_nn(n);
-    Int c = map_mv_alloc(ctx, 24 + ncap(n) * 8);
+    Int c = fw_put(ctx, n, map_mv_alloc(ctx, 24 + ncap(n) * 8));
     _ = mcopy(c, n, 24 + (2 * nd + nn) * 8);
     _ = move_pairs(c, 0, nd, kf, vf, ctx);
     return move_subs(c, nd, 0, nn, kf, vf, ctx) * 0 + c;
@@ -1744,6 +1765,8 @@ Int move_subs(Int c, Int nd, Int i, Int nn, Int kf, Int vf, Int ctx) {
 // A map. kf / vf: the kinds of its keys / values (4 strings, 5 lists).
 Int map_move(Int m, Int kf, Int vf, Int ctx) {
     if (m == 0) { return m; }
+    Int f = if (mv_src(ctx, m)) { fw_get(ctx, m) } else { 0 };
+    if (f != 0) { return f; }
     Int t = mtab(m);
     Int nt = if (t != 0) { tab_move(t, kf, vf, ctx) } else { 0 };
     Int nr = if (t != 0) { mroot(m) } else { hnode_move(mroot(m), kf, vf, ctx) };
@@ -1751,7 +1774,7 @@ Int map_move(Int m, Int kf, Int vf, Int ctx) {
     Int out = map_mv_alloc(ctx, 48);
     _ = mcopy(out, m, 48) + st8(out + 46, if (ld64(ctx + 16) == 0) { bulk_depth() } else { 0 });
     _ = st64(out + 16, nt);
-    return st64(out + 8, nr) * 0 + out;
+    return fw_put(ctx, m, st64(out + 8, nr) * 0 + out);
 }
 
 Int tab_move(Int t, Int kf, Int vf, Int ctx) {
@@ -1759,7 +1782,9 @@ Int tab_move(Int t, Int kf, Int vf, Int ctx) {
     Bool kt = tkeys(t) != 0 && mv_src(ctx, tkeys(t));
     Bool vt = kt && tvals(t) != 0;
     if (!tt && !kt) { return t; }
-    Int nt = map_mv_alloc(ctx, 96);
+    Int f = fw_get(ctx, t);
+    if (f != 0) { return f; }
+    Int nt = fw_put(ctx, t, map_mv_alloc(ctx, 96));
     _ = mcopy(nt, t, 96);
     _ = if (kt) { st64(nt + 32, dup_words(tkeys(t), tcap(t) * 2, ctx)) } else { 0 };
     _ = if (vt) { st64(nt + 40, tkeys(nt) + 8) } else { 0 };
@@ -1804,6 +1829,10 @@ pub Int rt_mv_list_f(Int l, Int ek, Int ctx) { return list_move(l, ek, ctx); }
 
 @export("resid_mv_map", "ptr(ptr,i8,i8,ptr)")
 pub Int rt_mv_map(Int m, Int kf, Int vf, Int ctx) { return map_move(m, kf, vf, ctx); }
+
+// A map whose values move by the compiled mover vk (resid.mv.T).
+@export("resid_mv_map_f", "ptr(ptr,i8,ptr,ptr)")
+pub Int rt_mv_map_f(Int m, Int kf, Int vk, Int ctx) { return map_move(m, kf, vk, ctx); }
 
 @export("resid_mv_rec", "ptr(ptr,i64,i8,ptr)")
 pub Int rt_mv_rec(Int v, Int size, Int hdr, Int ctx) { return rec_move(v, size, hdr, ctx); }

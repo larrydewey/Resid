@@ -1,0 +1,184 @@
+// ringbench.resid — what a crossing between two processes over a shared
+// ring costs: a polling round trip, a sleeping (eventfd) round trip, and a
+// frame of 10,000 64-byte commands encoded here and read by the other
+// process. bench/crossing/ring.c is the same in C; run.sh runs both.
+//
+// A prototype of the mechanism, not of a language feature: it uses the
+// runtime's raw primitives (E0220), which is why it lives under a
+// runtime/rt/ path and builds with --runtime-internals. x86-64 Linux only.
+// This process is pinned to CPU 0, the other to CPU 2.
+type Cmd = { Int op; Int a; Int b; Int c; Int d; Int e; Int f; Int g; };
+
+Int sys(Int n, Int a, Int b, Int c) { return resid_raw_syscall(n, a, b, c, 0, 0, 0); }
+Int now(Int ts) { _ = sys(228, 1, ts, 0); return resid_raw_load64(ts) * 1000000000 + resid_raw_load64(ts + 8); }
+Int pin(Int s, Int cpu) { _ = resid_raw_store64(s + 256, 1 << cpu); return sys(203, 0, 8, s + 256); }
+// A volatile read: a plain raw load is hoisted out of a polling loop.
+Int rd(Int p) { return resid_raw_loadv64(p); }
+Int bye() { return sys(231, 0, 0, 0); }
+Int reap(Int pid) { return resid_raw_syscall(61, pid, 0, 0, 0, 0, 0); }
+
+// ── polling ping-pong ──
+Int serve_poll(Int s, Int seen) {
+    Int r = rd(s);
+    if (r == 0 - 1) { return 0; }
+    if (r != seen) { _ = resid_raw_store64(s + 64, r); return serve_poll(s, r); }
+    return serve_poll(s, seen);
+}
+Int wait_ack(Int s, Int v) { if (rd(s + 64) == v) { return 0; } return wait_ack(s, v); }
+Int ping(Int s, Int i, Int n) {
+    if (i > n) { return 0; }
+    _ = resid_raw_store64(s, i);
+    _ = wait_ack(s, i);
+    return ping(s, i + 1, n);
+}
+
+// ── sleeping ping-pong over two eventfds ──
+Int serve_sleep(Int s, Int a, Int b) {
+    _ = sys(0, a, s + 384, 8);
+    if (resid_raw_load64(s + 384) == 99) { return 0; }
+    _ = resid_raw_store64(s + 384, 1);
+    _ = sys(1, b, s + 384, 8);
+    return serve_sleep(s, a, b);
+}
+Int ping_sleep(Int s, Int a, Int b, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = resid_raw_store64(s + 320, 1);
+    _ = sys(1, a, s + 320, 8);
+    _ = sys(0, b, s + 320, 8);
+    return ping_sleep(s, a, b, i + 1, n);
+}
+
+// ── a frame: encode n commands with a bounds check each, one crossing ──
+Cmd mk(Int j) { return Cmd {.op = j & 255, .a = j, .b = j + 1, .c = j + 2, .d = j * 3, .e = 7, .f = j ^ 85, .g = j + j}; }
+Bool put(Int base, Int cap, Int o, Cmd c) {
+    if (o < 0 || o + 64 > cap) { return false; }
+    Int p = base + o;
+    _ = resid_raw_store64(p, c.op);
+    _ = resid_raw_store64(p + 8, c.a);
+    _ = resid_raw_store64(p + 16, c.b);
+    _ = resid_raw_store64(p + 24, c.c);
+    _ = resid_raw_store64(p + 32, c.d);
+    _ = resid_raw_store64(p + 40, c.e);
+    _ = resid_raw_store64(p + 48, c.f);
+    _ = resid_raw_store64(p + 56, c.g);
+    return true;
+}
+Int encode(Int base, Int cap, Int j, Int n) {
+    if (j >= n) { return 0; }
+    if (!put(base, cap, j * 64, mk(j))) { return 0 - 1; }
+    return encode(base, cap, j + 1, n);
+}
+Int encode_direct(Int base, Int cap, Int j, Int n) {
+    if (j >= n) { return 0; }
+    Int o = j * 64;
+    if (o < 0 || o + 64 > cap) { return 0 - 1; }
+    Int p = base + o;
+    _ = resid_raw_store64(p, j & 255);
+    _ = resid_raw_store64(p + 8, j);
+    _ = resid_raw_store64(p + 16, j + 1);
+    _ = resid_raw_store64(p + 24, j + 2);
+    _ = resid_raw_store64(p + 32, j * 3);
+    _ = resid_raw_store64(p + 40, 7);
+    _ = resid_raw_store64(p + 48, j ^ 85);
+    _ = resid_raw_store64(p + 56, j + j);
+    return encode_direct(base, cap, j + 1, n);
+}
+Int frames_direct(Int s, Int i, Int k, Int n, Bool cross) {
+    if (i > k) { return 0; }
+    _ = encode_direct(s + 4096, 1048576, 0, n);
+    if (cross) {
+        _ = resid_raw_store64(s, i);
+        _ = wait_ack(s, i);
+    } else {
+        _ = resid_raw_store64(s + 448, consume(s + 4096, 0, n, 0));
+    }
+    return frames_direct(s, i + 1, k, n, cross);
+}
+Int consume(Int base, Int j, Int n, Int acc) {
+    if (j >= n) { return acc; }
+    return consume(base, j + 1, n, acc + resid_raw_load64(base + j * 64) + resid_raw_load64(base + j * 64 + 56));
+}
+Int serve_frames(Int s, Int seen, Int n) {
+    Int r = rd(s);
+    if (r == 0 - 1) { return 0; }
+    if (r != seen) {
+        _ = resid_raw_store64(s + 448, consume(s + 4096, 0, n, 0));
+        _ = resid_raw_store64(s + 64, r);
+        return serve_frames(s, r, n);
+    }
+    return serve_frames(s, seen, n);
+}
+Int frames(Int s, Int i, Int k, Int n, Bool cross) {
+    if (i > k) { return 0; }
+    _ = encode(s + 4096, 1048576, 0, n);
+    if (cross) {
+        _ = resid_raw_store64(s, i);
+        _ = wait_ack(s, i);
+    } else {
+        _ = resid_raw_store64(s + 448, consume(s + 4096, 0, n, 0));
+    }
+    return frames(s, i + 1, k, n, cross);
+}
+
+Int main() {
+    Int s = resid_raw_syscall(9, 0, 2097152, 3, 33, 0 - 1, 0);
+    Int ts = s + 128;
+    Int n = 1000000;
+
+    // Pinned before the first fork: pin's mask lies in the shared mapping,
+    // so a parent and a child pinning at once could both take one CPU, and
+    // two polling loops on one CPU take a scheduler tick per round trip.
+    _ = pin(s, 0);
+    Int p1 = sys(57, 0, 0, 0);
+    if (p1 == 0) { _ = pin(s, 2); _ = serve_poll(s, 0); _ = bye(); }
+    Int t0 = now(ts);
+    _ = ping(s, 1, n);
+    Int t1 = now(ts);
+    _ = resid_raw_store64(s, 0 - 1);
+    _ = reap(p1);
+    println(f"resid polling ring, two cores      mean {(t1 - t0) / n} ns");
+    _ = resid_raw_store64(s, 0);
+    _ = resid_raw_store64(s + 64, 0);
+
+    Int a = sys(290, 0, 0, 0);
+    Int b = sys(290, 0, 0, 0);
+    Int m = 100000;
+    Int p2 = sys(57, 0, 0, 0);
+    if (p2 == 0) { _ = pin(s, 2); _ = serve_sleep(s, a, b); _ = bye(); }
+    Int t2 = now(ts);
+    _ = ping_sleep(s, a, b, 0, m);
+    Int t3 = now(ts);
+    _ = resid_raw_store64(s + 320, 99);
+    _ = sys(1, a, s + 320, 8);
+    _ = reap(p2);
+    println(f"resid sleeping wake, two cores     mean {(t3 - t2) / m} ns");
+
+    Int k = 2000;
+    Int t4 = now(ts);
+    _ = frames(s, 1, k, 10000, false);
+    Int t5 = now(ts);
+    println(f"resid encode+consume, one process  mean {(t5 - t4) / k} ns");
+    Int p3 = sys(57, 0, 0, 0);
+    if (p3 == 0) { _ = pin(s, 2); _ = serve_frames(s, 0, 10000); _ = bye(); }
+    Int t6 = now(ts);
+    _ = frames(s, 1, k, 10000, true);
+    Int t7 = now(ts);
+    _ = resid_raw_store64(s, 0 - 1);
+    _ = reap(p3);
+    println(f"resid frame: encode+cross+consume  mean {(t7 - t6) / k} ns");
+    _ = resid_raw_store64(s, 0);
+    _ = resid_raw_store64(s + 64, 0);
+    Int t8 = now(ts);
+    _ = frames_direct(s, 1, k, 10000, false);
+    Int t9 = now(ts);
+    println(f"resid direct: encode+consume, one  mean {(t9 - t8) / k} ns");
+    Int p4 = sys(57, 0, 0, 0);
+    if (p4 == 0) { _ = pin(s, 2); _ = serve_frames(s, 0, 10000); _ = bye(); }
+    Int t10 = now(ts);
+    _ = frames_direct(s, 1, k, 10000, true);
+    Int t11 = now(ts);
+    _ = resid_raw_store64(s, 0 - 1);
+    _ = reap(p4);
+    println(f"resid direct: frame with crossing  mean {(t11 - t10) / k} ns");
+    return 0;
+}
