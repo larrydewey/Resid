@@ -1,0 +1,10 @@
+// Fixture for device_mmio: a page under /dev/shm that tests/device/run.sh prepares, as a device's memory (installed as lib/dev/fx_device_mmio.resid).
+import "device.resid";
+import "device_write.resid";
+
+// The same file through a descriptor that only loads and one that writes.
+pub Mmio fx_regs() { return Mmio {.name = "fx.regs", .path = "/dev/shm/resid_fx_mmio", .size = 256, .write = false, .stability = OutOfTree}; }
+pub Mmio fx_regs_w() { return Mmio {.name = "fx.regs", .path = "/dev/shm/resid_fx_mmio", .size = 256, .write = true, .stability = OutOfTree}; }
+
+// A file that is not there.
+pub Mmio fx_gone() { return Mmio {.name = "fx.gone", .path = "/dev/shm/resid_fx_mmio_gone", .size = 256, .write = false, .stability = OutOfTree}; }

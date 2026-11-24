@@ -1,0 +1,2 @@
+E0219
+uses (through `fx_regs_write_ctl`) capability `device`

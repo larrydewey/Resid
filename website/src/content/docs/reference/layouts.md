@@ -171,6 +171,39 @@ For each register the compiler writes a handle, a `Reg(T)` typed by the
 register's word (`queue_regs_desc_hi()` is a `Reg(AddrHi)`), holding its
 offset and width, and `queue_regs_size()`. A malformed block is `E0298`.
 
-The handles are what reading and writing a device's memory will take.
-That part, and sum-typed fields and reads with an effect, are not here
-yet (`PLAN-hardware-access.md` §11).
+### Reading and writing a block
+
+A block that names its descriptors gets a function for each access a
+register allows:
+
+```resid
+@registers(size = 0x100, device = virtio_dev, write = virtio_dev_w)
+type VirtioRegs = {
+    @at(0x60) IrqCause     cause;      // a @clears_on_read word
+    @at(0x70) VirtioStatus status;
+};
+
+@requires(device(readonly))
+Result(Bool, DeviceError) needs_reset() {
+    VirtioStatus s = virtio_regs_read_status()?;
+    return Ok(s.needs_reset);
+}
+```
+
+| Function | For | Grant |
+|---|---|---|
+| `virtio_regs_read_status()` | a register with something to read | `device(readonly)` |
+| `virtio_regs_write_status(v)` | a register with something the driver may write | `device` |
+| `virtio_regs_take_cause()` | a `@clears_on_read` register: reading it changes the device, so there is no `read_` | `device` |
+
+`device = d` names an `Mmio` descriptor that only loads and `write = dw`
+one that writes; both come from `lib/dev/`, as every descriptor does
+(`E0260`). Each function is one `device.mmio` call with its descriptor
+written out, so the compiler knows which descriptor every call uses, and
+a read never needs more than the read-only grant.
+
+Each access runs in a device host of its own, like every device call:
+the host maps the device's memory, installs its filter, makes the one
+load or store and exits. It costs about what a device call does (2 ms),
+which suits start-up and configuration, not a data path
+(`PLAN-hardware-access.md` §11). Sum-typed fields are not here yet.

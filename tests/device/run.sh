@@ -48,7 +48,7 @@ elif [ -z "${RESID_SIGNING_KEY:-}" ]; then
 fi
 [ -x "$COMPILER" ] || { echo "compiler not found: $COMPILER (run ./boot.sh)"; exit 2; }
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf "$WORK"; rm -f /dev/shm/resid_fx_mmio' EXIT
 HOME_DIR="$WORK/home"
 mkdir -p "$HOME_DIR"
 cp -r "$ROOT/lib" "$HOME_DIR/lib"
@@ -58,6 +58,17 @@ for f in "$CASES"/*.dev; do
     cp "$f" "$HOME_DIR/lib/dev/fx_$(basename "$f" .dev).resid"
 done
 export RESID_HOME="$HOME_DIR"
+# The page device_mmio maps as a device's memory (its fixture's
+# /dev/shm/resid_fx_mmio): 256 bytes, "virt" at 0x00, a pending rx at 0x60,
+# a status of acknowledge and needs_reset at 0x70, 0xfedcba9876543210 at 0x78.
+FX_MMIO=/dev/shm/resid_fx_mmio
+if [ -d /dev/shm ] && [ -w /dev/shm ]; then
+    head -c 256 /dev/zero > "$FX_MMIO"
+    printf 'virt' | dd of="$FX_MMIO" bs=1 seek=0 conv=notrunc 2>/dev/null
+    printf '\001' | dd of="$FX_MMIO" bs=1 seek=96 conv=notrunc 2>/dev/null
+    printf '\101' | dd of="$FX_MMIO" bs=1 seek=112 conv=notrunc 2>/dev/null
+    printf '\020\062\124\166\230\272\334\376' | dd of="$FX_MMIO" bs=1 seek=120 conv=notrunc 2>/dev/null
+fi
 pass=0; fail=0; skip=0
 for f in "$CASES"/*.resid; do
     n="$(basename "$f" .resid)"

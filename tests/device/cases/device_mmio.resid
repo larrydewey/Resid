@@ -1,0 +1,68 @@
+// Register access (PLAN-hardware-access.md §11): a block of packed words
+// at their offsets in a device's mapped memory, read and written through
+// the functions the compiler writes for it. Each access is one load or
+// store in a device host that mapped the file before its filter went in.
+// run.sh prepares the page: "virt" at 0x00, a pending rx at 0x60, a
+// status of acknowledge and needs_reset at 0x70, a 64-bit word at 0x78.
+import "dev/fx_device_mmio.resid";
+
+@word(32) type DeviceMagic = { DeviceOwned(UInt(32)) value; };
+
+@word(32)
+type FxStatus = {
+    Bool acknowledge;
+    Bool driver;
+    Bool driver_ok;
+    Bool features_ok;
+    @reserved(2);
+    DeviceOwned(Bool) needs_reset;
+    Bool failed;
+    @reserved(24);
+};
+
+@word(32) @clears_on_read
+type IrqCause = { DeviceOwned(Bool) rx; DeviceOwned(Bool) tx; @reserved(30); };
+
+@word(8) type Command = { DriverOwned(UInt(8)) opcode; };
+@word(64) type Wide = { UInt(64) all; };
+
+@registers(size = 0x100, device = fx_regs, write = fx_regs_w)
+type FxRegs = {
+    @at(0x00) DeviceMagic magic;
+    @at(0x60) IrqCause    cause;
+    @at(0x70) FxStatus    status;
+    @at(0x78) Wide        wide;
+    @at(0x90) Command     cmd;
+};
+
+@registers(size = 0x100, device = fx_gone)
+type GoneRegs = { @at(0x00) DeviceMagic magic; };
+
+Str status_text(Result(FxStatus, DeviceError) r) {
+    return match (r) {
+        Ok(s) => f"status ack={s.acknowledge} driver={s.driver} needs_reset={s.needs_reset}",
+        Err(e) => device_error_text(e),
+    };
+}
+
+// A read needs only the read-only grant.
+@requires(device(readonly))
+Str probe() {
+    Str magic = match (fx_regs_read_magic()) { Ok(m) => f"magic {m.value}", Err(e) => device_error_text(e) };
+    Str wide = match (fx_regs_read_wide()) { Ok(w) => f"wide {w.all}", Err(e) => device_error_text(e) };
+    Str gone = match (gone_regs_read_magic()) { Ok(m) => "found", Err(e) => device_error_text(e) };
+    return magic + "\n" + status_text(fx_regs_read_status()) + "\n" + wide + "\n" + gone;
+}
+
+@requires(device)
+Int main() {
+    println(probe());
+    // The device's needs_reset is not the driver's to write: it goes out as zero.
+    println(match (fx_regs_write_status(FxStatus {.acknowledge = true, .driver = true, .driver_ok = false, .features_ok = false, .failed = false})) { Ok(b) => f"wrote {b}", Err(e) => device_error_text(e) });
+    println(status_text(fx_regs_read_status()));
+    println(match (fx_regs_take_cause()) { Ok(c) => f"cause rx={c.rx} tx={c.tx}", Err(e) => device_error_text(e) });
+    println(match (fx_regs_write_cmd(Command {.opcode = 3})) { Ok(b) => f"cmd {b}", Err(e) => device_error_text(e) });
+    println(match (fx_regs_write_wide(Wide {.all = 18446744073709551615})) { Ok(b) => f"wide {b}", Err(e) => device_error_text(e) });
+    println(match (fx_regs_read_wide()) { Ok(w) => f"wide {w.all}", Err(e) => device_error_text(e) });
+    return 0;
+}

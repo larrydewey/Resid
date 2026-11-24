@@ -192,12 +192,14 @@ Int rd_take(Int r, Int n) {
 
 // A parsed request, 40 words:
 //    0 kind (1 ioctl, 2 transact, 3 read_attr, 4 configfs_report, 5 sequence,
-//      6 transact chain)
+//      6 transact chain, 7 ctaphid, 8 mmio)
 //    1 write   2 name   3 name length   4 path (NUL-terminated)   5 path length
 //    6 steps   7 step records            8 links  9 link words (5 each)
 //   10..14 the kind's own: transact max_command, max_response, secret,
 //          command, command length; read_attr max; configfs max_inblob,
-//          max_outblob, max_auxblob, max_manifestblob
+//          max_outblob, max_auxblob, max_manifestblob; mmio size, offset,
+//          access width in bytes, the value to store, the access (0 a
+//          load, 1 a store)
 //   15 providers  16 provider words (address, length)
 //   17 inblob  18 inblob length  19 privlevel  20 service_provider  21 its length
 //   22 inputs  23 input words (tag, value or address, length)
@@ -278,7 +280,7 @@ Int pq_parse_r(Int d, Int r, Int n) {
     Int path = pq_alloc(d, pl + 1);
     _ = mcopy(path, pp, pl);
     _ = dset(d, 4, path) + dset(d, 5, pl);
-    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else if (kind == 6) { pq_tchain(d, r) } else if (kind == 7) { pq_ctaphid(d, r) } else { false };
+    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else if (kind == 6) { pq_tchain(d, r) } else if (kind == 7) { pq_ctaphid(d, r) } else if (kind == 8) { pq_mmio(d, r) } else { false };
     if (!ok || rd_bad(r)) { return 3; }
     if ((kind == 1 || kind == 5) && !pq_args(d, r)) { return 4; }
     if (rd_bad(r) || ld64(r + 16) != n) { return 5; }
@@ -477,6 +479,21 @@ Bool pq_attr(Int d, Int r) {
     return !rd_bad(r);
 }
 
+// One access to a device's mapped memory (lib/dev/device.resid's Mmio):
+// the size of the block, then the access: 0 a load or 1 a store, its
+// offset, its width in bytes, and for a store the 8 bytes to write (the
+// low `width` of them).
+Bool pq_mmio(Int d, Int r) {
+    Int size = rd_u(r, 4);
+    Int acc = rd_u(r, 1);
+    Int off = rd_u(r, 4);
+    Int w = rd_u(r, 1);
+    Int vp = rd_take(r, 8);
+    if (rd_bad(r)) { return false; }
+    _ = dset(d, 10, size) + dset(d, 11, off) + dset(d, 12, w) + dset(d, 13, ld64(vp)) + dset(d, 14, acc);
+    return true;
+}
+
 Bool pq_report(Int d, Int r) {
     Int np = rd_u(r, 1);
     Int ps = pq_alloc(d, np * 16 + 8);
@@ -560,6 +577,17 @@ Int pq_check(Int d) {
         if (te != 0) { return te; }
     }
     if (kind == 3 && !pq_max_ok(dget(d, 10))) { return 15; }
+    // One access to mapped device memory: a block of at most dv_buf_max
+    // bytes; a width of 1, 2, 4 or 8 at a multiple of it, inside the block;
+    // and a store only under a write.
+    if (kind == 8) {
+        Int w = dget(d, 12);
+        if (!pq_max_ok(dget(d, 10))) { return 60; }
+        if (w != 1 && w != 2 && w != 4 && w != 8) { return 61; }
+        if (dget(d, 11) < 0 || dget(d, 11) % w != 0 || dget(d, 11) + w > dget(d, 10)) { return 62; }
+        if (dget(d, 14) != 0 && dget(d, 14) != 1) { return 63; }
+        if (dget(d, 14) == 1 && wr != 1) { return 19; }
+    }
     if (kind == 4) {
         Int pe = pq_report_err(d);
         if (pe != 0) { return pe; }
@@ -891,6 +919,8 @@ Int pq_slots(Int d) {
     if (kind == 2) { _ = dset(d, 24, pq_slot(outs, 0, 0, dget(d, 11), dget(d, 12))); }
     if (kind == 7) { _ = dset(d, 24, pq_slot(outs, 0, 0, dget(d, 10) + 1, 0)); }
     if (kind == 3) { _ = dset(d, 24, pq_slot(outs, 0, 0, dget(d, 10), 0)); }
+    // A load answers with the word, as a number; a store with nothing.
+    if (kind == 8) { _ = dset(d, 24, if (dget(d, 14) == 0) { pq_slot(outs, 0, 1, 8, 0) } else { 0 }); }
     if (kind == 6) { _ = dset(d, 24, pq_tslots(outs, 0, dget(d, 35), dget(d, 11))); }
     if (kind == 4) {
         _ = pq_slot(outs, 0, 0, dget(d, 11), 0) + pq_slot(outs, 1, 0, dget(d, 12), 0) + pq_slot(outs, 2, 0, dget(d, 13), 0);
@@ -1276,6 +1306,7 @@ Int dh_main(Int argv, Int envp, Int mode, Int root) {
     if (kind == 6) { return dh_tchain(h, d); }
     if (kind == 7) { return dh_ctaphid(h, d); }
     if (kind == 3) { return dh_attr(h, d); }
+    if (kind == 8) { return dh_mmio(h, d); }
     if (kind == 4) {
         // The entry's name: 16 random bytes from the parent, which removes
         // the entry itself if this host dies before it does.
@@ -2143,6 +2174,71 @@ Int dh_attr(Int h, Int d) {
     if (!dh_canaries(h, 0)) { return dh_fail(h, 8, 0); }
     if (r > mx) { return dh_fail(h, 4, 0); }
     _ = gput(h, 0, 1) + gput(h, 1, 4) + gout(h, b, r, 0);
+    return dh_reply(h);
+}
+
+// ─── Mmio ───────────────────────────────────────────────────────────
+// One load or store in a device's memory (PLAN-hardware-access.md §11).
+// The file is opened and mapped before the filter is installed, so the
+// filter is the one every other kind has: it lets no file be mapped, and
+// after it this host can only touch the mapping it holds, once, and
+// answer. What may be mapped: a PCI function's `resource<N>` under sysfs,
+// or a file under /dev/shm (the fixtures of tests/device); never a
+// character device (/dev/mem and its like are not memory a driver owns).
+
+// A regular file on sysfs or on tmpfs.
+Bool dh_is_mappable(Int fd) {
+    Int m = dh_fsmagic(fd);
+    return dh_ftype(fd) == 32768 && (m == 1650812274 || m == 16914836);   // SYSFS_MAGIC, TMPFS_MAGIC
+}
+
+Int dh_fsize(Int fd) {
+    Int sb = xmalloc(160);
+    Int r = resid_raw_syscall(5, fd, sb, 0, 0, 0, 0);
+    Int n = if (r == 0) { ld64(sb + 48) } else { 0 - 1 };
+    return c_free(sb) * 0 + n;
+}
+
+// A volatile load or store of w bytes at p: read or written once, as
+// wide as asked, whatever the optimizer knows about the address.
+Int mm_load(Int p, Int w) {
+    if (w == 1) { return resid_raw_loadv8(p); }
+    if (w == 2) { return resid_raw_loadv16(p); }
+    if (w == 4) { return resid_raw_loadv32(p); }
+    return resid_raw_loadv64(p);
+}
+
+Int mm_store(Int p, Int w, Int v) {
+    if (w == 1) { return resid_raw_storev8(p, v); }
+    if (w == 2) { return resid_raw_storev16(p, v); }
+    if (w == 4) { return resid_raw_storev32(p, v); }
+    return resid_raw_storev64(p, v);
+}
+
+Int dh_mmio(Int h, Int d) {
+    Int store = dget(d, 14);
+    Int size = dget(d, 10);
+    // Symbolic links are how sysfs reaches a device's directory, as for an
+    // attribute (dh_attr); magic links are refused, and the last component
+    // is never a link.
+    Int fd = dh_open2(0 - 100, dget(d, 4), if (store == 1) { 2 } else { 0 }, 2);
+    if (fd < 0) { return dh_fail_errno(h, fd, false); }
+    if (!dh_is_mappable(fd)) { return dh_fail(h, 6, 0); }
+    _ = dset(h, 7, fd);
+    // A block the file does not hold would fault when it is touched.
+    if (dh_fsize(fd) < size) { return dh_fail(h, 6, 0); }
+    Int len = (size + 4095) & (0 - 4096);
+    Int map = resid_raw_syscall(9, 0, len, if (store == 1) { 3 } else { 1 }, 1, fd, 0);   // MAP_SHARED
+    if (map < 0 && map > 0 - 4096) { return dh_fail_errno(h, map, false); }
+    if (!dh_regions(h, 1) || !dh_bufs(h, d)) { return native_child_exit(125); }
+    if (!dh_lock(h)) { return native_child_exit(126); }
+    Int at = map + dget(d, 11);
+    Int w = dget(d, 12);
+    Int v = if (store == 1) { mm_store(at, w, dget(d, 13)) * 0 } else { mm_load(at, w) };
+    _ = dh_after_op(h);
+    if (!dh_canaries(h, 0)) { return dh_fail(h, 8, 0); }
+    // A store answers with no output; a load with the word, as a number.
+    _ = if (store == 1) { gput(h, 0, 1) + gput(h, 0, 4) } else { gput(h, 0, 1) + gput(h, 1, 4) + gput(h, 0, 1) + gput(h, v, 8) };
     return dh_reply(h);
 }
 

@@ -167,8 +167,23 @@ region, with no diagnostic.
   register a handle `t_r()` of type `Reg(Word)` (offset and width; the
   generic `Reg(T)` is declared once after the program). Conformance:
   `regs_block`, `err_regs_overlap`, `err_regs_bounds`,
-  `err_regs_handle`. Not yet: the `device.read/write/take` verbs that
-  take a handle, `Region(T)`, sum-typed fields, `@clears_on_read`.
+  `err_regs_handle`.
+- **Stage D: reading and writing a register.** A new device verb,
+  `device.mmio(Mmio, MmioAccess)`: one load or store of 1, 2, 4 or 8
+  bytes in a device's mapped memory. The host (`runtime/rt/device.resid`,
+  kind 8, `dh_mmio`) opens and maps the file before its filter is
+  installed, so the filter is unchanged, then makes one volatile access
+  and replies. It maps a PCI function's sysfs `resource<N>` or a file
+  under `/dev/shm/` and nothing else; `lib/dev/device.resid` has the
+  `Mmio` descriptor and its engines, `compiler/device.resid` its E0263
+  checks. A block that names its descriptors, `@registers(size = N,
+  device = d, write = dw)`, gets `t_read_r()`, `t_write_r(v)` and, for a
+  `@clears_on_read` word, `t_take_r()`, each one `device.mmio` with its
+  descriptor written out (a call shape decided when a descriptor passed
+  as a parameter turned out to count as a write). Tests:
+  `tests/runtime/device_mmio.c` (20 checks of the host),
+  `tests/device/cases/device_mmio` and four error cases. Not yet:
+  sum-typed fields; a PCI address as run-time data; the driver process.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

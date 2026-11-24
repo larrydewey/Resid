@@ -20,6 +20,7 @@
 //     device.read_attr(ReadAttr)                       -> Result(List(DevOut), DeviceError)
 //     device.read_pci_attr(PciAttr, PciAddr)           -> Result(List(DevOut), DeviceError)
 //     device.sequence(Sequence, List(DevIn))           -> Result(List(DevOut), DeviceError)
+//     device.mmio(Mmio, MmioAccess)                    -> Result(List(DevOut), DeviceError)
 //
 // Each verb is a provider call of the `device` family: @requires(device) or,
 // when the descriptor's `write` is false, @requires(device(readonly)). After
@@ -140,6 +141,22 @@ type CtapHid = { Str name; Str path; Int max_message; Int timeout_ms; Bool write
 /// A read-only attribute file (sysfs), at most `max` bytes.
 @descriptor(read_attr)
 type ReadAttr = { Str name; Str path; Int max; Stability stability; };
+
+/// A device's memory, mapped: the first `size` bytes of the file at `path`,
+/// which is a PCI function's `resource<N>` under /sys/bus/pci/devices/ or,
+/// for a fixture, a file under /dev/shm/ (E0263). `device.mmio` makes one
+/// load or store in it, each in a device host of its own, which maps the
+/// file before its filter is installed and can touch nothing else after
+/// (PLAN-hardware-access.md §11). `write` is whether stores are made
+/// through this descriptor; one with `write = false` only loads.
+@descriptor(mmio)
+type Mmio = { Str name; Str path; Int size; Bool write; Stability stability; };
+
+/// One access to an Mmio's memory: a load, or a store of the low `bytes`
+/// of `value`. `bytes` is 1, 2, 4 or 8 and `off` a multiple of it, inside
+/// the block. Run-time data, like a PciAddr.
+@descriptor(mmio_access)
+type MmioAccess = { Bool store; Int off; Int bytes; UInt(64) value; };
 
 /// A read-only attribute of a PCI device.
 /// `rel` is under the device's sysfs directory, one or two components of
@@ -604,6 +621,31 @@ pub Result(List(DevOut), DeviceError) device_engine_ctaphid(CtapHid op, List(UIn
     return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call(r.req)));
 }
 
+/// The serialized request for the access `a` to `op`'s memory.
+/// `err` is set when the access is not a word of the block, or is a store
+/// through a descriptor that does not write.
+pub DvReq dv_prep_mmio(Mmio op, MmioAccess a) {
+    if (a.bytes != 1 && a.bytes != 2 && a.bytes != 4 && a.bytes != 8) { return dv_bad("an access is 1, 2, 4 or 8 bytes wide"); }
+    if (a.off < 0 || a.off % a.bytes != 0 || a.off + a.bytes > op.size) { return dv_bad("the access is not at a multiple of its width inside the block"); }
+    if (a.store && !op.write) { return dv_bad("a store needs a descriptor that writes (`write = true`)"); }
+    ListBuf(Int) b = dv_u(dv_u(dv_u(dv_u(dv_head(ListBuf(), 8, op.write, op.name, op.path), op.size, 4), dv_bool(a.store), 1), a.off, 4), a.bytes, 1);
+    List(DvSlot) outs = if (a.store) { [] } else { [DvSlot {.num = true, .max = 8, .secret = false}] };
+    return DvReq {.err = "", .req = dv_u64(b, a.value, 8).finish(), .outs = outs};
+}
+
+/// Makes one load in a device's memory in the isolated device host (the
+/// compiler's target for `device.mmio` on a descriptor that does not
+/// write). Returns the word as OutNum, or Err (BadInput for an access the
+/// block does not hold, or a store).
+@descriptor(engine_mmio)
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_engine_mmio(Mmio op, MmioAccess a) {
+    DvReq r = dv_prep_mmio(op, a);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call(r.req)));
+}
+
 /// Reads an attribute file in the isolated device host (the compiler's
 /// target for `device.read_attr`).
 @descriptor(engine_read_attr)
@@ -757,7 +799,9 @@ Bool dv_fits(Int v, Int width) {
 // Little endian throughout. The request is
 //   "RDV" 1, kind (1 ioctl, 2 transact, 3 read_attr, 4 configfs_report,
 //   5 sequence, 6 transact chain, 7 ctaphid: u32 max_message, u32
-//   timeout_ms, u8 command, u32 length + payload), write, name, path (u16 length, bytes), then the kind's own
+//   timeout_ms, u8 command, u32 length + payload, 8 mmio: u32 size, u8
+//   access (0 a load, 1 a store), u32 offset, u8 width in bytes, the 8
+//   bytes to store), write, name, path (u16 length, bytes), then the kind's own
 //   part and the inputs (u8 count; tag 0 + 8-byte integer, or tag 1 + u32
 //   length + bytes). An ioctl's part: u8 request count, each u8 arch + u32
 //   number; u32 size; u8 field count, each field a tag and its words --
@@ -784,6 +828,12 @@ ListBuf(Int) dv_u(ListBuf(Int) b, Int v, Int n) {
 }
 
 Int dv_bool(Bool x) { return if (x) { 1 } else { 0 }; }
+
+// n little-endian bytes of a UInt(64), whose top half an Int cannot hold.
+ListBuf(Int) dv_u64(ListBuf(Int) b, UInt(64) v, Int n) {
+    if (n <= 0) { return b; }
+    return dv_u64(b.push((Int)(v & 255)), v >> 8, n - 1);
+}
 
 ListBuf(Int) dv_str(ListBuf(Int) b, Str s) { return dv_str_at(dv_u(b, str_len(s), 2), s, 0); }
 

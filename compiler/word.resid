@@ -35,7 +35,7 @@
 // A `@registers(size = N)` record of word types is a device's register
 // block (Register blocks, below).
 //
-// Not here yet: sum-typed fields and `@clears_on_read`.
+// Not here yet: sum-typed fields.
 //
 // Imported by compiler/driver.resid.
 
@@ -47,8 +47,9 @@ import "layout.resid";
 // half of a latch).
 type WdF = { Str name; Str ty; Int bits; Int off; Str mode; };
 
-// A word type that was declared: its name, its width in bits, its fields.
-type WdT = { Str name; Int width; List(WdF) fs; };
+// A word type that was declared: its name, its width in bits, its fields,
+// and whether reading its register changes it (`@clears_on_read`).
+type WdT = { Str name; Int width; List(WdF) fs; Bool clears; };
 
 // One scan step: the rewritten text so far, where the scan is, what has
 // been generated, the types found, and an error (code "" when none).
@@ -173,7 +174,12 @@ WdS wd_decl(Str s, Int k, WdS st) {
     Str arg = str_trim(str_slice(s, k + 6, e - 1));
     if (arg != "8" && arg != "16" && arg != "32" && arg != "64") { return wd_bad(st, "@word takes 8, 16, 32 or 64 (what one hardware access carries), got `" + arg + "`", k); }
     Int width = str_parse_int(arg);
-    Int t0 = wd_ws(s, e, n);
+    // `@clears_on_read` may follow: reading the register changes it, so
+    // its block reads it with `take_` under a write (Register blocks).
+    Int c0 = wd_ws(s, e, n);
+    Bool clears = c0 + 15 <= n && str_slice(s, c0, c0 + 15) == "@clears_on_read";
+    Int e2 = if (clears) { c0 + 15 } else { e };
+    Int t0 = wd_ws(s, e2, n);
     Int t1 = if (t0 + 4 <= n && str_slice(s, t0, t0 + 4) == "pub ") { wd_ws(s, t0 + 4, n) } else { t0 };
     Bool isty = t1 + 5 <= n && str_slice(s, t1, t1 + 5) == "type ";
     Int eq = if (isty) { wd_char(s, 61, t1, n) } else { -1 };
@@ -191,8 +197,9 @@ WdS wd_decl(Str s, Int k, WdS st) {
     // The annotation: the modes the checker reads, or nothing.
     Str modes = wd_modes(b.fs, 0, "");
     List(Str) o1 = if (modes == "") { wd_blank(st.out, s, k, e) } else { st.out.concat([wd_in_place(s, k, e, "@word_modes(" + modes + ")")]) };
-    List(Str) o2 = wd_copy(o1, s, e, ob + 1).concat(b.out).concat(["}"]);
-    return WdS {.out = o2, .i = cb, .gen = st.gen + wd_gen(name, width, b.fs), .ts = st.ts.concat([WdT {.name = name, .width = width, .fs = b.fs}]), .code = "", .err = "", .at = -1};
+    List(Str) o1c = if (clears) { wd_blank(wd_copy(o1, s, e, c0), s, c0, e2) } else { o1 };
+    List(Str) o2 = wd_copy(o1c, s, e2, ob + 1).concat(b.out).concat(["}"]);
+    return WdS {.out = o2, .i = cb, .gen = st.gen + wd_gen(name, width, b.fs), .ts = st.ts.concat([WdT {.name = name, .width = width, .fs = b.fs, .clears = clears}]), .code = "", .err = "", .at = -1};
 }
 
 Bool wd_any_named(List(WdF) fs, Int i) {
@@ -500,9 +507,13 @@ WdS wd_rdecl(Str s, Int k, WdS st) {
     Int e = ly_close_pub(s, k + 10);
     if (e < 0) { return wd_rbad(st, "@registers(...) does not close", k); }
     Str arg = str_trim(str_slice(s, k + 11, e - 1));
-    Int eqa = wd_char(arg, 61, 0, str_len(arg));
-    Int size = if (eqa > 0 && str_trim(str_slice(arg, 0, eqa)) == "size") { wd_num(str_slice(arg, eqa + 1, str_len(arg))) } else { -1 };
-    if (size <= 0) { return wd_rbad(st, "@registers takes the block's size in bytes: `@registers(size = 0x100)`, got `" + arg + "`", k); }
+    List(Str) args = str_split(arg, ",");
+    Str szt = wd_arg(args, "size", 0);
+    Int size = if (szt == "") { -1 } else { wd_num(szt) };
+    if (size <= 0 || !wd_args_known(args, 0)) { return wd_rbad(st, "@registers takes the block's size in bytes and, to read and write it, its descriptors: `@registers(size = 0x100, device = dev, write = dev_w)`, got `" + arg + "`", k); }
+    Str dev = wd_arg(args, "device", 0);
+    Str devw = wd_arg(args, "write", 0);
+    if (devw != "" && dev == "") { return wd_rbad(st, "@registers with `write = f` also names the descriptor loads go through: `device = g`", k); }
     Int t0 = wd_ws(s, e, n);
     Int t1 = if (t0 + 4 <= n && str_slice(s, t0, t0 + 4) == "pub ") { wd_ws(s, t0 + 4, n) } else { t0 };
     Bool isty = t1 + 5 <= n && str_slice(s, t1, t1 + 5) == "type ";
@@ -518,7 +529,24 @@ WdS wd_rdecl(Str s, Int k, WdS st) {
     Str clash = wd_overlap(b.rs, 0);
     if (clash != "") { return wd_rbad(st, "register block " + name + ": " + clash, k); }
     List(Str) o = wd_copy(wd_blank(st.out, s, k, e), s, e, ob + 1).concat(b.out).concat(["}"]);
-    return WdS {.out = o, .i = cb, .gen = st.gen + wd_rgen(name, size, b.rs), .ts = st.ts, .code = "", .err = "", .at = -1};
+    return WdS {.out = o, .i = cb, .gen = st.gen + wd_rgen(name, size, b.rs) + wd_racc(name, b.rs, st.ts, dev, devw), .ts = st.ts, .code = "", .err = "", .at = -1};
+}
+
+// The value of `key = value` among an annotation's arguments, or "".
+Str wd_arg(List(Str) args, Str key, Int i) {
+    if (i >= args.len()) { return ""; }
+    Int eq = wd_char(args[i], 61, 0, str_len(args[i]));
+    if (eq > 0 && str_trim(str_slice(args[i], 0, eq)) == key) { return str_trim(str_slice(args[i], eq + 1, str_len(args[i]))); }
+    return wd_arg(args, key, i + 1);
+}
+
+// Every argument is `size`, `device` or `write`, with a value.
+Bool wd_args_known(List(Str) args, Int i) {
+    if (i >= args.len()) { return true; }
+    Int eq = wd_char(args[i], 61, 0, str_len(args[i]));
+    Str key = if (eq > 0) { str_trim(str_slice(args[i], 0, eq)) } else { "" };
+    Bool ok = (key == "size" || key == "device" || key == "write") && str_trim(str_slice(args[i], eq + 1, str_len(args[i]))) != "";
+    return ok && wd_args_known(args, i + 1);
 }
 
 WdRB wd_rfail(WdRB b, Str msg, Int at) { return WdRB {.rs = b.rs, .out = b.out, .i = b.i, .err = msg, .at = at}; }
@@ -581,6 +609,55 @@ Str wd_rgen_regs(Str sn, List(WdR) rs, Int i, StrBuf acc) {
     if (i >= rs.len()) { return acc.finish(); }
     WdR r = rs[i];
     return wd_rgen_regs(sn, rs, i + 1, acc.push("pub Reg(" + r.ty + ") " + sn + "_" + r.name + "() { return Reg {.off = " + f"{r.off}" + ", .bits = " + f"{r.bytes * 8}" + "}; }\n"));
+}
+
+// ─── Reading and writing a block ────────────────────────────────────
+// A block that names its descriptors, `@registers(size = N, device = d,
+// write = dw)`, gets a function for each access a register allows:
+//
+//   Result(VirtioStatus, DeviceError) virtio_regs_read_status()      device(readonly)
+//   Result(Bool, DeviceError) virtio_regs_write_status(VirtioStatus) device
+//   Result(IrqCause, DeviceError) virtio_regs_take_cause()           device
+//
+// `d()` is an Mmio that only loads and `dw()` one that writes, both from
+// lib/dev/ (lib/dev/device.resid; E0260). Each function is one
+// `device.mmio` with its descriptor written out, so the compiler knows
+// which descriptor a call uses and a read needs only device(readonly). A
+// register with nothing to read gets no read, one with nothing to write no
+// write, and a `@clears_on_read` one is read with `take_`, through the
+// writing descriptor: reading it changes the device.
+
+Bool wd_readable(List(WdF) fs, Int i) {
+    if (i >= fs.len()) { return false; }
+    return (fs[i].name != "" && (fs[i].mode == "" || fs[i].mode == "r")) || wd_readable(fs, i + 1);
+}
+
+Bool wd_writable(List(WdF) fs, Int i) {
+    if (i >= fs.len()) { return false; }
+    return (fs[i].name != "" && fs[i].mode != "r") || wd_writable(fs, i + 1);
+}
+
+Str wd_racc(Str name, List(WdR) rs, List(WdT) ts, Str dev, Str devw) {
+    if (dev == "") { return ""; }
+    return "\n// generated from @registers " + name + ": its accesses\n" + wd_racc_regs(name, wd_snake(name), rs, ts, dev, devw, 0, StrBuf());
+}
+
+Str wd_racc_regs(Str name, Str sn, List(WdR) rs, List(WdT) ts, Str dev, Str devw, Int i, StrBuf acc) {
+    if (i >= rs.len()) { return acc.finish(); }
+    WdR r = rs[i];
+    WdT t = ts[wd_type_idx(ts, r.ty, 0)];
+    Str tsn = wd_snake(r.ty);
+    Str at = ".off = " + f"{r.off}" + ", .bytes = " + f"{r.bytes}";
+    // The word as the register's width: the reply's number, cut to it.
+    Str word = if (t.width == 64) { "wrapping_u64(__wd_v)" } else { "(UInt(" + f"{t.width}" + "))(wrapping_u64(__wd_v) & " + wd_mask(t.width) + ")" };
+    Str got = "    return match (dv_out_num(__wd_o, 0)) {\n        Some(__wd_v) => Ok(" + tsn + "_from_word(" + word + ")),\n        None => Err(BadReply(\"" + sn + "." + r.name + "\", \"no word\")),\n    };\n}\n";
+    Str rd = if (!wd_readable(t.fs, 0) || t.clears) { "" } else {
+        "@requires(device(readonly))\npub Result(" + r.ty + ", DeviceError) " + sn + "_read_" + r.name + "() {\n    List(DevOut) __wd_o = device.mmio(" + dev + "(), MmioAccess {.store = false, " + at + ", .value = 0})?;\n" + got };
+    Str tk = if (!wd_readable(t.fs, 0) || !t.clears || devw == "") { "" } else {
+        "@requires(device)\npub Result(" + r.ty + ", DeviceError) " + sn + "_take_" + r.name + "() {\n    List(DevOut) __wd_o = device.mmio(" + devw + "(), MmioAccess {.store = false, " + at + ", .value = 0})?;\n" + got };
+    Str wr = if (!wd_writable(t.fs, 0) || devw == "") { "" } else {
+        "@requires(device)\npub Result(Bool, DeviceError) " + sn + "_write_" + r.name + "(" + r.ty + " __wd_x) {\n    UInt(64) __wd_w = " + tsn + "_word(__wd_x);\n    List(DevOut) __wd_o = device.mmio(" + devw + "(), MmioAccess {.store = true, " + at + ", .value = __wd_w})?;\n    return Ok(__wd_o.len() == 0);\n}\n" };
+    return wd_racc_regs(name, sn, rs, ts, dev, devw, i + 1, acc.push(rd).push(tk).push(wr));
 }
 
 // The handle type, declared once when a block is present.

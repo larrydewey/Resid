@@ -1,0 +1,9 @@
+// Fixture for e0263_mmio_path: an Mmio maps a PCI function's resource file or a fixture under /dev/shm, never a device node (installed as lib/dev/fx_e0263_mmio_path.resid).
+import "device.resid";
+
+pub Mmio fx_mem() { return Mmio {.name = "fx.mem", .path = "/dev/mem", .size = 4096, .write = false, .stability = OutOfTree}; }
+
+@requires(device(readonly))
+pub Str fx_call() {
+    return match (device.mmio(fx_mem(), MmioAccess {.store = false, .off = 0, .bytes = 4, .value = 0})) { Ok(o) => "ok", Err(e) => device_error_text(e), };
+}

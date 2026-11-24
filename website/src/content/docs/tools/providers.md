@@ -153,6 +153,7 @@ is built on these builtins.
 | `device.transact_chain(d, cmds)` | up to 16 commands on one open file, handles linked between them | as above |
 | `device.configfs_report(d, ...)` | a configfs-tsm attestation report | as above |
 | `device.read_attr(d)`, `device.read_pci_attr(d, addr)` | a sysfs attribute, of a PCI function for the second | read |
+| `device.mmio(d, access)` | one load or store in a device's mapped memory (a register); [register blocks](/Resid/reference/layouts/#register-blocks) write these calls | a load under a descriptor that does not write: read; otherwise as the descriptor says |
 | `device.sequence(d, ...)` | a fixed sequence of the operations above | as above |
 
 `d` is a descriptor from the standard library's `lib/dev/`, never one a

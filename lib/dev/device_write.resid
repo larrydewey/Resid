@@ -83,3 +83,16 @@ pub Result(List(DevOut), DeviceError) device_engine_ctaphid_w(CtapHid op, List(U
     Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
     return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
 }
+
+/// Makes one load or store in a device's memory through a writing Mmio
+/// descriptor `op`. Returns a load's word as OutNum and nothing for a
+/// store, or Err (BadInput for an access the block does not hold).
+/// Compiler-generated calls only; needs the full `device` grant.
+@descriptor(engine_mmio_w)
+@requires(device)
+pub Result(List(DevOut), DeviceError) device_engine_mmio_w(Mmio op, MmioAccess a) {
+    DvReq r = dv_prep_mmio(op, a);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
+}

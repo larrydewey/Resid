@@ -329,7 +329,7 @@ DvD dv_parse(Kg g, Int a, Str verb) {
         // A CTAPHID exchange: its maximum message and its timeout (kept in size).
         return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [], .rn = [], .size = dv_ifld(g, st, "timeout_ms"), .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = b1.write, .vo = 0, .vw = 0, .vv = 0, .stab = b1.stab, .maxs = [dv_ifld(g, st, "max_message")], .provs = [], .steps = [], .links = [], .err = b1.err};
     }
-    List(Int) mx = if (verb == "transact" || verb == "transact_chain") { [dv_ifld(g, st, "max_command"), dv_ifld(g, st, "max_response")] } else if (verb == "read_attr" || verb == "read_pci_attr") { [dv_ifld(g, st, "max")] } else { [dv_ifld(g, st, "max_inblob"), dv_ifld(g, st, "max_outblob"), dv_ifld(g, st, "max_auxblob"), dv_ifld(g, st, "max_manifestblob")] };
+    List(Int) mx = if (verb == "transact" || verb == "transact_chain") { [dv_ifld(g, st, "max_command"), dv_ifld(g, st, "max_response")] } else if (verb == "read_attr" || verb == "read_pci_attr") { [dv_ifld(g, st, "max")] } else if (verb == "mmio") { [dv_ifld(g, st, "size")] } else { [dv_ifld(g, st, "max_inblob"), dv_ifld(g, st, "max_outblob"), dv_ifld(g, st, "max_auxblob"), dv_ifld(g, st, "max_manifestblob")] };
     List(Str) provs = if (verb == "configfs_report") { dv_strs(g, dv_items(g, dv_fld(g, st, "providers", 0)), 0, ListBuf()) } else { [] };
     return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = b1.write, .vo = 0, .vw = 0, .vv = 0, .stab = b1.stab, .maxs = mx, .provs = provs, .steps = [], .links = [], .err = b1.err};
 }
@@ -482,6 +482,13 @@ Str dv_check(DvD d, Bool a64) {
         if (d.size < 1 || d.size > 50000) { return "E0263: a CtapHid's timeout_ms is 1 to 50000"; }
         return "";
     }
+    // A device's mapped memory: a PCI function's resource file, or a
+    // fixture under /dev/shm/; never a device node (the host refuses one
+    // too). Its size is its one maximum, checked below.
+    if (d.kind == "mmio") {
+        Str me = dv_mmio_path_err(d.path);
+        if (me != "") { return "E0263: " + me; }
+    }
     // A Transact writes its command to the device, whatever it reads back.
     if ((d.kind == "transact" || d.kind == "transact_chain") && d.write != "true") { return "E0263: a Transact writes its command to the device, so it is a write: `write = true` (device(readonly) never covers one)"; }
     return dv_maxs_err(d.maxs, 0, d.kind);
@@ -512,6 +519,20 @@ Str dv_path_err(Str p) {
     if (str_contains(p, "..")) { return "the path `" + p + "` contains `..`"; }
     if (str_contains(p, "//") || str_ends_with(p, "/")) { return "the path `" + p + "` is not a plain file path"; }
     return "";
+}
+
+// An Mmio's path: /sys/bus/pci/devices/<address>/resource<N>, or a file
+// directly under /dev/shm/.
+Str dv_mmio_path_err(Str p) {
+    if (str_starts_with(p, "/dev/shm/")) {
+        Str f = str_slice(p, 9, str_len(p));
+        return if (f != "" && !str_contains(f, "/")) { "" } else { "an Mmio fixture is a file directly under /dev/shm/, got `" + p + "`" };
+    }
+    Str pci = "/sys/bus/pci/devices/";
+    if (!str_starts_with(p, pci)) { return "an Mmio's path is a PCI function's /sys/bus/pci/devices/<address>/resource<N> (or a fixture under /dev/shm/), got `" + p + "`"; }
+    List(Str) cs = str_split(str_slice(p, str_len(pci), str_len(p)), "/");
+    Bool res = cs.len() == 2 && str_starts_with(cs[1], "resource") && str_len(cs[1]) == 9 && str_char_at(cs[1], 8) >= 48 && str_char_at(cs[1], 8) <= 53;
+    return if (res && cs[0] != "") { "" } else { "an Mmio's path is a PCI function's /sys/bus/pci/devices/<address>/resource<N>, N from 0 to 5, got `" + p + "`" };
 }
 
 // A PciAttr's path under the device's directory: one or two components

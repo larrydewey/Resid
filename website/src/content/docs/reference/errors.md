@@ -76,7 +76,7 @@ network]`.
 | `E0295` | a packed word type is malformed: `@word` not 8, 16, 32 or 64 or not on a record type, a field that is not a `Bool` or a `UInt(N)` (alone or in `DeviceOwned`, `DriverOwned` or `DeviceLatch(Bool)`), two fields with one name, an annotation other than `@reserved(n);`, or widths that do not add up to the word |
 | `E0296` | a literal of a packed word type names a field the device owns (`DeviceOwned`, or a `DeviceLatch` field itself) |
 | `E0297` | a field of a packed word type that the driver owns (`DriverOwned`, or the `clear_` half of a `DeviceLatch`) is read |
-| `E0298` | a register block is malformed: `@registers` without `size = N` or not on a record type, a register without `@at(offset)` or not of a `@word` type declared before it, an offset that is not a multiple of the register's size or passes the block, two registers that overlap or share a name |
+| `E0298` | a register block is malformed: `@registers` without `size = N`, with an argument other than `size`, `device` and `write`, or not on a record type, a register without `@at(offset)` or not of a `@word` type declared before it, an offset that is not a multiple of the register's size or passes the block, two registers that overlap or share a name |
 | `E0290` | a program that reaches `lib/verify/` built against a closure or runtime this compiler was not released with (or with `-rt`/`-rtr`); `--verify-lib-dev` lifts it |
 | `E0301` | a known value violates its constraint type |
 | `E0401` | a builder is not consumed on some path |

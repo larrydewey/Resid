@@ -248,6 +248,7 @@ Device modules are written over seven verbs, each giving
 | `device.configfs_report(op, req)` | `ConfigfsReport`: entry path, accepted providers, blob maxima | `ReportReq` |
 | `device.read_attr(op)` | `ReadAttr`: attribute path and maximum | none |
 | `device.read_pci_attr(op, addr)` | `PciAttr`: attribute path under a PCI device and maximum | `PciAddr` (domain, bus, device, function) |
+| `device.mmio(op, access)` | `Mmio`: a device's memory as a file to map (a PCI function's `resource<N>`, or a fixture under `/dev/shm/`), its size, whether stores are made | `MmioAccess`: a load, or a store of a value, of 1, 2, 4 or 8 bytes at an offset |
 | `device.transact_chain(op, cmds, links)` | `Transact` (not secret): command and response maxima | `List(List(UInt(8)))` (1 to 16 commands), `List(Int)` links: quadruples (from step, offset in its response, to step, offset in its command), each 4 bytes copied before the later command is sent |
 | `device.sequence(op, args)` | `Sequence`: ioctl steps on one file, with links | `List(DevIn)` |
 

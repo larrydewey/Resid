@@ -1,0 +1,14 @@
+// A register write is a write: device(readonly) covers the reads of a
+// block and not its writes (E0219).
+import "dev/fx_mmio_write_needs_grant.resid";
+
+@word(32) type Ctl = { Bool on; @reserved(31); };
+
+@registers(size = 0x100, device = fx_regs, write = fx_regs_w)
+type FxRegs = { @at(0x10) Ctl ctl; };
+
+@requires(device(readonly))
+Int main() {
+    println(match (fx_regs_write_ctl(Ctl {.on = true})) { Ok(b) => "wrote", Err(e) => device_error_text(e) });
+    return 0;
+}

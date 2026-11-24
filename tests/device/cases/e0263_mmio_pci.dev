@@ -1,0 +1,9 @@
+// Fixture for e0263_mmio_pci: under a PCI function only resource0 to resource5 is its memory (installed as lib/dev/fx_e0263_mmio_pci.resid).
+import "device.resid";
+
+pub Mmio fx_cfg() { return Mmio {.name = "fx.cfg", .path = "/sys/bus/pci/devices/0000:00:00.0/config", .size = 256, .write = false, .stability = OutOfTree}; }
+
+@requires(device(readonly))
+pub Str fx_call() {
+    return match (device.mmio(fx_cfg(), MmioAccess {.store = false, .off = 0, .bytes = 4, .value = 0})) { Ok(o) => "ok", Err(e) => device_error_text(e), };
+}

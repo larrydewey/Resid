@@ -1,0 +1,6 @@
+// Fixture for mmio_write_needs_grant: the descriptors of a block (installed as lib/dev/fx_mmio_write_needs_grant.resid).
+import "device.resid";
+import "device_write.resid";
+
+pub Mmio fx_regs() { return Mmio {.name = "fx.regs", .path = "/dev/shm/resid_fx_mmio", .size = 256, .write = false, .stability = OutOfTree}; }
+pub Mmio fx_regs_w() { return Mmio {.name = "fx.regs", .path = "/dev/shm/resid_fx_mmio", .size = 256, .write = true, .stability = OutOfTree}; }

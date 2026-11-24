@@ -219,11 +219,12 @@ question apart from the boundary.
 
 ## 11. Step 1 proposal: packed word types
 
-**Accepted 2026-11-23 as a design. Stages A to C are built**
+**Accepted 2026-11-23 as a design. Stages A to D are built**
 (`compiler/word.resid`: `Bool` and `UInt(K)` fields, `@reserved`,
-`DeviceOwned`, `DriverOwned`, `DeviceLatch`, the two generated
-functions, and `@registers` blocks with their `Reg(T)` handles);
-sum-typed fields, the `device.read/write/take` verbs and `Region(T)`
+`DeviceOwned`, `DriverOwned`, `DeviceLatch`, `@clears_on_read`, the two
+generated functions, `@registers` blocks with their `Reg(T)` handles and
+their read, write and take functions; `device.mmio` in the device host).
+Sum-typed fields, a PCI address as run-time data and the driver process
 are not. How a register's
 bits are declared. Three earlier forms (bit positions with access keywords in a
 new layout kind; whole words with masks; generated accessors) were put
@@ -250,11 +251,11 @@ type IrqStatus = {
     @reserved(30);
 };
 
-VirtioStatus s = device.read(dev, virtio_regs_status())?;     // one volatile read
-Bool a = device.write(dev, virtio_regs_status(),
+VirtioStatus s = virtio_regs_read_status()?;                  // one volatile read
+Bool a = virtio_regs_write_status(
     VirtioStatus { .acknowledge = true, .driver = true, .driver_ok = true,
                    .features_ok = true, .failed = false })?;   // one volatile write
-Bool b = device.write(dev, virtio_regs_irq(), IrqStatus { .clear_queue = true })?;   // config kept
+Bool b = virtio_regs_write_irq(IrqStatus { .clear_queue = true })?;   // config kept
 ```
 
 - **Fields in order, low bit first; widths from their types**: `Bool`
@@ -298,15 +299,15 @@ whose the field is, and suggests a value that does not change).
 Three further rules, decided the same day:
 
 - **A register that changes when it is read** is marked
-  `@clears_on_read`. A plain `device.read` of it is a compile error;
-  `device.take` reads it once and gives the value, so a second read, or one added for
+  `@clears_on_read`. It has no `read_` function, only `take_`, which
+  reads it once, gives the value and needs the full grant, so a second read, or one added for
   a log line, does not compile.
 
   ```resid
   @word(32) @clears_on_read
   type IrqCause = { DeviceOwned(Bool) rx; DeviceOwned(Bool) tx; @reserved(30); };
 
-  IrqCause c = device.take(dev, nic_regs_cause())?;
+  IrqCause c = nic_regs_take_cause()?;
   ```
 
   Rejected: no marking (a stray read is a silent bug); a linear value
@@ -359,11 +360,21 @@ could not exist; they are corrected above.
   until the generator exists).
 - For each register the compiler writes a typed handle
   (`virtio_regs_status()`, a `Reg(VirtioStatus)`), and access is a
-  provider call under the `device` capability, as a filesystem call is:
-  `device.read(region, reg)` gives the value, `device.write(region,
-  reg, value)` says whether it happened, `device.take(region, reg)`
-  reads a `@clears_on_read` register. A start-up handshake, where each
-  read decides the next write, is a sequence of these.
+  provider call under the `device` capability, as a filesystem call is.
+  A start-up handshake, where each read decides the next write, is a
+  sequence of these.
+- **The calls are functions the compiler writes for the block**
+  (decided 2026-11-24): `virtio_regs_read_status()`,
+  `virtio_regs_write_status(v)`, `virtio_regs_take_cause()`, for a block
+  that names its descriptors, `@registers(size = N, device = d, write =
+  dw)`. First written `device.read(region, reg)`; that passes a
+  descriptor as a parameter, which the compiler counts as a possible
+  write (device access: a read-only grant covers only a descriptor
+  whose `write = false` is written down), so a read would need the full
+  grant. A generated function has its descriptor written out, and the
+  rule stands as it is. Rejected: following descriptors through
+  parameters (new analysis inside the rule that keeps a read-only grant
+  honest).
 - The pure core of §1 (`(state, event) -> (state, operations)`) is a
   library over these calls, for the steady state, where running a driver
   against a device model with no hardware matters most. Rejected:
