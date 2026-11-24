@@ -171,6 +171,14 @@ kind 5, missed.
 
 For BurrowDB, which is moving its keys, rows and pages to packed bytes.
 
+- **`resid_bytes_append(b, xs, from, n)`** and **`resid_crc32c(xs, from, n, state)`**
+  (`runtime/rt/bytelist.resid`): bytes `from..from + n` of a packed list
+  pushed onto a `ListBuf(UInt(8))` with room made once and one copy; and
+  CRC-32C (Castagnoli) of a range, eight table lookups a word, the tables
+  built once a thread, `state` the running value without the final
+  complement so ranges chain. Test: `tests/conformance/cases/bytes_append_and_crc32c`.
+  BurrowDB's checkpoint spent 44% pushing bytes one at a time and 40% in a
+  byte-wise CRC.
 - **`resid_bytes_cmp(a, a_from, a_len, b, b_from, b_len)`**: how two
   ranges of `List(UInt(8))` order, unsigned and byte by byte, compared a
   word at a time. 0 when equal; otherwise `i + 1` with `i` the first place
