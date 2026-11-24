@@ -1,0 +1,89 @@
+// Files in pieces (filesystem.create / write_handle / read_some / read_at):
+// one handle written piece by piece, List(Int) and packed bytes alike,
+// then read back sequentially (empty at the end of the file) and at
+// offsets (past the end is empty, and the handle's offset never moves).
+import "word.resid";
+
+Str seq(List(UInt(8)) b) { return f"{bytes_int(b)}"; }
+
+// Sequential pieces of n bytes until an empty one; the piece count.
+@requires(filesystem(readonly))
+Int pieces(File f, Int n, Int count, Int total) {
+    List(UInt(8)) p = filesystem.read_some(f, n);
+    if (p.len() == 0) {
+        println(f"{count} pieces, {total} bytes, open {filesystem.is_open(f)}");
+        return count;
+    }
+    println(seq(p));
+    return pieces(f, n, count + 1, total + p.len());
+}
+
+@requires(filesystem)
+Int main() {
+    Str p = "@TMP@/pieces.bin";
+    File w = filesystem.create(p);
+    Bool a = filesystem.write_handle(w, [1, 2, 3]);
+    Bool b = filesystem.write_handle(w, bytes_u8([4, 5, 255]));
+    Bool c = filesystem.write_handle(w, bytes_u8([]));
+    Bool d = filesystem.write_handle(w, [10]);
+    println(f"writes {a} {b} {c} {d} open {filesystem.is_open(w)} size {filesystem.size(w)}");
+    println(f"close {filesystem.close(w)} open {filesystem.is_open(w)} write after close {filesystem.write_handle(w, [1])}");
+    println(f"file {filesystem.read_bytes(p)}");
+
+    File r = filesystem.open(p);
+    println(f"size {filesystem.size(r)} open {filesystem.is_open(r)}");
+    println(f"at 2: {seq(filesystem.read_at(r, 2, 3))}");
+    _ = pieces(r, 3, 0, 0);
+    println(f"again at end: {seq(filesystem.read_some(r, 3))} open {filesystem.is_open(r)}");
+    println(f"at 0: {seq(filesystem.read_at(r, 0, 100))}");
+    println(f"at 6: {seq(filesystem.read_at(r, 6, 4))}");
+    println(f"at 7 (end): {seq(filesystem.read_at(r, 7, 4))}");
+    println(f"at 1000 (past end): {seq(filesystem.read_at(r, 1000, 4))}");
+    println(f"n 0: {seq(filesystem.read_some(r, 0))} negative offset: {seq(filesystem.read_at(r, -1, 4))} open {filesystem.is_open(r)}");
+    println(f"close {filesystem.close(r)} read after close {seq(filesystem.read_at(r, 0, 4))} size {filesystem.size(r)}");
+
+    // create truncates an existing file; with closes the handle.
+    with (File t = filesystem.create(p)) {
+        Bool ok = filesystem.write_handle(t, bytes_u8([42]));
+        println(f"rewrite {ok}");
+    }
+    println(f"file {filesystem.read_bytes(p)}");
+
+    // A larger file read in pieces from a fresh handle: the read pieces
+    // join to what was written.
+    File big = filesystem.create("@TMP@/big.bin");
+    Bool wb = write_many(big, 0, 40, true);
+    Bool cb = filesystem.close(big);
+    File rb = filesystem.open("@TMP@/big.bin");
+    List(UInt(8)) whole = filesystem.read_bytes_u8("@TMP@/big.bin");
+    Bool same = join_eq(rb, whole, 0, 4096);
+    println(f"big {wb} {cb} {whole.len()} same {same} end {filesystem.read_some(rb, 10).len()} {filesystem.close(rb)}");
+    return 0;
+}
+
+// 40 pieces of 1000 bytes, each byte (piece * 7 + index) & 255.
+@requires(filesystem)
+Bool write_many(File f, Int i, Int n, Bool ok) {
+    if (i >= n) { return ok; }
+    List(UInt(8)) piece = bytes_u8(mk(i, 0, ListBuf()));
+    return write_many(f, i + 1, n, ok && filesystem.write_handle(f, piece));
+}
+
+List(Int) mk(Int k, Int j, ListBuf(Int) acc) {
+    if (j >= 1000) { return acc.finish(); }
+    return mk(k, j + 1, acc.push((k * 7 + j) & 255));
+}
+
+@requires(filesystem(readonly))
+Bool join_eq(File f, List(UInt(8)) whole, Int at, Int n) {
+    List(UInt(8)) p = filesystem.read_some(f, n);
+    if (p.len() == 0) { return at == whole.len(); }
+    if (at + p.len() > whole.len() || !same_at(p, whole, at, 0)) { return false; }
+    return join_eq(f, whole, at + p.len(), n);
+}
+
+Bool same_at(List(UInt(8)) p, List(UInt(8)) whole, Int at, Int i) {
+    if (i >= p.len()) { return true; }
+    if (p[i] != whole[at + i]) { return false; }
+    return same_at(p, whole, at, i + 1);
+}

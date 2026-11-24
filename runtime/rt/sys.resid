@@ -48,6 +48,109 @@ pub Int rt_fs_is_dir(Int path) {
     return if (mode_dir(ld32(b + st_mode_at()))) { 1 } else { 0 };
 }
 
+// Remove a file, or an empty directory (unlinkat, then with AT_REMOVEDIR
+// when the path is a directory).
+@export("resid_fs_remove", "i8(ptr)")
+pub Int rt_fs_remove(Int path) {
+    if (!path_ok(path)) { return 0; }
+    Int r = sc(263, 0 - 100, path, 0);
+    Int r2 = if (r == 0 - 21) { sc(263, 0 - 100, path, 512) } else { r };
+    return if (r2 == 0) { 1 } else { 0 };
+}
+
+// Rename (atomically, within one file system) with renameat2: AArch64 has
+// no plain renameat.
+@export("resid_fs_rename", "i8(ptr,ptr)")
+pub Int rt_fs_rename(Int from, Int to) {
+    if (!path_ok(from) || !path_ok(to)) { return 0; }
+    Int r = resid_raw_syscall(316, 0 - 100, from, 0 - 100, to, 0, 0);
+    return if (r == 0) { 1 } else { 0 };
+}
+
+// A file's size in bytes, -1 when it cannot be read (st_size at 48 on
+// both targets).
+@export("resid_fs_size_path", "i64(ptr)")
+pub Int rt_fs_size_path(Int path) {
+    if (!path_ok(path)) { return 0 - 1; }
+    Int b = stat_buf();
+    if (sys_stat(path, b) != 0) { return 0 - 1; }
+    return ld64(b + 48);
+}
+
+// When a file was last modified, in ms since the epoch, -1 when it cannot
+// be read (st_mtim at 88 on both targets).
+@export("resid_fs_modified_ms", "i64(ptr)")
+pub Int rt_fs_modified_ms(Int path) {
+    if (!path_ok(path)) { return 0 - 1; }
+    Int b = stat_buf();
+    if (sys_stat(path, b) != 0) { return 0 - 1; }
+    return ld64(b + 88) * 1000 + ld64(b + 96) / 1000000;
+}
+
+// Positioned I/O, for files kept open in place (a database's pages and
+// log): n bytes at off (fewer at the end of the file, none when it cannot
+// be read), with pread64.
+@export("resid_fs_read_range", "ptr(ptr,i64,i64)")
+pub Int rt_fs_read_range(Int path, Int off, Int n) {
+    if (!path_ok(path) || off < 0 || n <= 0) { return empty_bytes(); }
+    Int fd = sys_open(path, o_rdonly(), 0);
+    if (fd < 0) { return empty_bytes(); }
+    Int buf = xmalloc(n);
+    Int got = pread_n(fd, buf, off, 0, n);
+    _ = sys_close(fd);
+    Int out = bytes_list(buf, got);
+    return c_free(buf) * 0 + out;
+}
+
+Int pread_n(Int fd, Int buf, Int off, Int n, Int want) {
+    if (n >= want) { return n; }
+    Int r = sc4(17, fd, buf + n, want - n, off + n);
+    if (r <= 0) { return n; }
+    return pread_n(fd, buf, off, n + r, want);
+}
+
+Bool pwrite_all(Int fd, Int buf, Int off, Int n, Int want) {
+    if (n >= want) { return true; }
+    Int r = sc4(18, fd, buf + n, want - n, off + n);
+    if (r <= 0) { return false; }
+    return pwrite_all(fd, buf, off, n + r, want);
+}
+
+// The bytes written at off (the file created when missing, never cut
+// short), with pwrite64. Not durable until sync.
+@export("resid_fs_write_at", "i8(ptr,i64,ptr)")
+pub Int rt_fs_write_at(Int path, Int off, Int l) {
+    if (!path_ok(path) || off < 0) { return 0; }
+    Int fd = sys_open(path, 524288 | 1 | 64, 438);
+    if (fd < 0) { return 0; }
+    Int buf = list_bytes(l);
+    Bool ok = pwrite_all(fd, buf, off, 0, c_list_len(l));
+    _ = c_free(buf);
+    return b8(sys_close(fd) == 0 && ok);
+}
+
+// Everything written to the file (or the directory's entries) reaches
+// the disk before this returns (fsync).
+@export("resid_fs_sync", "i8(ptr)")
+pub Int rt_fs_sync(Int path) {
+    if (!path_ok(path)) { return 0; }
+    Int fd = sys_open(path, o_rdonly(), 0);
+    if (fd < 0) { return 0; }
+    Int r = sc(74, fd, 0, 0);
+    _ = sys_close(fd);
+    return b8(r == 0);
+}
+
+// The file cut (or extended with zeros) to len bytes (ftruncate).
+@export("resid_fs_truncate", "i8(ptr,i64)")
+pub Int rt_fs_truncate(Int path, Int len) {
+    if (!path_ok(path) || len < 0) { return 0; }
+    Int fd = sys_open(path, 524288 | 1 | 64, 438);
+    if (fd < 0) { return 0; }
+    Int r = sc(77, fd, len, 0);
+    return b8(sys_close(fd) == 0 && r == 0);
+}
+
 // mkdir -p.
 @export("resid_fs_create_dir_all", "i8(ptr)")
 pub Int rt_fs_create_dir_all(Int path) {

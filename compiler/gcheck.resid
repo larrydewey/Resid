@@ -1580,7 +1580,7 @@ GKT gk_call(GK k, Int id, Str exp) {
     if ((n == "secret_split" || n == "secret_join") && ck_fn_index(k.fs, n) < 0) { return sec_shape(k, id, n, exp); }
     if (n == "ct_select" && ck_fn_index(k.fs, n) < 0) { return sec_select(k, id, exp); }
     if (n == "ct_nonzero" && ck_fn_index(k.fs, n) < 0) { return sec_nonzero(k, id, exp); }
-    if (sec_liftable(n) && ck_fn_index(k.fs, n) < 0 && (argn == 2 || argn == 1)) {
+    if (sec_liftable(n) && ck_fn_index(k.fs, n) < 0 && (argn == 2 || argn == 1 || (argn == 8 && n == "gf128_mul4_hw"))) {
         GKA wa = gk_args(k, id, 0, gk_nopts(), 0, "", 0);
         if (wa.err != "") { return gterr(wa.k, wa.err, wa.at); }
         if (sec_any_arg(str_split(wa.tys, ","), 0)) { return sec_lift(wa.k, id, n, wa.tys, wa.count); }
@@ -2640,11 +2640,19 @@ Str gk_provider_params(Str fam, Str m) {
     if (fam == "process" && m == "run") { return "Str"; }
     if (fam == "clock") { if (m == "sleep_ns") { return "Int"; } return "?"; }
     if (fam != "filesystem") { return "?"; }
-    Bool path = m == "read_all" || m == "exists" || m == "is_dir" || m == "create_dir" || m == "open" || m == "list_dir" || m == "read_bytes" || m == "read_bytes_u8" || m == "sha256";
+    Bool path = m == "read_all" || m == "exists" || m == "is_dir" || m == "create_dir" || m == "open" || m == "list_dir" || m == "read_bytes" || m == "read_bytes_u8" || m == "sha256" || m == "create" || m == "create_new" || m == "remove" || m == "modified_ms";
     if (path) { return "Str"; }
-    if (m == "read_handle" || m == "close") { return "File"; }
-    if (m == "write_all" || m == "write_hex" || m == "append_hex") { return "Str,Str"; }
+    // size takes an open File or a path (gk_provider accepts the path).
+    if (m == "read_handle" || m == "close" || m == "is_open" || m == "size") { return "File"; }
+    if (m == "write_handle") { return "File,List(Int)"; }
+    if (m == "read_some") { return "File,Int"; }
+    if (m == "read_at") { return "File,Int,Int"; }
+    if (m == "write_all" || m == "write_hex" || m == "append_hex" || m == "rename") { return "Str,Str"; }
     if (m == "write_bytes" || m == "write_secret" || m == "append_bytes") { return "Str,List(Int)"; }
+    if (m == "read_range" || m == "read_range_u8") { return "Str,Int,Int"; }
+    if (m == "write_at") { return "Str,Int,List(Int)"; }
+    if (m == "sync") { return "Str"; }
+    if (m == "truncate") { return "Str,Int"; }
     return "?";
 }
 
@@ -2663,8 +2671,11 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
     GK k = a.k;
     if (str_contains(a.tys, "Secret(")) { return gterr(k, "E0255: " + fam + "." + m + " takes public values, got (" + a.tys + "); declassify the secret first" + (if (m == "write_secret") { " (write_secret keeps the file readable by its owner only)" } else { "" }), id); }
     // Bytes to write may be packed, one to a byte (read_bytes_u8).
-    Bool packed = fam == "filesystem" && (m == "write_bytes" || m == "write_secret" || m == "append_bytes") && a.tys == "Str,List(UInt(8))";
-    Bool fits = want == "?" || a.tys == want || packed || (a.count == wl.len() && params_accept(want, a.tys, a.count));
+    Bool packed = fam == "filesystem" && (((m == "write_bytes" || m == "write_secret" || m == "append_bytes") && a.tys == "Str,List(UInt(8))") || (m == "write_handle" && a.tys == "File,List(UInt(8))")
+        || (m == "write_at" && (a.tys == "Str,Int,List(UInt(8))" || a.tys == "Str,Int(64),List(UInt(8))")));
+    // filesystem.size(path): the size of the file at a path, as size(File) is an open file's.
+    Bool by_path = fam == "filesystem" && m == "size" && a.tys == "Str";
+    Bool fits = want == "?" || a.tys == want || packed || by_path || (a.count == wl.len() && params_accept(want, a.tys, a.count));
     if (!fits) { return gterr(k, fam + "." + m + " expects (" + want + "), got (" + a.tys + ")", id); }
     if (fam == "environment" && m == "get") { return gt(k, "Str", id); }
     if (fam == "filesystem") {
@@ -2676,6 +2687,16 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
         // A file's bytes packed one to a byte (read_bytes holds eight).
         if (m == "read_bytes_u8") { return gt(k, "List(UInt(8))", id); }
         if (m == "append_bytes" || m == "write_hex" || m == "append_hex") { return gt(k, "Bool", id); }
+        // Files in pieces: a File open for writing, and packed pieces read
+        // from one (empty at the end of the file).
+        if (m == "create" || m == "create_new") { return gt(k, "File", id); }
+        if (m == "is_open" || m == "write_handle") { return gt(k, "Bool", id); }
+        if (m == "read_some" || m == "read_at") { return gt(k, "List(UInt(8))", id); }
+        if (m == "remove" || m == "rename") { return gt(k, "Bool", id); }
+        if (m == "size" || m == "modified_ms") { return gt(k, "Int", id); }
+        if (m == "read_range") { return gt(k, "List(Int)", id); }
+        if (m == "read_range_u8") { return gt(k, "List(UInt(8))", id); }
+        if (m == "write_at" || m == "sync" || m == "truncate") { return gt(k, "Bool", id); }
     }
     if (fam == "args" && m == "count") { return gt(k, "Int", id); }
     if (fam == "args" && m == "get") { return gt(k, "Str", id); }
@@ -6046,9 +6067,9 @@ GKT sec_shape(GK k, Int id, Str n, Str exp) {
 // ct_hide is the optimizer barrier for a mask built from a secret (a sign
 // mask, say): the value is unchanged and stays secret. The AES round and
 // carry-less multiply instructions (aesni_enc_round, aesni_enc_last_round,
-// gf128_mul_hw) run in constant time on the CPUs that have them, so a
+// gf128_mul_hw, gf128_mul4_hw) run in constant time on the CPUs that have them, so a
 // secret block or key goes through them and the result is secret.
-Bool sec_liftable(Str n) { return (str_starts_with(n, "wrapping_") && wrap_conv_type(n) != "") || n == "wrapping_add" || n == "wrapping_sub" || n == "wrapping_mul" || n == "wrapping_uadd" || n == "wrapping_usub" || n == "wrapping_umul" || n == "ct_hide" || n == "aesni_enc_round" || n == "aesni_enc_last_round" || n == "gf128_mul_hw"; }
+Bool sec_liftable(Str n) { return (str_starts_with(n, "wrapping_") && wrap_conv_type(n) != "") || n == "wrapping_add" || n == "wrapping_sub" || n == "wrapping_mul" || n == "wrapping_uadd" || n == "wrapping_usub" || n == "wrapping_umul" || n == "ct_hide" || n == "aesni_enc_round" || n == "aesni_enc_last_round" || n == "gf128_mul_hw" || n == "gf128_mul4_hw"; }
 
 // E0258: a secret integer wider than 32 bits stored in a list, builder,
 // vector, map or set, directly (List(Secret(Int))) or under a secret

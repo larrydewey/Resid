@@ -33,13 +33,58 @@ answer to "what time is it" is knowledge the program does not have. See
 | `list_dir(path)` | `List(Str)` | read |
 | `sha256(path)` | `List(Int)`, 32 bytes, without loading the file | read |
 | `open(path)` → `File`, `read_handle(File)` → `Str`, `close(File)` | | read |
+| `read_some(File, n)` | `List(UInt(8))`: the next `n` bytes from the handle's offset, fewer only at the end of the file, empty there | read |
+| `read_at(File, offset, n)` | `List(UInt(8))`: `n` bytes at `offset` (fewer at the end, empty past it); the handle's offset does not move | read |
+| `size(File)` | `Int`: the file's size, `-1` when the handle is closed or not a regular file | read |
+| `is_open(File)` | `Bool`: the handle holds an open file | read |
+| `create(path)` → `File` | open for writing: created, or an existing file truncated | write |
+| `create_new(path)` → `File` | open for writing only when nothing is at the path: an existing file, directory or symbolic link (even a dangling one) is refused | write |
+| `write_handle(File, bytes)` | `Bool`: all of `bytes` (`List(Int)` or `List(UInt(8))`) at the handle's offset | write |
 | `write_all(path, text)` | `Bool` | write |
 | `write_bytes(path, bytes)`, `append_bytes(path, bytes)` | `Bool` | write |
 | `write_hex(path, hex)`, `append_hex(path, hex)` | `Bool` | write |
 | `write_secret(path, bytes)` | `Bool`: created readable by the owner only; a symlink is refused | write |
 | `create_dir(path)` | `Bool` | write |
+| `remove(path)` | `Bool` | write (a file or an empty directory) |
+| `rename(from, to)` | `Bool` | write (atomic within one file system) |
+| `size(path)` | `Int`: the size of the file at a path, without opening it (`size` takes a path or a `File`) | read (bytes; -1 when it cannot be read) |
+| `modified_ms(path)` | `Int` | read (ms since the epoch; -1 likewise) |
+| `read_range(path, off, n)` | `List(Int)` | read (up to `n` bytes at `off`; fewer at the end, none when it cannot be read) |
+| `write_at(path, off, bytes)` | `Bool` | write (in place; the file created when missing; not durable until `sync`) |
+| `sync(path)` | `Bool` | write (fsync: a file's data, or a directory's entries, reach the disk) |
+| `truncate(path, len)` | `Bool` | write (cut, or extended with zeros, to `len` bytes) |
 
 `filesystem(readonly)` grants the read verbs only.
+
+A file is read or written **in pieces** through one `File`, so a large one
+never has to be held in memory whole:
+
+```resid
+@requires(filesystem)
+Int pump(File r, File w, Int total) {
+    List(UInt(8)) piece = filesystem.read_some(r, 32768);
+    if (piece.len() == 0) { return if (filesystem.is_open(r)) { total } else { -1 }; }
+    if (!filesystem.write_handle(w, piece)) { return -1; }
+    return pump(r, w, total + piece.len());
+}
+```
+
+A `File` is a handle, not a value: copies of it name the same open file,
+and `close` (or the end of a `with`) closes it for all of them. A `File`
+dropped without either keeps its descriptor until the program exits, so
+open one with `with` or close it on every path. An open that fails still
+gives a `File`, one that `is_open` says is not open; every verb on it
+fails (`false`, `-1` or an empty list). A write that fails returns
+`false` and leaves the handle open; a *read* that fails closes it, after
+returning the bytes read before the failure, so an empty piece from a
+handle that `is_open` still is the end of the file, and one from a closed
+handle is an error. `n <= 0` or a negative offset reads nothing and
+leaves the handle as it was. Writes through a handle opened by `open`,
+and reads through one opened by `create`, fail (the read closes it).
+`create` follows a symbolic link at the path as `write_bytes` does;
+`create_new` (`O_EXCL`) never does. Both make the file with mode 0666 less
+the umask; secrets go through `write_secret` (owner-only), never
+`write_handle` (`E0255`).
 
 ## environment, args, process
 

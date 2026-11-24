@@ -1,0 +1,31 @@
+// A loop carrying maps of records, options and sets: their values move
+// by compiled movers (resid.mv.T), so the loop has a region and old values
+// are reclaimed; the results must survive every compaction.
+type Rec = { Str name; Int n; List(Str) tags; };
+type St = { Map(Str, Rec) recs; Map(Str, Option(Str)) opts; Map(Str, Set(Str)) sets; Int count; };
+
+St step(St s, Int i) {
+    Int k = i % 50;
+    Str big = str_repeat("x", 2000) + f"{i}";
+    Rec r = Rec {.name = big, .n = i, .tags = [f"t{i}"]};
+    Set(Str) e = {};
+    return St {.recs = s.recs.insert(f"k{k}", r), .opts = s.opts.insert(f"o{k}", Some(big)), .sets = s.sets.insert(f"s{k}", e.insert(big)), .count = s.count + 1};
+}
+
+St run(St s, Int i, Int n) {
+    if (i >= n) { return s; }
+    return run(step(s, i), i + 1, n);
+}
+
+Int main() {
+    Map(Str, Rec) m = {};
+    Map(Str, Option(Str)) o = {};
+    Map(Str, Set(Str)) ss = {};
+    St s = run(St {.recs = m, .opts = o, .sets = ss, .count = 0}, 0, 200000);
+    Rec r = s.recs.get("k7") else { Rec {.name = "", .n = 0, .tags = []} };
+    Option(Str) none = None;
+    Option(Str) o7 = s.opts.get("o7") else { none };
+    Str ov = o7 else { "none" };
+    println(f"{s.count} {r.n} {r.tags[0]} {str_len(r.name)} {str_len(ov)} {s.sets.len()}");
+    return 0;
+}

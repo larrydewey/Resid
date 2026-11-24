@@ -2484,10 +2484,17 @@ GT lw_provider(LW w, Int id, Str pname, Str m, List(Str) env, GT c) {
     if (nargs == 0) { return lw_rawify_ret(lw_rt1(c, ll_ty(rty), "@" + sym + "()", rty)); }
     GT a1 = lw_expr(w, lw_kid(w, id, 1), env, c);
     if (a1.err != "") { return a1; }
-    if (nargs == 1) { return lw_rawify_ret(lw_rt1(a1, ll_ty(rty), "@" + sym + "(" + ll_ty(a1.ty) + " " + a1.val + ")", rty)); }
+    // filesystem.size of a path is another runtime entry than size of a File.
+    Str sym1 = if (pname == "filesystem" && m == "size" && a1.ty == "Str") { "resid_fs_size_path" } else { sym };
+    if (nargs == 1) { return lw_rawify_ret(lw_rt1(a1, ll_ty(rty), "@" + sym1 + "(" + ll_ty(a1.ty) + " " + a1.val + ")", rty)); }
     GT a2 = lw_expr(w, lw_kid(w, id, 2), env, a1);
     if (a2.err != "") { return a2; }
-    return lw_rawify_ret(lw_rt1(a2, ll_ty(rty), "@" + sym + "(" + ll_ty(a1.ty) + " " + a1.val + ", " + ll_ty(a2.ty) + " " + a2.val + ")", rty));
+    Str two = ll_ty(a1.ty) + " " + a1.val + ", " + ll_ty(a2.ty) + " " + a2.val;
+    if (nargs == 2) { return lw_rawify_ret(lw_rt1(a2, ll_ty(rty), "@" + sym + "(" + two + ")", rty)); }
+    // Three arguments: filesystem.read_at(f, offset, n), read_range and write_at(path, offset, ...).
+    GT a3 = lw_expr(w, lw_kid(w, id, 3), env, a2);
+    if (a3.err != "") { return a3; }
+    return lw_rawify_ret(lw_rt1(a3, ll_ty(rty), "@" + sym + "(" + two + ", " + ll_ty(a3.ty) + " " + a3.val + ")", rty));
 }
 
 // Indexing: fixed-capacity values, maps, list elements and slices.
@@ -3322,6 +3329,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
     }
     if ((n == "aesni_enc_round" || n == "aesni_enc_last_round") && !user_fn) { return lw_aesni(w, id, n, env, c); }
     if (n == "gf128_mul_hw" && !user_fn) { return lw_gf128(w, id, env, c); }
+    if (n == "gf128_mul4_hw" && !user_fn) { return lw_gf128x4(w, id, env, c); }
     if ((n == "sha256_compress_hw" || n == "sha512_compress_hw") && !user_fn) { return lw_sha_hw(w, id, n, env, c); }
     if ((n == "ct_secret" || n == "ct_public") && !user_fn) { return lw_ct(w, id, n, env, c); }
     if (n == "ct_hide" && !user_fn) { return lw_ct_hide(w, id, env, c); }
@@ -3681,9 +3689,56 @@ GT lw_gf128(LW w, Int id, List(Str) env, GT c) {
     if (b0.err != "") { return b0; }
     GT b = widen_val(b0, "UInt(128)");
     Str r = f"%t{b.tmp + 1}";
-    List(Str) gl = lv_decl(b.glines, "e.gf128", gf128_def());
+    List(Str) gl = lv_decl(lv_decl(b.glines, "e.clmul", gf128_decl()), "e.gf128", gf128_def());
     GT b1 = GT {.pos = b.pos, .val = b.val, .ty = b.ty, .cnt = b.cnt, .err = b.err, .glines = gl, .lines = b.lines, .tmp = b.tmp, .lbl = b.lbl, .tail = b.tail};
     return lw_step(b1, r, "UInt(128)", b.lines.concat([r + " = call i128 @e.gf128(i128 " + a.val + ", i128 " + b.val + ")"]), b.tmp + 1);
+}
+
+// gf128_mul4_hw(a0, b0, a1, b1, a2, b2, a3, b3): a0 b0 ^ a1 b1 ^ a2 b2 ^ a3 b3
+// in GF(2^128), the four carry-less products summed before one reduction
+// (GHASH over four blocks with H^4..H). The caller checks
+// resid_cpu_has_clmul first.
+GT lw_gf128x4(LW w, Int id, List(Str) env, GT c) {
+    if (w.g.ns[id].nk != 8) { return lw_gerr("gf128_mul4_hw arity", c); }
+    List(Str) tys = ["UInt(128)", "UInt(128)", "UInt(128)", "UInt(128)", "UInt(128)", "UInt(128)", "UInt(128)", "UInt(128)"];
+    SHA a = lw_sha_args(w, id, 0, tys, env, SHA {.g = c, .vals = []});
+    if (a.g.err != "") { return a.g; }
+    GT b = a.g;
+    Str r = f"%t{b.tmp + 1}";
+    List(Str) gl = lv_decl(lv_decl(b.glines, "e.clmul", gf128_decl()), "e.gf128x4", gf128x4_def());
+    GT b1 = GT {.pos = b.pos, .val = b.val, .ty = b.ty, .cnt = b.cnt, .err = b.err, .glines = gl, .lines = b.lines, .tmp = b.tmp, .lbl = b.lbl, .tail = b.tail};
+    Str args = "i128 " + str_join(a.vals, ", i128 ");
+    return lw_step(b1, r, "UInt(128)", b.lines.concat([r + " = call i128 @e.gf128x4(" + args + ")"]), b.tmp + 1);
+}
+
+// The four 64x64 carry-less products of pair k (%a<k>, %b<k>), as
+// %p00_<k>, %p11_<k>, %p10_<k>, %p01_<k>.
+List(Str) gf128_products_k(Int k) {
+    if (tgt_a64()) {
+        return [f"  %a0_{k} = trunc i128 %a{k} to i64", f"  %ah_{k} = lshr i128 %a{k}, 64", f"  %a1_{k} = trunc i128 %ah_{k} to i64", f"  %b0_{k} = trunc i128 %b{k} to i64", f"  %bh_{k} = lshr i128 %b{k}, 64", f"  %b1_{k} = trunc i128 %bh_{k} to i64",
+            f"  %v00_{k} = call <16 x i8> @llvm.aarch64.neon.pmull64(i64 %a0_{k}, i64 %b0_{k})", f"  %v11_{k} = call <16 x i8> @llvm.aarch64.neon.pmull64(i64 %a1_{k}, i64 %b1_{k})", f"  %v10_{k} = call <16 x i8> @llvm.aarch64.neon.pmull64(i64 %a1_{k}, i64 %b0_{k})", f"  %v01_{k} = call <16 x i8> @llvm.aarch64.neon.pmull64(i64 %a0_{k}, i64 %b1_{k})",
+            f"  %p00_{k} = bitcast <16 x i8> %v00_{k} to i128", f"  %p11_{k} = bitcast <16 x i8> %v11_{k} to i128", f"  %p10_{k} = bitcast <16 x i8> %v10_{k} to i128", f"  %p01_{k} = bitcast <16 x i8> %v01_{k} to i128"];
+    }
+    return [f"  %av_{k} = bitcast i128 %a{k} to <2 x i64>", f"  %bv_{k} = bitcast i128 %b{k} to <2 x i64>",
+        f"  %v00_{k} = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> %av_{k}, <2 x i64> %bv_{k}, i8 0)", f"  %v11_{k} = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> %av_{k}, <2 x i64> %bv_{k}, i8 17)", f"  %v10_{k} = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> %av_{k}, <2 x i64> %bv_{k}, i8 1)", f"  %v01_{k} = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> %av_{k}, <2 x i64> %bv_{k}, i8 16)",
+        f"  %p00_{k} = bitcast <2 x i64> %v00_{k} to i128", f"  %p11_{k} = bitcast <2 x i64> %v11_{k} to i128", f"  %p10_{k} = bitcast <2 x i64> %v10_{k} to i128", f"  %p01_{k} = bitcast <2 x i64> %v01_{k} to i128"];
+}
+
+// The products of the four pairs xor-summed into %p00, %p11, %p10, %p01
+// (carry-less products are linear), then gf128_def's one reduction.
+Str gf128x4_def() {
+    Str feats = if (tgt_a64()) { "+aes,+neon" } else { "+pclmul,+sse2" };
+    List(Str) head = ["define linkonce_odr i128 @e.gf128x4(i128 %a0, i128 %b0, i128 %a1, i128 %b1, i128 %a2, i128 %b2, i128 %a3, i128 %b3) \"target-features\"=\"" + feats + "\" {", "entry:"];
+    List(Str) prods = gf128_products_k(0).concat(gf128_products_k(1)).concat(gf128_products_k(2)).concat(gf128_products_k(3));
+    List(Str) sums = gf128_sum4("p00").concat(gf128_sum4("p11")).concat(gf128_sum4("p10")).concat(gf128_sum4("p01"));
+    return str_join(head.concat(prods).concat(sums).concat(gf128_reduce()), "\n");
+}
+
+// The carry-less multiply intrinsic, declared once for e.gf128 and e.gf128x4.
+Str gf128_decl() { return if (tgt_a64()) { "declare <16 x i8> @llvm.aarch64.neon.pmull64(i64, i64)" } else { "declare <2 x i64> @llvm.x86.pclmulqdq(<2 x i64>, <2 x i64>, i8)" }; }
+
+List(Str) gf128_sum4(Str p) {
+    return [f"  %{p}_s1 = xor i128 %{p}_0, %{p}_1", f"  %{p}_s2 = xor i128 %{p}_2, %{p}_3", f"  %{p} = xor i128 %{p}_s1, %{p}_s2"];
 }
 
 // The four 64x64 carry-less products a0b0, a1b1, a1b0, a0b1 of the target.
@@ -3701,17 +3756,21 @@ List(Str) gf128_products() {
 // The 256-bit product, shifted left one bit (the operands are bit-reflected),
 // reduced modulo x^128 + x^7 + x^2 + x + 1 (Gueron and Kounavis, algorithm 5).
 Str gf128_def() {
-    Str decl = if (tgt_a64()) { "declare <16 x i8> @llvm.aarch64.neon.pmull64(i64, i64)" } else { "declare <2 x i64> @llvm.x86.pclmulqdq(<2 x i64>, <2 x i64>, i8)" };
     Str feats = if (tgt_a64()) { "+aes,+neon" } else { "+pclmul,+sse2" };
-    List(Str) head = [decl, "define linkonce_odr i128 @e.gf128(i128 %a, i128 %b) \"target-features\"=\"" + feats + "\" {", "entry:"];
-    List(Str) tail = ["  %mid = xor i128 %p10, %p01", "  %ml = shl i128 %mid, 64", "  %mh = lshr i128 %mid, 64", "  %lo = xor i128 %p00, %ml", "  %hi = xor i128 %p11, %mh",
+    List(Str) head = ["define linkonce_odr i128 @e.gf128(i128 %a, i128 %b) \"target-features\"=\"" + feats + "\" {", "entry:"];
+    return str_join(head.concat(gf128_products()).concat(gf128_reduce()), "\n");
+}
+
+// The 256-bit product %p00 ^ (%p10 ^ %p01) << 64 ^ %p11 << 128 shifted and
+// reduced (gf128_def's tail), returned.
+List(Str) gf128_reduce() {
+    return ["  %mid = xor i128 %p10, %p01", "  %ml = shl i128 %mid, 64", "  %mh = lshr i128 %mid, 64", "  %lo = xor i128 %p00, %ml", "  %hi = xor i128 %p11, %mh",
         "  %hs = shl i128 %hi, 1", "  %lc = lshr i128 %lo, 127", "  %h2 = or i128 %hs, %lc", "  %l2 = shl i128 %lo, 1",
         "  %x0 = trunc i128 %l2 to i64", "  %l2h = lshr i128 %l2, 64", "  %x1 = trunc i128 %l2h to i64",
         "  %ca = shl i64 %x0, 63", "  %cb = shl i64 %x0, 62", "  %cc = shl i64 %x0, 57", "  %d1 = xor i64 %x1, %ca", "  %d2 = xor i64 %d1, %cb", "  %d = xor i64 %d2, %cc",
         "  %dz = zext i64 %d to i128", "  %dh = shl i128 %dz, 64", "  %x0z = zext i64 %x0 to i128", "  %dx = or i128 %dh, %x0z",
         "  %e = lshr i128 %dx, 1", "  %f = lshr i128 %dx, 2", "  %g = lshr i128 %dx, 7", "  %h1 = xor i128 %dx, %e", "  %h3 = xor i128 %h1, %f", "  %hh = xor i128 %h3, %g",
         "  %r = xor i128 %h2, %hh", "  ret i128 %r", "}"];
-    return str_join(head.concat(gf128_products()).concat(tail), "\n");
 }
 
 // cg_primary's aesni_enc_round / aesni_enc_last_round.
@@ -5228,7 +5287,9 @@ List(Str) abi_trim_all(List(Str) xs, Int i, ListBuf(Str) acc) {
 }
 
 // A wrapper's attributes match the functions it calls, so it inlines.
-Str abi_attrs() { return if (tgt_a64()) { "\"target-features\"=\"+aes,+neon\"" } else { "\"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\"" }; }
+// +pclmul: e.gf128 and e.gf128x4 (target-features +pclmul) inline only into
+// a caller whose features include theirs.
+Str abi_attrs() { return if (tgt_a64()) { "\"target-features\"=\"+aes,+neon\"" } else { "\"target-features\"=\"+aes,+pclmul,+sse2,+ssse3,+sse4.1\"" }; }
 
 Str abi_strip_nr(Str sig) { return if (str_ends_with(sig, " noreturn")) { str_slice(sig, 0, str_len(sig) - 9) } else { sig }; }
 
@@ -5639,7 +5700,7 @@ Bool lr_call_allocs(LW w, Str f, Str l) {
     // Appending a scalar to a list builds what the loop carries on (moved
     // out at the back edge anyway), not garbage.
     if (f == "resid_list_push" || f == "resid_list_push_k" || f == "resid_list_push_own" || f == "resid_bl_push_own" || f == "resid_box_i64" || f == "resid_box_f64" || f == "resid_box_bool") { return false; }
-    return !lo_has_str(["llvm.sqrt.f64", "resid_bytes_be16", "resid_char_at_n", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_elems", "resid_list_get", "resid_list_get_nc", "resid_bl_get", "resid_bl_get_nc", "resid_list_get_sh", "resid_list_get_own", "resid_list_share_f", "resid_list_get_v", "resid_bl_get_v", "resid_list_vdata", "resid_list_vlen", "resid_bl_vlen", "resid_list_rec_at", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
+    return !lo_has_str(["llvm.sqrt.f64", "resid_bytes_be16", "resid_bytes_cmp", "resid_char_at_n", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_elems", "resid_list_get", "resid_list_get_nc", "resid_bl_get", "resid_bl_get_nc", "resid_list_get_sh", "resid_list_get_own", "resid_list_share_f", "resid_list_get_v", "resid_bl_get_v", "resid_list_vdata", "resid_list_vlen", "resid_bl_vlen", "resid_list_rec_at", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
 }
 
 // Every exit returns a scalar, a loop parameter (an older value, or a
@@ -7333,6 +7394,17 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
     if (struct_index(fs, t) >= 0 && lr_rec_ok(fs, t, seen)) { return "@" + lr_rec_fn(t) + "(ptr %V, ptr %C)"; }
     if (is_fn_type(t)) { return "@resid_mv_clo(ptr %V, ptr %C)"; }
     if (lr_is_sum(fs, t) && lr_sum_ok(fs, t, seen)) { return "@" + lr_sum_fn(t) + "(ptr %V, ptr %C)"; }
+    // A map of word keys whose values are records, sums, maps or lists of
+    // records: each value moves by the compiled `resid.mv.V` (lr_mv_fns).
+    // Not in the compiler's own build (--runtime-internals): its loops mix
+    // regions with bulk arenas, and a region on one of them (own.resid's
+    // ow_sweep_scc, under spawn) corrupted a map; they keep the regions
+    // they had until that is understood.
+    if (str_has_prefix(t, "Map(") && lr_word_ty(map_key_type_cg(t)) && !resid_internals()) {
+        Str vt = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(map_val_type_cg(t)));
+        Str vm = if (ll_ty(vt) == "ptr" && !lr_word_ty(vt)) { lr_move(fs, vt, seen.concat([t])) } else { "" };
+        if (vm != "" && vm != "-") { return f"@resid_mv_map_f(ptr %V, i8 {lr_kind(map_key_type_cg(t))}, ptr @" + lr_mv_fn(vt) + ", ptr %C)"; }
+    }
     if (str_has_prefix(t, "List(") && !is_list_fixed(t)) {
         Str et = ct_base_of(fs.ctn, fs.ctb, elem_type(t));
         if (struct_index(fs, et) >= 0 && lr_rec_ok(fs, et, seen)) { return "@resid_mv_list_f(ptr %V, ptr @" + lr_rec_fn(et) + ", ptr %C)"; }
@@ -7349,6 +7421,10 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
             Str em = lr_move(fs, et, seen.concat([et]));
             if (em != "" && em != "-") { return "@resid_mv_list_f(ptr %V, ptr @" + lr_sum_fn(et) + ", ptr %C)"; }
         }
+        // A list of closures or maps: each element by its compiled
+        // `resid.mv.E` (outside the compiler's own build, as for maps above).
+        Str em2 = if (!resid_internals() && ll_ty(et) == "ptr" && !lr_word_ty(et) && et != "Str" && !str_has_prefix(et, "List(")) { lr_move(fs, et, seen.concat([t])) } else { "" };
+        if (em2 != "" && em2 != "-") { return "@resid_mv_list_f(ptr %V, ptr @" + lr_mv_fn(et) + ", ptr %C)"; }
     }
     return "";
 }
@@ -7377,6 +7453,55 @@ Bool lr_fx_flat(Str t) {
 }
 
 Str lr_rec_fn(Str t) { return "\"resid.rec.evac." + t + "\""; }
+
+// ─── Movers as functions ────────────────────────────────────────────
+// A map's values move by a function of (value, context): `resid.mv.V`
+// wraps V's move template (lr_move) in one. Made for every one the
+// program's lines name, with the sum movers they may name in turn.
+
+Str lr_mv_fn(Str t) { return "\"resid.mv." + t + "\""; }
+
+List(Str) lr_mv_def(Funcs fs, Str t) {
+    return ["define internal ptr @" + lr_mv_fn(t) + "(ptr %v, ptr %u) {", "entry:", "%c = call ptr " + lr_call(lr_move(fs, t, []), "%v", "%u"), "ret ptr %c", "}"];
+}
+
+// Every `@"resid.mv.T"` in the lines: its T.
+Map(Str, Int) lr_mv_refs(List(Str) ls, Int i, Map(Str, Int) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    Map(Str, Int) a2 = if (str_contains(l, "@\"resid.mv.")) { lr_mv_refs_in(l, 0, acc) } else { acc };
+    return lr_mv_refs(ls, i + 1, a2);
+}
+
+Map(Str, Int) lr_mv_refs_in(Str l, Int from, Map(Str, Int) acc) {
+    Int k = str_index_of(l, "@\"resid.mv.", from);
+    if (k < 0) { return acc; }
+    Int s0 = k + 11;
+    Int e = str_find_char(l, 34, s0);
+    if (e < 0) { return acc; }
+    return lr_mv_refs_in(l, e + 1, acc.insert(str_slice(l, s0, e), 1));
+}
+
+List(Str) lr_mv_defs(Funcs fs, List(Str) ts, Int i, List(Str) acc) {
+    if (i >= ts.len()) { return acc; }
+    return lr_mv_defs(fs, ts, i + 1, acc.concat(lr_mv_def(fs, ts[i])));
+}
+
+// The value movers and sum movers the lines name, and those their own
+// bodies name, until none is new.
+List(Str) lr_mv_sum_fns(Funcs fs, List(Str) ls) {
+    Map(Str, Int) d0 = {};
+    return lr_mv_sum_at(fs, ls, d0, d0, []);
+}
+
+List(Str) lr_mv_sum_at(Funcs fs, List(Str) ls, Map(Str, Int) mdone, Map(Str, Int) sdone, List(Str) acc) {
+    Map(Str, Int) e0 = {};
+    List(Str) mf = lr_sum_new(lr_mv_refs(ls, 0, e0).keys(), mdone, 0, []);
+    List(Str) sf = lr_sum_new(lr_sum_refs(ls, 0, e0).keys(), sdone, 0, []);
+    if (mf.len() == 0 && sf.len() == 0) { return acc; }
+    List(Str) defs = lr_mv_defs(fs, mf, 0, []).concat(lr_sum_defs(fs, sf, 0, []));
+    return lr_mv_sum_at(fs, defs, lr_set_add(mdone, mf, 0), lr_set_add(sdone, sf, 0), acc.concat(defs));
+}
 
 
 // ─── Moving sums and closures ───────────────────────────────────────
@@ -7419,7 +7544,9 @@ Str lr_slot_move(Funcs fs, Str p0, List(Str) seen) {
     Str p = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(p0));
     if (is_fixed_type(p)) { return ""; }
     if (p == "Bool") { return "-"; }
-    if (ll_ty(p) != "ptr") { return if (is_wide_box(p)) { "" } else { "@resid_mv_word(ptr %V, ptr %C)" }; }
+    // A wide integer's box moves as a word too (elem_move copies its limbs);
+    // the compiler's own build keeps the sums it had (see lr_move).
+    if (ll_ty(p) != "ptr") { return if (is_wide_box(p) && resid_internals()) { "" } else { "@resid_mv_word(ptr %V, ptr %C)" }; }
     if (p == "Str") { return "@resid_mv_word(ptr %V, ptr %C)"; }
     return lr_move(fs, p, seen);
 }
@@ -7560,6 +7687,7 @@ Map(Str, Int) lr_sum_refs_in(Str l, Int from, Map(Str, Int) acc) {
 Bool lr_new_kind(Funcs fs, Str t0, List(Str) seen) {
     Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(t0));
     if (is_fn_type(t) || lr_is_sum(fs, t)) { return true; }
+    if (str_has_prefix(t, "Map(") && lr_evac_fn(t) == "" && !resid_internals()) { return true; }
     if (seen.contains(t)) { return false; }
     Int si = struct_index(fs, t);
     if (si >= 0) { return lr_fields_new(fs, fs.stf[si], 0, seen.concat([t])); }
@@ -10837,7 +10965,7 @@ pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts,
     List(Str) rfs = if (r0.err != "" || resid_rtmod()) { [] } else { lr_rec_fns(fs, lo.hdr, 0, []) };
     List(Str) ffs = if (r0.err != "") { [] } else { lo_freeze_fns(fs, lo, 0, []) };
     // Closure movers (lw_lambda) are in the global lines.
-    List(Str) sfs = if (r0.err != "" || resid_rtmod()) { [] } else { lr_sum_fns(fs, r0.lines.concat(rfs).concat(r0.glines)) };
+    List(Str) sfs = if (r0.err != "" || resid_rtmod()) { [] } else { lr_mv_sum_fns(fs, r0.lines.concat(rfs).concat(r0.glines)) };
     PG r = PG {.pos = r0.pos, .err = r0.err, .glines = r0.glines, .hlines = r0.hlines, .lines = r0.lines.concat(rfs).concat(ffs).concat(sfs), .tmp = r0.tmp, .lbl = r0.lbl};
     PG r1 = r;
     if (r1.err != "" || dbg || resid_rtmod()) { return r1; }

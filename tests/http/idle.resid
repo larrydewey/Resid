@@ -1,0 +1,39 @@
+// The idle hook of a stateful loop (http_state_loop_every): the state
+// moves on without any request. Here it adds 1000 once; a request made
+// after a pause sees it.
+import "httpserv.resid";
+import "http.resid";
+
+HttpTurn(Int, Int) handle(Int total, HttpRequest r) {
+    return HttpTurn { .state = total, .out = Whole(http_reply_text(200, "text/plain", f"total {total}\n")) };
+}
+
+@requires(network)
+Str fetch(Int port, Str path) {
+    Int fd = resid_tcp_connect("127.0.0.1", port);
+    _ = resid_tcp_send(fd, "GET " + path + " HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    Str head = http_recv_head(fd);
+    Str body = http_recv_count(fd, str_parse_int(http_header_value(head, "content-length")));
+    _ = resid_tcp_close(fd);
+    return str_trim(body);
+}
+
+@requires(network, clock)
+Int main() {
+    Int lfd = http_listen(0);
+    if (lfd < 0) { println("listen failed"); return 1; }
+    Int port = http_bound_port(lfd);
+    HttpLimits lim = HttpLimits { .head_max = 2048, .body_max = 4096, .requests_max = 100, .request_ms = 2000, .reply_ms = 2000, .open_max = 64 };
+    HttpTurn(Int, Int) closure(Int, HttpRequest) h = lambda(a, r) { handle(a, r) };
+    HttpStep(Int) closure(Int, Int) t = lambda(a, k) { http_step_end(k, []) };
+    Bool closure(Int) keep = lambda(a) { true };
+    Int closure(Int) idle = lambda(a) { if (a < 1000) { a + 1000 } else { a } };
+    Result(HttpLoopEnd(Int), RegionError) worker = spawn (network(readonly)) {
+        return http_state_loop_every(lfd, 0, h, t, keep, idle, 20, lim, 1);
+    };
+    Int slept = clock.sleep_ns(200000000);
+    println(fetch(port, "/total"));
+    HttpLoopEnd(Int) end = worker else { HttpLoopEnd { .accepted = -1, .state = -1 } };
+    println(f"accepted {end.accepted}, final state {end.state}");
+    return 0;
+}

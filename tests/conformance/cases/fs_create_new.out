@@ -1,0 +1,9 @@
+existing: open false write false close false kept [hi
+]
+dangling link: 0 open false target made false
+directory: open false
+empty path: open false
+missing directory: open false write false
+fresh: open true write true
+fresh file [7, 8, 9]
+second time: open false file [7, 8, 9]

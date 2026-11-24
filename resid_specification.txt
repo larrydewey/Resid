@@ -2005,7 +2005,30 @@ write_secret (write; owner-only mode 0600, no symlink
 follow), append_bytes (write), write_hex and append_hex (write; the
 bytes a hex string spells), sha256 (a file's SHA-256 as 32 bytes,
 computed without materializing its contents), exists, is_dir,
-list_dir, create_dir (write), open, read_handle, close.
+list_dir, create_dir (write), remove (write; a file or an empty
+directory), rename (write; atomic within one file system), size (a
+file's size in bytes, -1 when it cannot be read), modified_ms (its
+modification time in ms since the Unix epoch, -1 likewise),
+read_range (up to n bytes at an offset; fewer at the end, none when
+it cannot be read), write_at (write; bytes at an offset, the file
+created when missing), sync (write; fsync of a file or a directory),
+truncate (write; a file cut or zero-extended to a length), open,
+read_handle, close.
+
+Files in pieces, through one File handle: create (write; created,
+or an existing file truncated) and create_new (write; refuses
+anything already at the path, a symbolic link included, as
+O_EXCL) open a File for writing; write_handle(f, bytes) (write;
+a List(Int) or a List(UInt(8)); false on any failure) writes all
+of bytes at its offset. read_some(f, n) gives the next n bytes as
+a List(UInt(8)), fewer only at the end of the file and empty
+there; read_at(f, offset, n) the n bytes at offset (empty past
+the end) without moving the offset; size(f) the file's size (-1
+when closed or not a regular file); is_open(f) whether f holds an
+open file. A failed open gives a File that is not open; a failed
+read closes the File, so an empty piece from an open File is the
+end of the file. Copies of a File name the same open file; close
+or the end of a `with` closes it.
 
 clock verbs: now_ns (nanoseconds since the Unix epoch, as one
 Int, so 1677-09-21 to 2262-04-11), now_sec (whole seconds,
@@ -3401,8 +3424,10 @@ wrap) is generic over Word(W, B) and Block128(X, W, B),
 records and parameters; round keys are a list of 32-bit
 words); lib/aesgcm.resid is its public copy. The AES-NI
 rounds and the carry-less multiply (aesni_enc_round,
-aesni_enc_last_round, gf128_mul_hw) take secrets, as they run
-in constant time, and keep the result secret. GCM open and
+aesni_enc_last_round, gf128_mul_hw, and gf128_mul4_hw, four
+products summed under one reduction for GHASH over four blocks)
+take secrets, as they run in constant time, and keep the result
+secret. GCM open and
 key unwrap publish one bit each through CtSame(B).
 ct_hide(x) on a secret x keeps it secret, and so does a cast to
 an integer type that holds every value of x (the same or a

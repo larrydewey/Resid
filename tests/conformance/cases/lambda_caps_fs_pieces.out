@@ -1,0 +1,4 @@
+read: ok 3
+create: failed: capability not granted: filesystem (write)
+write: failed: capability not granted: filesystem (write)
+created: false

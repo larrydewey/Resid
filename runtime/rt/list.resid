@@ -617,9 +617,24 @@ Int b16_be8_raw(Int s) {
          | ((ld64(s + 32) & 255) << 24) | ((ld64(s + 40) & 255) << 16) | ((ld64(s + 48) & 255) << 8) | (ld64(s + 56) & 255);
 }
 
-// Bytes p..p + 16 of l as a 128-bit word, big-endian (a GHASH block).
+// Whether bytes p..p + 16 of the byte list l are in range.
+Bool b16_in(Int l, Int p) { return p >= 0 && p <= lcount(l) - 16; }
+
+// Bytes p..p + 16 of l as a 128-bit word, big-endian (a GHASH block). A
+// byte list's bytes in range inline into the caller (two loads); anything
+// else takes b16_be16_slow.
 @export("resid_bytes_be16", "i128(ptr,i64)")
+@inline
 pub UInt(128) rt_bytes_be16(Int l, Int p) {
+    if (lbytes(l) && b16_in(l, p)) {
+        Int q = lroot(l) + 24 + p;
+        return ((UInt(128)) wrapping_u64(bl_be8(q)) << (UInt(128)) 64) | (UInt(128)) wrapping_u64(bl_be8(q + 8));
+    }
+    return b16_be16_slow(l, p);
+}
+
+@noinline
+UInt(128) b16_be16_slow(Int l, Int p) {
     _ = b16_check(l, p);
     if (lbytes(l)) {
         Int q = lroot(l) + 24 + p;
@@ -632,11 +647,66 @@ pub UInt(128) rt_bytes_be16(Int l, Int p) {
     return (hi << (UInt(128)) 64) | lo;
 }
 
+// How bytes ao..ao + an of a and bo..bo + bn of b order (unsigned, byte
+// by byte, a prefix first): 0 when equal, otherwise i + 1 with i the first
+// place they differ (the shorter's length when it is a prefix), negative
+// when a's range sorts first. Packed byte lists compare a word at a time.
+@export("resid_bytes_cmp", "i64(ptr,i64,i64,ptr,i64,i64)")
+pub Int rt_bytes_cmp(Int a, Int ao, Int an, Int b, Int bo, Int bn) {
+    _ = bc_check(a, ao, an) + bc_check(b, bo, bn);
+    Int m = if (an < bn) { an } else { bn };
+    if (lbytes(a) && lbytes(b)) { return bc_words(lroot(a) + 24 + ao, an, lroot(b) + 24 + bo, bn, 0, m); }
+    return bc_slow(a, ao, an, b, bo, bn, 0, m);
+}
+
+Int bc_check(Int l, Int o, Int n) {
+    if (o < 0 || n < 0 || o > lcount(l) - n) { return rt_index_abort(o + n, lcount(l), 0); }
+    return 0;
+}
+
+Int bc_words(Int p, Int an, Int q, Int bn, Int i, Int m) {
+    if (i + 8 <= m && ld64(p + i) == ld64(q + i)) { return bc_words(p, an, q, bn, i + 8, m); }
+    return bc_tail(p, an, q, bn, i, m);
+}
+
+Int bc_tail(Int p, Int an, Int q, Int bn, Int i, Int m) {
+    if (i >= m) { return if (an == bn) { 0 } else { if (an < bn) { 0 - (m + 1) } else { m + 1 } }; }
+    Int x = ld8(p + i);
+    Int y = ld8(q + i);
+    if (x != y) { return if (x < y) { 0 - (i + 1) } else { i + 1 }; }
+    return bc_tail(p, an, q, bn, i + 1, m);
+}
+
+Int bc_slow(Int a, Int ao, Int an, Int b, Int bo, Int bn, Int i, Int m) {
+    if (i >= m) { return if (an == bn) { 0 } else { if (an < bn) { 0 - (m + 1) } else { m + 1 } }; }
+    Int x = list_at_k(a, ao + i) & 255;
+    Int y = list_at_k(b, bo + i) & 255;
+    if (x != y) { return if (x < y) { 0 - (i + 1) } else { i + 1 }; }
+    return bc_slow(a, ao, an, b, bo, bn, i + 1, m);
+}
+
 // Builder b with bytes p..p + 16 of l pushed, byte i XORed with bits
 // 8i..8i + 7 of ks (a CTR keystream block): room for all 16 made once,
 // then the slots written.
+// A byte builder with room for 16 more and a byte list's bytes in range
+// inline into the caller (two loads, two stores); anything else takes
+// b16_xor16_slow.
 @export("resid_bytes_xor16", "ptr(ptr,ptr,i64,i128)")
+@inline
 pub Int rt_bytes_xor16(Int b, Int l, Int p, UInt(128) ks) {
+    Int n = lcount(b);
+    Int f = lroot(b);
+    if (lbytes(b) && lbytes(l) && b16_in(l, p) && f != 0 && n + 16 <= ld64(f + 8)) {
+        Int s = lroot(l) + 24 + p;
+        _ = st64(f + 24 + n, ld64(s) ^ wrapping_i64(ks)) + st64(f + 32 + n, ld64(s + 8) ^ wrapping_i64(ks >> (UInt(128)) 64));
+        _ = st64(b, n + 16);
+        return st64(f, n + 16) * 0 + b;
+    }
+    return b16_xor16_slow(b, l, p, ks);
+}
+
+@noinline
+Int b16_xor16_slow(Int b, Int l, Int p, UInt(128) ks) {
     _ = b16_check(l, p);
     if (lbytes(b)) { return bl_xor16(b, l, p, wrapping_i64(ks), wrapping_i64(ks >> (UInt(128)) 64)); }
     Int n = lcount(b);

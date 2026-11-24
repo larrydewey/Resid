@@ -1,0 +1,6 @@
+// remove and rename write: a read-only grant does not cover them.
+@requires(filesystem(readonly))
+Int main() {
+    if (filesystem.remove("/tmp/resid_authority_readonly_remove")) { return 1; }
+    return 0;
+}

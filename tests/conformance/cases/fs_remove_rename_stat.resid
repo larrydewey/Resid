@@ -1,0 +1,17 @@
+// remove, rename, size and modified_ms: a file's size and time, a rename
+// that moves it, and removal of a file and of an empty directory.
+@requires(filesystem)
+Int main() {
+    Bool w = filesystem.write_all("@TMP@/a.txt", "hello");
+    println(f"{filesystem.size("@TMP@/a.txt")}");
+    println(f"{filesystem.modified_ms("@TMP@/a.txt") > 1600000000000}");
+    println(f"{filesystem.size("@TMP@/none.txt")}");
+    println(f"{filesystem.rename("@TMP@/a.txt", "@TMP@/b.txt")}");
+    println(f"{filesystem.exists("@TMP@/a.txt")} {filesystem.read_all("@TMP@/b.txt")}");
+    println(f"{filesystem.rename("@TMP@/none.txt", "@TMP@/c.txt")}");
+    println(f"{filesystem.remove("@TMP@/b.txt")} {filesystem.exists("@TMP@/b.txt")}");
+    Bool d = filesystem.create_dir("@TMP@/d");
+    println(f"{filesystem.remove("@TMP@/d")} {filesystem.is_dir("@TMP@/d")}");
+    println(f"{filesystem.remove("@TMP@/d")}");
+    return 0;
+}

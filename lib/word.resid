@@ -7,7 +7,8 @@
 // same code, monomorphized, so it costs what hand-written Int code costs.
 //
 // Word(W, B) is the 32-bit word behavior (SHA-256, ChaCha20), Word64(W, B)
-// the 64-bit one (SHA-512), Wide512(P, B) 512-bit integers (Poly1305),
+// the 64-bit one (SHA-512, Poly1305's limbs), Wide512(P, B) 512-bit
+// integers (Ed25519, X25519; its p_poly1305 runs Poly1305 in Word64 limbs),
 // Block128(X, W, B) 128-bit blocks (AES, GHASH): W the word type, B the
 // byte type. Public data is (Int, Int), (UInt(64), Int), (Int(512), Int)
 // and (UInt(128), Int, Int); secret data uses Secret(UInt(32)),
@@ -67,6 +68,8 @@ behavior Word(W, B) {
     B b_xork(B b, Int k);    // a byte xor a public byte
     B b_xor(B a, B b);       // two bytes xored (a keystream applied)
     B b_lift(Int k);         // a public byte taking part
+    ListBuf(B) w_xor16(ListBuf(B) o, List(B) d, Int p, W a, W b, W c, W e);  // d[p..p+16] ^ (a, b, c, e little-endian) pushed (resid_bytes_xor16)
+    List(B) w_lift_u8(List(UInt(8)) bs);  // packed public bytes taking part (no copy at secret types)
 }
 
 Int wi_xor(Int a, Int b) { return a ^ b; }
@@ -86,8 +89,13 @@ Int wi_byte(Int w, Int sh) { return (w >> sh) & 255; }
 Int bi_xork(Int b, Int k) { return b ^ k; }
 Int bi_xor(Int a, Int b) { return a ^ b; }
 Int bi_lift(Int k) { return k; }
+ListBuf(Int) wi_xor16(ListBuf(Int) o, List(Int) d, Int p, Int a, Int b, Int c, Int e) {
+    UInt(128) ks = (UInt(128)) wrapping_u64(ct_hide(a) & 4294967295) | ((UInt(128)) wrapping_u64(ct_hide(b) & 4294967295) << (UInt(128)) 32) | ((UInt(128)) wrapping_u64(ct_hide(c) & 4294967295) << (UInt(128)) 64) | ((UInt(128)) wrapping_u64(ct_hide(e) & 4294967295) << (UInt(128)) 96);
+    return resid_bytes_xor16(o, d, p, ks);
+}
+List(Int) wi_lift_u8(List(UInt(8)) bs) { return bytes_int(bs); }
 
-Word(Int, Int) = { .w_xor = wi_xor, .w_and = wi_and, .w_or = wi_or, .w_add = wi_add, .w_addk = wi_addk, .w_xork = wi_xork, .w_andk = wi_andk, .w_rotr = wi_rotr, .w_shr = wi_shr, .w_shl = wi_shl, .w_not = wi_not, .w_lift = wi_lift, .w_from_byte = wi_from_byte, .w_byte = wi_byte, .b_xork = bi_xork, .b_xor = bi_xor, .b_lift = bi_lift };
+Word(Int, Int) = { .w_xor16 = wi_xor16, .w_lift_u8 = wi_lift_u8, .w_xor = wi_xor, .w_and = wi_and, .w_or = wi_or, .w_add = wi_add, .w_addk = wi_addk, .w_xork = wi_xork, .w_andk = wi_andk, .w_rotr = wi_rotr, .w_shr = wi_shr, .w_shl = wi_shl, .w_not = wi_not, .w_lift = wi_lift, .w_from_byte = wi_from_byte, .w_byte = wi_byte, .b_xork = bi_xork, .b_xor = bi_xor, .b_lift = bi_lift };
 
 // Public words over packed bytes (a List(UInt(8)) holds one byte per
 // element, runtime/rt/bytelist.resid): UInt(32) words, so the instance is
@@ -109,8 +117,13 @@ UInt(8) wu_byte(UInt(32) w, Int sh) { return wrapping_u8(w >> wrapping_u32(sh));
 UInt(8) bu_xork(UInt(8) b, Int k) { return b ^ wrapping_u8(k); }
 UInt(8) bu_xor(UInt(8) a, UInt(8) b) { return a ^ b; }
 UInt(8) bu_lift(Int k) { return wrapping_u8(k); }
+ListBuf(UInt(8)) wu_xor16(ListBuf(UInt(8)) o, List(UInt(8)) d, Int p, UInt(32) a, UInt(32) b, UInt(32) c, UInt(32) e) {
+    UInt(128) ks = (UInt(128)) ct_hide(a) | ((UInt(128)) ct_hide(b) << (UInt(128)) 32) | ((UInt(128)) ct_hide(c) << (UInt(128)) 64) | ((UInt(128)) ct_hide(e) << (UInt(128)) 96);
+    return resid_bytes_xor16(o, d, p, ks);
+}
+List(UInt(8)) wu_lift_u8(List(UInt(8)) bs) { return bs; }
 
-Word(UInt(32), UInt(8)) = { .w_xor = wu_xor, .w_and = wu_and, .w_or = wu_or, .w_add = wu_add, .w_addk = wu_addk, .w_xork = wu_xork, .w_andk = wu_andk, .w_rotr = wu_rotr, .w_shr = wu_shr, .w_shl = wu_shl, .w_not = wu_not, .w_lift = wu_lift, .w_from_byte = wu_from_byte, .w_byte = wu_byte, .b_xork = bu_xork, .b_xor = bu_xor, .b_lift = bu_lift };
+Word(UInt(32), UInt(8)) = { .w_xor16 = wu_xor16, .w_lift_u8 = wu_lift_u8, .w_xor = wu_xor, .w_and = wu_and, .w_or = wu_or, .w_add = wu_add, .w_addk = wu_addk, .w_xork = wu_xork, .w_andk = wu_andk, .w_rotr = wu_rotr, .w_shr = wu_shr, .w_shl = wu_shl, .w_not = wu_not, .w_lift = wu_lift, .w_from_byte = wu_from_byte, .w_byte = wu_byte, .b_xork = bu_xork, .b_xor = bu_xor, .b_lift = bu_lift };
 
 // Secret words are UInt(32) and secret bytes UInt(8): small enough that a
 // list never boxes one by its value (E0258).
@@ -131,8 +144,14 @@ Secret(UInt(8)) ws_byte(Secret(UInt(32)) w, Int sh) { return wrapping_u8(w >> wr
 Secret(UInt(8)) bs_xork(Secret(UInt(8)) b, Int k) { return b ^ wrapping_u8(k); }
 Secret(UInt(8)) bs_xor(Secret(UInt(8)) a, Secret(UInt(8)) b) { return a ^ b; }
 Secret(UInt(8)) bs_lift(Int k) { return classify(wrapping_u8(k)); }
+ListBuf(Secret(UInt(8))) ws_xor16(ListBuf(Secret(UInt(8))) o, List(Secret(UInt(8))) d, Int p, Secret(UInt(32)) a, Secret(UInt(32)) b, Secret(UInt(32)) c, Secret(UInt(32)) e) {
+    Secret(UInt(128)) ks = wrapping_u128(ct_hide(a)) | (wrapping_u128(ct_hide(b)) << (UInt(128)) 32) | (wrapping_u128(ct_hide(c)) << (UInt(128)) 64) | (wrapping_u128(ct_hide(e)) << (UInt(128)) 96);
+    return resid_bytes_xor16(o, d, p, ks);
+}
+// The same bytes, typed secret: classify claims no secrecy, so no copy.
+List(Secret(UInt(8))) ws_lift_u8(List(UInt(8)) bs) { return secret_bytes_u8(bs); }
 
-Word(Secret(UInt(32)), Secret(UInt(8))) = { .w_xor = ws_xor, .w_and = ws_and, .w_or = ws_or, .w_add = ws_add, .w_addk = ws_addk, .w_xork = ws_xork, .w_andk = ws_andk, .w_rotr = ws_rotr, .w_shr = ws_shr, .w_shl = ws_shl, .w_not = ws_not, .w_lift = ws_lift, .w_from_byte = ws_from_byte, .w_byte = ws_byte, .b_xork = bs_xork, .b_xor = bs_xor, .b_lift = bs_lift };
+Word(Secret(UInt(32)), Secret(UInt(8))) = { .w_xor16 = ws_xor16, .w_lift_u8 = ws_lift_u8, .w_xor = ws_xor, .w_and = ws_and, .w_or = ws_or, .w_add = ws_add, .w_addk = ws_addk, .w_xork = ws_xork, .w_andk = ws_andk, .w_rotr = ws_rotr, .w_shr = ws_shr, .w_shl = ws_shl, .w_not = ws_not, .w_lift = ws_lift, .w_from_byte = ws_from_byte, .w_byte = ws_byte, .b_xork = bs_xork, .b_xor = bs_xor, .b_lift = bs_lift };
 
 /// The public bytes `bs` from index `i` on, lifted to B and appended to `acc`.
 @needs(Word(W, B))
@@ -158,6 +177,11 @@ List(Secret(UInt(8))) ct_pick_at(Secret(Bool) take, List(Secret(UInt(8))) a, Lis
     return ct_pick_at(take, a, b, i + 1, out.push(ct_select(take, a[i], b[i])));
 }
 
+/// The packed public bytes `bs` as secret bytes, without a copy.
+/// For public input (a received ciphertext or tag) entering secret
+/// computation; it claims no secrecy for them (classify).
+pub List(Secret(UInt(8))) secret_bytes_u8(List(UInt(8)) bs) { return secret_split(classify(bs)); }
+
 /// The Int byte string `bs` as secret bytes.
 /// Each value is reduced to its low eight bits.
 pub List(Secret(UInt(8))) secret_bytes(List(Int) bs) { return secret_bytes_at(bs, 0, ListBuf()); }
@@ -178,18 +202,30 @@ behavior Word64(W, B) {
     W d_xor(W a, W b);
     W d_and(W a, W b);
     W d_add(W a, W b);          // modulo 2^64
+    W d_or(W a, W b);
+    W d_mul(W a, W b);          // modulo 2^64
     W d_addk(W a, UInt(64) k);
     W d_rotr(W x, Int n);       // 0 < n < 64
     W d_shr(W x, Int n);
+    W d_shl(W x, Int n);        // 0 <= n < 64, modulo 2^64
+    W d_sign(W x);              // all ones when bit 63 of x is set, else 0, without a branch
     W d_not(W x);
     W d_lift(UInt(64) k);
     W d_from_byte(B b);         // a byte (0..255) as a word
     B d_byte(W w, Int sh);      // the byte at bit sh
+    W d_le_lo(List(B) m, Int p);  // bytes p..p+8 little-endian, of the 16 from p (resid_bytes_be16)
+    W d_le_hi(List(B) m, Int p);  // bytes p+8..p+16 little-endian
 }
 
 UInt(64) di_xor(UInt(64) a, UInt(64) b) { return a ^ b; }
 UInt(64) di_and(UInt(64) a, UInt(64) b) { return a & b; }
 UInt(64) di_add(UInt(64) a, UInt(64) b) { return wrapping_uadd(a, b); }
+UInt(64) di_or(UInt(64) a, UInt(64) b) { return a | b; }
+UInt(64) di_mul(UInt(64) a, UInt(64) b) { return wrapping_umul(a, b); }
+UInt(64) di_shl(UInt(64) x, Int n) { return x << (UInt(64)) n; }
+// ct_hide keeps the optimizer from turning the mask, and the selects
+// built on it, back into a branch.
+UInt(64) di_sign(UInt(64) x) { return wrapping_usub((UInt(64)) 0, ct_hide(x >> (UInt(64)) 63)); }
 UInt(64) di_addk(UInt(64) a, UInt(64) k) { return wrapping_uadd(a, k); }
 UInt(64) di_rotr(UInt(64) x, Int n) { return (x >> (UInt(64)) n) | (x << (UInt(64)) (64 - n)); }
 UInt(64) di_shr(UInt(64) x, Int n) { return x >> (UInt(64)) n; }
@@ -197,12 +233,24 @@ UInt(64) di_not(UInt(64) x) { return x ^ (UInt(64)) 18446744073709551615; }
 UInt(64) di_lift(UInt(64) k) { return k; }
 UInt(64) di_from_byte(Int b) { return wrapping_u64(b & 255); }
 Int di_byte(UInt(64) w, Int sh) { return wrapping_i64((w >> (UInt(64)) sh) & (UInt(64)) 255); }
+// The bytes of x reversed (LLVM makes it one bswap).
+UInt(64) di_swap(UInt(64) x) {
+    UInt(64) a = ((x & (UInt(64)) 71777214294589695) << (UInt(64)) 8) | ((x >> (UInt(64)) 8) & (UInt(64)) 71777214294589695);
+    UInt(64) b = ((a & (UInt(64)) 281470681808895) << (UInt(64)) 16) | ((a >> (UInt(64)) 16) & (UInt(64)) 281470681808895);
+    return (b << (UInt(64)) 32) | (b >> (UInt(64)) 32);
+}
+UInt(64) di_le_lo(List(Int) m, Int p) { return di_swap(wrapping_u64(resid_bytes_be16(m, p) >> (UInt(128)) 64)); }
+UInt(64) di_le_hi(List(Int) m, Int p) { return di_swap(wrapping_u64(resid_bytes_be16(m, p))); }
 
-Word64(UInt(64), Int) = { .d_xor = di_xor, .d_and = di_and, .d_add = di_add, .d_addk = di_addk, .d_rotr = di_rotr, .d_shr = di_shr, .d_not = di_not, .d_lift = di_lift, .d_from_byte = di_from_byte, .d_byte = di_byte };
+Word64(UInt(64), Int) = { .d_xor = di_xor, .d_and = di_and, .d_add = di_add, .d_or = di_or, .d_mul = di_mul, .d_shl = di_shl, .d_sign = di_sign, .d_addk = di_addk, .d_rotr = di_rotr, .d_shr = di_shr, .d_not = di_not, .d_lift = di_lift, .d_from_byte = di_from_byte, .d_byte = di_byte, .d_le_lo = di_le_lo, .d_le_hi = di_le_hi };
 
 Secret(UInt(64)) ds_xor(Secret(UInt(64)) a, Secret(UInt(64)) b) { return a ^ b; }
 Secret(UInt(64)) ds_and(Secret(UInt(64)) a, Secret(UInt(64)) b) { return a & b; }
 Secret(UInt(64)) ds_add(Secret(UInt(64)) a, Secret(UInt(64)) b) { return wrapping_uadd(a, b); }
+Secret(UInt(64)) ds_or(Secret(UInt(64)) a, Secret(UInt(64)) b) { return a | b; }
+Secret(UInt(64)) ds_mul(Secret(UInt(64)) a, Secret(UInt(64)) b) { return wrapping_umul(a, b); }
+Secret(UInt(64)) ds_shl(Secret(UInt(64)) x, Int n) { return x << (UInt(64)) n; }
+Secret(UInt(64)) ds_sign(Secret(UInt(64)) x) { return wrapping_usub((UInt(64)) 0, ct_hide(x >> (UInt(64)) 63)); }
 Secret(UInt(64)) ds_addk(Secret(UInt(64)) a, UInt(64) k) { return wrapping_uadd(a, k); }
 Secret(UInt(64)) ds_rotr(Secret(UInt(64)) x, Int n) { return (x >> (UInt(64)) n) | (x << (UInt(64)) (64 - n)); }
 Secret(UInt(64)) ds_shr(Secret(UInt(64)) x, Int n) { return x >> (UInt(64)) n; }
@@ -210,10 +258,17 @@ Secret(UInt(64)) ds_not(Secret(UInt(64)) x) { return x ^ (UInt(64)) 184467440737
 Secret(UInt(64)) ds_lift(UInt(64) k) { return classify(k); }
 Secret(UInt(64)) ds_from_byte(Secret(UInt(8)) b) { return wrapping_u64(b); }
 Secret(UInt(8)) ds_byte(Secret(UInt(64)) w, Int sh) { return wrapping_u8(w >> (UInt(64)) sh); }
+Secret(UInt(64)) ds_swap(Secret(UInt(64)) x) {
+    Secret(UInt(64)) a = ((x & (UInt(64)) 71777214294589695) << (UInt(64)) 8) | ((x >> (UInt(64)) 8) & (UInt(64)) 71777214294589695);
+    Secret(UInt(64)) b = ((a & (UInt(64)) 281470681808895) << (UInt(64)) 16) | ((a >> (UInt(64)) 16) & (UInt(64)) 281470681808895);
+    return (b << (UInt(64)) 32) | (b >> (UInt(64)) 32);
+}
+Secret(UInt(64)) ds_le_lo(List(Secret(UInt(8))) m, Int p) { return ds_swap(wrapping_u64(resid_bytes_be16(m, p) >> (UInt(128)) 64)); }
+Secret(UInt(64)) ds_le_hi(List(Secret(UInt(8))) m, Int p) { return ds_swap(wrapping_u64(resid_bytes_be16(m, p))); }
 
-Word64(Secret(UInt(64)), Secret(UInt(8))) = { .d_xor = ds_xor, .d_and = ds_and, .d_add = ds_add, .d_addk = ds_addk, .d_rotr = ds_rotr, .d_shr = ds_shr, .d_not = ds_not, .d_lift = ds_lift, .d_from_byte = ds_from_byte, .d_byte = ds_byte };
+Word64(Secret(UInt(64)), Secret(UInt(8))) = { .d_xor = ds_xor, .d_and = ds_and, .d_add = ds_add, .d_or = ds_or, .d_mul = ds_mul, .d_shl = ds_shl, .d_sign = ds_sign, .d_addk = ds_addk, .d_rotr = ds_rotr, .d_shr = ds_shr, .d_not = ds_not, .d_lift = ds_lift, .d_from_byte = ds_from_byte, .d_byte = ds_byte, .d_le_lo = ds_le_lo, .d_le_hi = ds_le_hi };
 
-// ─── Wide integers (Poly1305) ───────────────────────────────────
+// ─── Wide integers (Ed25519, X25519) ────────────────────────────
 // Wide512(P, B): signed 512-bit integers P and the bytes B they are read from
 // and written to; instances for public (Int(512), Int) and secret
 // (Secret(Int(512)), Secret(UInt(8))) data. Arithmetic wraps modulo 2^512,
@@ -221,7 +276,9 @@ Word64(Secret(UInt(64)), Secret(UInt(8))) = { .d_xor = ds_xor, .d_and = ds_and, 
 // are public. A wide secret never goes in a list (E0258): generic code
 // keeps P values in records and parameters.
 
-/// Signed 512-bit integer operations, wrapping modulo 2^512 (Poly1305).
+/// Signed 512-bit integer operations, wrapping modulo 2^512, and Poly1305.
+/// p_poly1305 and p_poly1305_aead run Poly1305 in Word64 limbs (pl_*):
+/// lib/chachag.resid reaches them through the Wide512 its callers name.
 behavior Wide512(P, B) {
     P p_add(P a, P b);
     P p_sub(P a, P b);
@@ -236,6 +293,8 @@ behavior Wide512(P, B) {
     P p_lift(Int(512) k);        // a public value taking part
     P p_from_byte(B b);          // a byte (0..255) as a wide integer
     B p_byte(P x, Int sh);       // the byte at bit sh
+    List(B) p_poly1305(List(B) key, List(B) msg);                  // Poly1305's tag (pl_poly1305)
+    List(B) p_poly1305_aead(List(B) key, List(Int) aad, List(B) ct);  // RFC 8439 §2.8's tag (pl_poly1305_aead)
 }
 
 Int(512) pi_add(Int(512) a, Int(512) b) { return wrapping_add(a, b); }
@@ -254,8 +313,10 @@ Int(512) pi_sign(Int(512) x) { return wrapping_i512(ct_hide(wrapping_i64(x >> (I
 Int(512) pi_lift(Int(512) k) { return k; }
 Int(512) pi_from_byte(Int b) { return (Int(512)) (b & 255); }
 Int pi_byte(Int(512) x, Int sh) { return wrapping_i64((x >> (Int(512)) sh) & (Int(512)) 255); }
+List(Int) pi_poly1305(List(Int) key, List(Int) msg) { return pl_poly1305(key, msg); }
+List(Int) pi_poly1305_aead(List(Int) key, List(Int) aad, List(Int) ct) { return pl_poly1305_aead(key, aad, ct); }
 
-Wide512(Int(512), Int) = { .p_add = pi_add, .p_sub = pi_sub, .p_mul = pi_mul, .p_mul256 = pi_mul256, .p_and = pi_and, .p_or = pi_or, .p_xor = pi_xor, .p_shl = pi_shl, .p_shr = pi_shr, .p_sign = pi_sign, .p_lift = pi_lift, .p_from_byte = pi_from_byte, .p_byte = pi_byte };
+Wide512(Int(512), Int) = { .p_poly1305 = pi_poly1305, .p_poly1305_aead = pi_poly1305_aead, .p_add = pi_add, .p_sub = pi_sub, .p_mul = pi_mul, .p_mul256 = pi_mul256, .p_and = pi_and, .p_or = pi_or, .p_xor = pi_xor, .p_shl = pi_shl, .p_shr = pi_shr, .p_sign = pi_sign, .p_lift = pi_lift, .p_from_byte = pi_from_byte, .p_byte = pi_byte };
 
 Secret(Int(512)) ps_add(Secret(Int(512)) a, Secret(Int(512)) b) { return wrapping_add(a, b); }
 Secret(Int(512)) ps_sub(Secret(Int(512)) a, Secret(Int(512)) b) { return wrapping_sub(a, b); }
@@ -270,8 +331,182 @@ Secret(Int(512)) ps_sign(Secret(Int(512)) x) { return wrapping_i512(ct_hide(wrap
 Secret(Int(512)) ps_lift(Int(512) k) { return classify(k); }
 Secret(Int(512)) ps_from_byte(Secret(UInt(8)) b) { return wrapping_i512(b); }
 Secret(UInt(8)) ps_byte(Secret(Int(512)) x, Int sh) { return wrapping_u8(x >> (Int(512)) sh); }
+List(Secret(UInt(8))) ps_poly1305(List(Secret(UInt(8))) key, List(Secret(UInt(8))) msg) { return pl_poly1305(key, msg); }
+List(Secret(UInt(8))) ps_poly1305_aead(List(Secret(UInt(8))) key, List(Int) aad, List(Secret(UInt(8))) ct) { return pl_poly1305_aead(key, aad, ct); }
 
-Wide512(Secret(Int(512)), Secret(UInt(8))) = { .p_add = ps_add, .p_sub = ps_sub, .p_mul = ps_mul, .p_mul256 = ps_mul256, .p_and = ps_and, .p_or = ps_or, .p_xor = ps_xor, .p_shl = ps_shl, .p_shr = ps_shr, .p_sign = ps_sign, .p_lift = ps_lift, .p_from_byte = ps_from_byte, .p_byte = ps_byte };
+Wide512(Secret(Int(512)), Secret(UInt(8))) = { .p_poly1305 = ps_poly1305, .p_poly1305_aead = ps_poly1305_aead, .p_add = ps_add, .p_sub = ps_sub, .p_mul = ps_mul, .p_mul256 = ps_mul256, .p_and = ps_and, .p_or = ps_or, .p_xor = ps_xor, .p_shl = ps_shl, .p_shr = ps_shr, .p_sign = ps_sign, .p_lift = ps_lift, .p_from_byte = ps_from_byte, .p_byte = ps_byte };
+
+// ─── Poly1305 in 26-bit limbs (RFC 8439 §2.5) ───────────────────
+// Wide512's p_poly1305 and p_poly1305_aead, over Word64: the accumulator
+// h and the clamped key r as five 26-bit limbs of 64-bit words, so a
+// 16-byte block costs 25 word multiplies (poly1305-donna's 32-bit
+// schedule) instead of a 512-bit product and reduction. With r clamped
+// every limb product is below 2^56 and a sum of five below 2^59, so no
+// word wraps; carries move by shifts and masks, and the final choice
+// between h and h - p is a mask, never a branch. The block boundaries,
+// the lengths and the padding are public.
+
+/// The Poly1305 accumulator as five 26-bit limbs (h0 lowest); a limb may
+/// exceed 2^26 by a pending carry.
+type Pl26(W) = { W h0; W h1; W h2; W h3; W h4; };
+
+UInt(64) pl_m26() { return (UInt(64)) 67108863; }
+
+// h = (h + block + hib * 2^104) * r mod 2^130 - 5 for each whole block
+// of m in [p, end). hib is 2^24 (the 2^128 of a full block) or 0 (a final
+// partial block, already padded with its 1 byte). s_i = 5 r_i folds the
+// limbs past 2^130 back in.
+@needs(Word64(W, B))
+Pl26(W) pl_run(List(B) m, Int p, Int end, W hib, W r0, W r1, W r2, W r3, W r4, W h0, W h1, W h2, W h3, W h4) {
+    if (p + 16 > end) { return Pl26 {.h0 = h0, .h1 = h1, .h2 = h2, .h3 = h3, .h4 = h4}; }
+    W mk = d_lift(pl_m26());
+    W five = d_lift((UInt(64)) 5);
+    W lo = d_le_lo(m, p);
+    W hi = d_le_hi(m, p);
+    W a0 = d_add(h0, d_and(lo, mk));
+    W a1 = d_add(h1, d_and(d_shr(lo, 26), mk));
+    W a2 = d_add(h2, d_and(d_or(d_shr(lo, 52), d_shl(hi, 12)), mk));
+    W a3 = d_add(h3, d_and(d_shr(hi, 14), mk));
+    W a4 = d_add(h4, d_or(d_shr(hi, 40), hib));
+    W s1 = d_mul(r1, five);
+    W s2 = d_mul(r2, five);
+    W s3 = d_mul(r3, five);
+    W s4 = d_mul(r4, five);
+    W d0 = d_add(d_add(d_add(d_mul(a0, r0), d_mul(a1, s4)), d_add(d_mul(a2, s3), d_mul(a3, s2))), d_mul(a4, s1));
+    W d1 = d_add(d_add(d_add(d_mul(a0, r1), d_mul(a1, r0)), d_add(d_mul(a2, s4), d_mul(a3, s3))), d_mul(a4, s2));
+    W d2 = d_add(d_add(d_add(d_mul(a0, r2), d_mul(a1, r1)), d_add(d_mul(a2, r0), d_mul(a3, s4))), d_mul(a4, s3));
+    W d3 = d_add(d_add(d_add(d_mul(a0, r3), d_mul(a1, r2)), d_add(d_mul(a2, r1), d_mul(a3, r0))), d_mul(a4, s4));
+    W d4 = d_add(d_add(d_add(d_mul(a0, r4), d_mul(a1, r3)), d_add(d_mul(a2, r2), d_mul(a3, r1))), d_mul(a4, r0));
+    W e1 = d_add(d1, d_shr(d0, 26));
+    W e2 = d_add(d2, d_shr(e1, 26));
+    W e3 = d_add(d3, d_shr(e2, 26));
+    W e4 = d_add(d4, d_shr(e3, 26));
+    W g0 = d_add(d_and(d0, mk), d_mul(d_shr(e4, 26), five));
+    W n1 = d_add(d_and(e1, mk), d_shr(g0, 26));
+    return pl_run(m, p + 16, end, hib, r0, r1, r2, r3, r4, d_and(g0, mk), n1, d_and(e2, mk), d_and(e3, mk), d_and(e4, mk));
+}
+
+// pl_run from the accumulator h under the key limbs of `key`.
+@needs(Word64(W, B))
+Pl26(W) pl_blocks(Pl26(W) h, List(B) key, List(B) m, Int p, Int end, UInt(64) hib) {
+    W lo = d_le_lo(key, 0);
+    W hi = d_le_hi(key, 0);
+    W r0 = d_and(lo, d_lift((UInt(64)) 67108863));
+    W r1 = d_and(d_shr(lo, 26), d_lift((UInt(64)) 67108611));
+    W r2 = d_and(d_or(d_shr(lo, 52), d_shl(hi, 12)), d_lift((UInt(64)) 67092735));
+    W r3 = d_and(d_shr(hi, 14), d_lift((UInt(64)) 66076671));
+    W r4 = d_and(d_shr(hi, 40), d_lift((UInt(64)) 1048575));
+    return pl_run(m, p, end, d_lift(hib), r0, r1, r2, r3, r4, h.h0, h.h1, h.h2, h.h3, h.h4);
+}
+
+@needs(Word64(W, B))
+List(B) pl_lift(List(Int) bs, Int i, Int n, ListBuf(B) acc) {
+    if (i >= n) { return acc.finish(); }
+    Int v = if (i < bs.len()) { bs[i] } else { 0 };
+    return pl_lift(bs, i + 1, n, acc.push(d_byte(d_lift(wrapping_u64(v & 255)), 0)));
+}
+
+// Bytes [p, end) of m, then the public bytes `tail`, as one List(B).
+@needs(Word64(W, B))
+List(B) pl_pad(List(B) m, Int p, Int end, List(Int) tail) {
+    ListBuf(B) acc = ListBuf();
+    return m[p..end].concat(pl_lift(tail, 0, tail.len(), acc));
+}
+
+@needs(Word64(W, B))
+Pl26(W) pl_zero() {
+    W z = d_lift((UInt(64)) 0);
+    return Pl26 {.h0 = z, .h1 = z, .h2 = z, .h3 = z, .h4 = z};
+}
+
+List(Int) pl_zeros(Int n, Int i, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return pl_zeros(n, i + 1, acc.push(0));
+}
+
+// h carried through all five limbs, the excess past 2^130 folded back.
+@needs(Word64(W, B))
+Pl26(W) pl_carry(Pl26(W) h) {
+    W mk = d_lift(pl_m26());
+    W x1 = d_add(h.h1, d_shr(h.h0, 26));
+    W x2 = d_add(h.h2, d_shr(x1, 26));
+    W x3 = d_add(h.h3, d_shr(x2, 26));
+    W x4 = d_add(h.h4, d_shr(x3, 26));
+    W x0 = d_add(d_and(h.h0, mk), d_mul(d_shr(x4, 26), d_lift((UInt(64)) 5)));
+    return Pl26 {.h0 = x0, .h1 = d_and(x1, mk), .h2 = d_and(x2, mk), .h3 = d_and(x3, mk), .h4 = d_and(x4, mk)};
+}
+
+// The tag: h fully reduced mod 2^130 - 5 (h - p chosen under the sign mask
+// of h + 5 - 2^130), plus s = key[16..32], mod 2^128, as 16 bytes.
+@needs(Word64(W, B))
+List(B) pl_finish(Pl26(W) h0, List(B) key) {
+    Pl26(W) h = pl_carry(pl_carry(h0));
+    W mk = d_lift(pl_m26());
+    W g0 = d_add(h.h0, d_lift((UInt(64)) 5));
+    W g1 = d_add(h.h1, d_shr(g0, 26));
+    W g2 = d_add(h.h2, d_shr(g1, 26));
+    W g3 = d_add(h.h3, d_shr(g2, 26));
+    W g4 = d_addk(d_add(h.h4, d_shr(g3, 26)), (UInt(64)) 18446744073642442752);
+    // g4 < 0 (as a signed word) when h < p: keep h; else take g = h - p.
+    W keep = d_sign(g4);
+    W take = d_not(keep);
+    W f0 = d_or(d_and(h.h0, keep), d_and(d_and(g0, mk), take));
+    W f1 = d_or(d_and(h.h1, keep), d_and(d_and(g1, mk), take));
+    W f2 = d_or(d_and(h.h2, keep), d_and(d_and(g2, mk), take));
+    W f3 = d_or(d_and(h.h3, keep), d_and(d_and(g3, mk), take));
+    W f4 = d_or(d_and(h.h4, keep), d_and(d_and(g4, mk), take));
+    W m32 = d_lift((UInt(64)) 4294967295);
+    W w0 = d_and(d_or(f0, d_shl(f1, 26)), m32);
+    W w1 = d_and(d_or(d_shr(f1, 6), d_shl(f2, 20)), m32);
+    W w2 = d_and(d_or(d_shr(f2, 12), d_shl(f3, 14)), m32);
+    W w3 = d_and(d_or(d_shr(f3, 18), d_shl(f4, 8)), m32);
+    W slo = d_le_lo(key, 16);
+    W shi = d_le_hi(key, 16);
+    W t0 = d_add(w0, d_and(slo, m32));
+    W t1 = d_add(d_add(w1, d_shr(slo, 32)), d_shr(t0, 32));
+    W t2 = d_add(d_add(w2, d_and(shi, m32)), d_shr(t1, 32));
+    W t3 = d_add(d_add(w3, d_shr(shi, 32)), d_shr(t2, 32));
+    return [d_byte(t0, 0), d_byte(t0, 8), d_byte(t0, 16), d_byte(t0, 24), d_byte(t1, 0), d_byte(t1, 8), d_byte(t1, 16), d_byte(t1, 24),
+            d_byte(t2, 0), d_byte(t2, 8), d_byte(t2, 16), d_byte(t2, 24), d_byte(t3, 0), d_byte(t3, 8), d_byte(t3, 16), d_byte(t3, 24)];
+}
+
+/// The 16-byte Poly1305 tag of `msg` under the 32-byte one-time key
+/// r || s (r clamped here), in 26-bit limbs; Wide512's p_poly1305.
+@needs(Word64(W, B))
+pub List(B) pl_poly1305(List(B) key, List(B) msg) {
+    Int whole = msg.len() - msg.len() % 16;
+    Pl26(W) h = pl_blocks(pl_zero(), key, msg, 0, whole, (UInt(64)) 16777216);
+    Int rest = msg.len() - whole;
+    if (rest == 0) { return pl_finish(h, key); }
+    // The last partial block: its bytes, then 1, then zeros, and no 2^128.
+    List(B) last = pl_pad(msg, whole, msg.len(), [1].concat(pl_zeros(15 - rest, 0, ListBuf())));
+    return pl_finish(pl_blocks(h, key, last, 0, 16, (UInt(64)) 0), key);
+}
+
+/// The ChaCha20-Poly1305 tag (RFC 8439 §2.8) under the one-time key `key`:
+/// Poly1305 of aad, zeros to a multiple of 16, ct, zeros to a multiple of
+/// 16, and the two lengths as 64-bit little-endian words, without building
+/// that string. Wide512's p_poly1305_aead.
+@needs(Word64(W, B))
+pub List(B) pl_poly1305_aead(List(B) key, List(Int) aad, List(B) ct) {
+    UInt(64) full = (UInt(64)) 16777216;
+    Int apad = (16 - aad.len() % 16) % 16;
+    ListBuf(B) ab = ListBuf();
+    List(B) a = pl_lift(aad, 0, aad.len() + apad, ab);
+    Pl26(W) h1 = pl_blocks(pl_zero(), key, a, 0, a.len(), full);
+    Int whole = ct.len() - ct.len() % 16;
+    Pl26(W) h2 = pl_blocks(h1, key, ct, 0, whole, full);
+    Int rest = ct.len() - whole;
+    Pl26(W) h3 = if (rest == 0) { h2 } else { pl_blocks(h2, key, pl_pad(ct, whole, ct.len(), pl_zeros(16 - rest, 0, ListBuf())), 0, 16, full) };
+    List(Int) lens = pl_le64_pub(aad.len(), 0, ListBuf()).concat(pl_le64_pub(ct.len(), 0, ListBuf()));
+    ListBuf(B) lb = ListBuf();
+    return pl_finish(pl_blocks(h3, key, pl_lift(lens, 0, 16, lb), 0, 16, full), key);
+}
+
+List(Int) pl_le64_pub(Int v, Int i, ListBuf(Int) acc) {
+    if (i >= 8) { return acc.finish(); }
+    return pl_le64_pub(v, i + 1, acc.push((v >> (8 * i)) & 255));
+}
 
 // ─── Publishing (signatures, public keys) ───────────────────────
 // Publish(B): turn a byte string computed in B into public bytes, for an
@@ -334,6 +569,7 @@ behavior Block128(X, W, B) {
     X x_aes_round(X s, X k);     // aesni_enc_round
     X x_aes_last(X s, X k);      // aesni_enc_last_round
     X x_clmul(X a, X b);         // gf128_mul_hw
+    X x_clmul4(X a0, X b0, X a1, X b1, X a2, X b2, X a3, X b3);  // a0 b0 ^ .. ^ a3 b3, one reduction (gf128_mul4_hw)
     X x_be16(List(B) d, Int p);  // bytes p..p+16 of d, big-endian (resid_bytes_be16)
     ListBuf(B) x_xor16(ListBuf(B) o, List(B) d, Int p, X ks);    // d[p..p+16] ^ ks pushed (resid_bytes_xor16)
     ListBuf(B) x_xor16_pub(ListBuf(B) o, List(Int) d, Int p, X ks);  // the same from public bytes
@@ -354,10 +590,11 @@ UInt(128) xi_bit(UInt(128) x, Int i) { return wrapping_usub((UInt(128)) 0, wrapp
 UInt(128) xi_aes_round(UInt(128) s, UInt(128) k) { return aesni_enc_round(s, k); }
 UInt(128) xi_aes_last(UInt(128) s, UInt(128) k) { return aesni_enc_last_round(s, k); }
 UInt(128) xi_clmul(UInt(128) a, UInt(128) b) { return gf128_mul_hw(a, b); }
+UInt(128) xi_clmul4(UInt(128) a0, UInt(128) b0, UInt(128) a1, UInt(128) b1, UInt(128) a2, UInt(128) b2, UInt(128) a3, UInt(128) b3) { return gf128_mul4_hw(a0, b0, a1, b1, a2, b2, a3, b3); }
 UInt(128) xi_be16(List(Int) d, Int p) { return resid_bytes_be16(d, p); }
 ListBuf(Int) xi_xor16(ListBuf(Int) o, List(Int) d, Int p, UInt(128) ks) { return resid_bytes_xor16(o, d, p, ks); }
 
-Block128(UInt(128), Int, Int) = { .x_xor = xi_xor, .x_and = xi_and, .x_or = xi_or, .x_shl = xi_shl, .x_shr = xi_shr, .x_lift = xi_lift, .x_from_word = xi_from_word, .x_word = xi_word, .x_from_byte = xi_from_byte, .x_byte = xi_byte, .x_bit = xi_bit, .x_be16 = xi_be16, .x_xor16 = xi_xor16, .x_xor16_pub = xi_xor16, .x_aes_round = xi_aes_round, .x_aes_last = xi_aes_last, .x_clmul = xi_clmul };
+Block128(UInt(128), Int, Int) = { .x_xor = xi_xor, .x_and = xi_and, .x_or = xi_or, .x_shl = xi_shl, .x_shr = xi_shr, .x_lift = xi_lift, .x_from_word = xi_from_word, .x_word = xi_word, .x_from_byte = xi_from_byte, .x_byte = xi_byte, .x_bit = xi_bit, .x_be16 = xi_be16, .x_xor16 = xi_xor16, .x_xor16_pub = xi_xor16, .x_aes_round = xi_aes_round, .x_aes_last = xi_aes_last, .x_clmul = xi_clmul, .x_clmul4 = xi_clmul4 };
 
 Secret(UInt(128)) xs_xor(Secret(UInt(128)) a, Secret(UInt(128)) b) { return a ^ b; }
 Secret(UInt(128)) xs_and(Secret(UInt(128)) a, Secret(UInt(128)) b) { return a & b; }
@@ -373,8 +610,9 @@ Secret(UInt(128)) xs_bit(Secret(UInt(128)) x, Int i) { return wrapping_usub((UIn
 Secret(UInt(128)) xs_aes_round(Secret(UInt(128)) s, Secret(UInt(128)) k) { return aesni_enc_round(s, k); }
 Secret(UInt(128)) xs_aes_last(Secret(UInt(128)) s, Secret(UInt(128)) k) { return aesni_enc_last_round(s, k); }
 Secret(UInt(128)) xs_clmul(Secret(UInt(128)) a, Secret(UInt(128)) b) { return gf128_mul_hw(a, b); }
+Secret(UInt(128)) xs_clmul4(Secret(UInt(128)) a0, Secret(UInt(128)) b0, Secret(UInt(128)) a1, Secret(UInt(128)) b1, Secret(UInt(128)) a2, Secret(UInt(128)) b2, Secret(UInt(128)) a3, Secret(UInt(128)) b3) { return gf128_mul4_hw(a0, b0, a1, b1, a2, b2, a3, b3); }
 Secret(UInt(128)) xs_be16(List(Secret(UInt(8))) d, Int p) { return resid_bytes_be16(d, p); }
 ListBuf(Secret(UInt(8))) xs_xor16(ListBuf(Secret(UInt(8))) o, List(Secret(UInt(8))) d, Int p, Secret(UInt(128)) ks) { return resid_bytes_xor16(o, d, p, ks); }
 ListBuf(Secret(UInt(8))) xs_xor16_pub(ListBuf(Secret(UInt(8))) o, List(Int) d, Int p, Secret(UInt(128)) ks) { return resid_bytes_xor16(o, d, p, ks); }
 
-Block128(Secret(UInt(128)), Secret(UInt(32)), Secret(UInt(8))) = { .x_xor = xs_xor, .x_and = xs_and, .x_or = xs_or, .x_shl = xs_shl, .x_shr = xs_shr, .x_lift = xs_lift, .x_from_word = xs_from_word, .x_word = xs_word, .x_from_byte = xs_from_byte, .x_byte = xs_byte, .x_bit = xs_bit, .x_be16 = xs_be16, .x_xor16 = xs_xor16, .x_xor16_pub = xs_xor16_pub, .x_aes_round = xs_aes_round, .x_aes_last = xs_aes_last, .x_clmul = xs_clmul };
+Block128(Secret(UInt(128)), Secret(UInt(32)), Secret(UInt(8))) = { .x_xor = xs_xor, .x_and = xs_and, .x_or = xs_or, .x_shl = xs_shl, .x_shr = xs_shr, .x_lift = xs_lift, .x_from_word = xs_from_word, .x_word = xs_word, .x_from_byte = xs_from_byte, .x_byte = xs_byte, .x_bit = xs_bit, .x_be16 = xs_be16, .x_xor16 = xs_xor16, .x_xor16_pub = xs_xor16_pub, .x_aes_round = xs_aes_round, .x_aes_last = xs_aes_last, .x_clmul = xs_clmul, .x_clmul4 = xs_clmul4 };

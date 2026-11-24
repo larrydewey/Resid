@@ -1,0 +1,18 @@
+// read_range, write_at, sync and truncate: bytes written in place (the
+// file created, a hole zero-filled, an overwrite in the middle), read back
+// by range, a short read at the end, and a file cut and extended.
+@requires(filesystem)
+Int main() {
+    Str p = "@TMP@/pos.bin";
+    println(f"{filesystem.write_at(p, 0, [104, 101, 108, 108, 111])}");
+    println(f"{filesystem.write_at(p, 8, [33, 33])} {filesystem.size(p)}");
+    println(f"{filesystem.read_range(p, 0, 100)}");
+    println(f"{filesystem.write_at(p, 1, [69, 76])} {filesystem.read_range(p, 0, 5)}");
+    println(f"{filesystem.read_range(p, 8, 5)} {filesystem.read_range(p, 20, 5)} {filesystem.read_range("@TMP@/none.bin", 0, 5)}");
+    List(UInt(8)) packed = [7, 8, 9];
+    println(f"{filesystem.write_at(p, 2, packed)} {filesystem.read_range(p, 0, 6)}");
+    println(f"{filesystem.sync(p)} {filesystem.sync("@TMP@")} {filesystem.sync("@TMP@/none.bin")}");
+    println(f"{filesystem.truncate(p, 3)} {filesystem.read_range(p, 0, 10)}");
+    println(f"{filesystem.truncate(p, 6)} {filesystem.read_range(p, 0, 10)}");
+    return 0;
+}

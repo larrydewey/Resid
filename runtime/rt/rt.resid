@@ -39,3 +39,4 @@ import "region.resid";
 import "native.resid";
 import "device.resid";
 import "unix.resid";
+import "fsio.resid";

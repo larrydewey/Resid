@@ -327,3 +327,11 @@ pub Int tls_accept_loop(Int lfd, TlsCfg conf, HttpReply closure(HttpRequest) han
 pub Int tls_stream_loop(Int lfd, TlsCfg conf, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
     return http_stream_loop_where(lfd, conf, handler, lim, max_conns);
 }
+
+/// Accept and serve TLS connections from a stateful event loop: as
+/// `http_state_loop_where` (lib/httpserv.resid), whose handler and stream
+/// ticks see the application state the loop threads.
+@requires(network(readonly), declassify)
+pub HttpLoopEnd(A) tls_state_loop(Int lfd, TlsCfg conf, A init, HttpTurn(A, K) closure(A, HttpRequest) handler, HttpStep(K) closure(A, K) tick, HttpLimits lim, Int max_conns) {
+    return http_state_loop_where(lfd, conf, init, handler, tick, lim, max_conns);
+}

@@ -1,0 +1,24 @@
+// The piecewise file verbs are checked at run time too (spec §21.3): a
+// closure made in main, called in `sandbox (filesystem(readonly))`, may
+// read through a File but not create one or write through one. Each call
+// is made inside a spawn, so a refusal fails that region only.
+sandbox (filesystem(readonly)) {
+    Int run_ro(Int closure(Int) f, Int x) { return f(x); }
+}
+
+@requires(filesystem)
+Int main() {
+    Int closure(Int) rd = lambda(v) { filesystem.read_at(filesystem.open("@TMP@/in.txt"), 0, 8).len() + v };
+    Int closure(Int) mk = lambda(v) { if (filesystem.is_open(filesystem.create("@TMP@/sb.bin"))) { v } else { -1 } };
+    Int closure(Int) put = lambda(v) { if (filesystem.write_handle(filesystem.open("@TMP@/in.txt"), [v])) { v } else { -1 } };
+    Int r = rt 0;
+    println(report("read", spawn (filesystem) { return run_ro(rd, r); }));
+    println(report("create", spawn (filesystem) { return run_ro(mk, r); }));
+    println(report("write", spawn (filesystem) { return run_ro(put, r); }));
+    println(f"created: {filesystem.exists("@TMP@/sb.bin")}");
+    return 0;
+}
+
+Str report(Str what, Result(Int, RegionError) r) {
+    return match r { Ok(n) => f"{what}: ok {n}", Err(e) => what + ": failed: " + e.message };
+}

@@ -1,0 +1,30 @@
+// resid_bytes_cmp orders two ranges of packed byte lists; read_range_u8
+// reads part of a file as packed bytes.
+List(UInt(8)) bytes(Str s, Int i, ListBuf(UInt(8)) acc) {
+    return if (i >= str_len(s)) { acc.finish() } else { bytes(s, i + 1, acc.push((UInt(8))str_char_at(s, i))) };
+}
+
+Int whole(Str a, Str b) {
+    List(UInt(8)) x = bytes(a, 0, ListBuf());
+    List(UInt(8)) y = bytes(b, 0, ListBuf());
+    return resid_bytes_cmp(x, 0, x.len(), y, 0, y.len());
+}
+
+@requires(filesystem)
+Int main() {
+    println(f"{whole("abc", "abc")} {whole("abc", "abd")} {whole("abd", "abc")} {whole("ab", "abc")} {whole("abc", "ab")} {whole("", "")} {whole("", "a")}");
+    // A difference past the first word, and in the last byte of one.
+    println(f"{whole("0123456789abcdefX", "0123456789abcdefY")} {whole("01234567", "01234568")} {whole("0123456789abcdef", "0123456789abcdef")}");
+    // Bytes order unsigned.
+    List(UInt(8)) hi = [200, 1];
+    List(UInt(8)) lo = [100, 1];
+    println(f"{resid_bytes_cmp(hi, 0, 2, lo, 0, 2)} {resid_bytes_cmp(hi, 1, 1, lo, 1, 1)}");
+    // Ranges inside longer lists.
+    List(UInt(8)) page = bytes("..key-b..key-a..", 0, ListBuf());
+    println(f"{resid_bytes_cmp(page, 2, 5, page, 9, 5)} {resid_bytes_cmp(page, 2, 4, page, 9, 4)}");
+    Bool w = filesystem.write_at("@TMP@/r.bin", 0, bytes("hello, packed world", 0, ListBuf()));
+    List(UInt(8)) part = filesystem.read_range_u8("@TMP@/r.bin", 7, 6);
+    List(UInt(8)) want = bytes("packed", 0, ListBuf());
+    println(f"{part.len()} {resid_bytes_cmp(part, 0, part.len(), want, 0, want.len())} {filesystem.read_range_u8("@TMP@/r.bin", 100, 4).len()}");
+    return 0;
+}
