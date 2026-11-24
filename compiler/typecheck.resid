@@ -3069,6 +3069,19 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (a.len() == 6 && a[0] == "List(UInt(8))" && a[3] == "List(UInt(8))" && bx_int(a[1]) && bx_int(a[2]) && bx_int(a[4]) && bx_int(a[5])) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects (List(UInt(8)), Int, Int, List(UInt(8)), Int, Int), got (" + argtys + ")"};
     }
+    // resid_bytes_append(b, xs, from, n): builder b with bytes from..from + n
+    // of xs pushed in one copy. resid_crc32c(xs, from, n, state): CRC-32C of
+    // that range continuing from state (the running value, not complemented).
+    if (name == "resid_bytes_append") {
+        List(Str) a = str_split(argtys, ",");
+        if (a.len() == 4 && a[0] == "ListBuf(UInt(8))" && a[1] == "List(UInt(8))" && bx_int(a[2]) && bx_int(a[3])) { return ERes {.pos = pos, .ty = a[0], .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (ListBuf(UInt(8)), List(UInt(8)), Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_crc32c") {
+        List(Str) a = str_split(argtys, ",");
+        if (a.len() == 4 && a[0] == "List(UInt(8))" && bx_int(a[1]) && bx_int(a[2]) && bx_int(a[3])) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (List(UInt(8)), Int, Int, Int), got (" + argtys + ")"};
+    }
     if (name == "resid_bytes_xor16") {
         List(Str) a = str_split(argtys, ",");
         Bool shape = a.len() == 4 && str_starts_with(a[0], "ListBuf(") && str_starts_with(a[1], "List(");

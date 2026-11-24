@@ -1,0 +1,33 @@
+// resid_bytes_append copies a byte range onto a builder; resid_crc32c is
+// CRC-32C over a range, chained through its running state.
+List(UInt(8)) digits(Int i, Int n, ListBuf(UInt(8)) acc) {
+    if (i >= n) { return acc.finish(); }
+    return digits(i + 1, n, acc.push((UInt(8)) (49 + i % 9)));
+}
+
+Int crc(List(UInt(8)) b) { return resid_crc32c(b, 0, b.len(), 4294967295) ^ 4294967295; }
+
+Int slow(List(UInt(8)) b, Int i, Int c) {
+    if (i >= b.len()) { return c ^ 4294967295; }
+    return slow(b, i + 1, step((c ^ (Int) b[i]) & 4294967295, 0));
+}
+
+Int step(Int c, Int k) {
+    if (k >= 8) { return c; }
+    return step(if ((c & 1) == 1) { 2197175160 ^ (c >> 1) } else { c >> 1 }, k + 1);
+}
+
+Int main() {
+    List(UInt(8)) nine = digits(0, 9, ListBuf());
+    println(f"{crc(nine)}");
+    List(UInt(8)) long = digits(0, 1000, ListBuf());
+    println(f"{crc(long) == slow(long, 0, 4294967295)}");
+    Int part = resid_crc32c(long, 0, 333, 4294967295);
+    println(f"{(resid_crc32c(long, 333, 667, part) ^ 4294967295) == crc(long)}");
+    println(f"{crc(long[0..0])}");
+    ListBuf(UInt(8)) b0 = ListBuf();
+    List(UInt(8)) joined = resid_bytes_append(resid_bytes_append(resid_bytes_append(b0.push((UInt(8)) 7), nine, 2, 3), long, 0, 1000), nine, 9, 0).push((UInt(8)) 8).finish();
+    println(f"{joined.len()} {joined[0]} {joined[1]} {joined[3]} {joined[4]} {joined[1003]} {joined[1004]}");
+    println(f"{crc(joined[4..1004]) == crc(long)}");
+    return 0;
+}

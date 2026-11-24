@@ -434,3 +434,90 @@ pub Int bl_xor16(Int b, Int l, Int p, Int lo, Int hi) {
     _ = st64(b, n + 16);
     return st64(f, n + 16) * 0 + b;
 }
+
+// ─── Ranges at once: append and CRC-32C ────────────────────────────────
+
+// Builder b with bytes from..from + n of l pushed: room made once, then
+// one copy when both are packed bytes.
+@export("resid_bytes_append", "ptr(ptr,ptr,i64,i64)")
+pub Int rt_bytes_append(Int b, Int l, Int from, Int n) {
+    if (from < 0 || n < 0 || from > lcount(l) - n) { return rt_index_abort(from + n, lcount(l), 0); }
+    if (n == 0) { return b; }
+    Int c = lcount(b);
+    if (!lbytes(b) && c > 0) { return ba_each(b, l, from, from + n); }
+    _ = st64(b + 24, bl_kind(b));
+    Int f0 = lroot(b);
+    Int f = if (f0 == 0 || c + n > ld64(f0 + 8)) { bl_buf_grow(b, f0, c, c + n) } else { f0 };
+    _ = if (lbytes(l)) { mcopy(f + 24 + c, lroot(l) + 24 + from, n) } else { ba_fill(f + 24 + c, l, from, from + n) };
+    _ = st64(b, c + n);
+    return st64(f, c + n) * 0 + b;
+}
+
+Int ba_each(Int b, Int l, Int i, Int to) {
+    if (i >= to) { return b; }
+    return ba_each(rt_bl_buf_push(b, list_at_k(l, i) & 255), l, i + 1, to);
+}
+
+Int ba_fill(Int d, Int l, Int i, Int to) {
+    if (i >= to) { return 0; }
+    _ = st8(d, list_at_k(l, i) & 255);
+    return ba_fill(d + 1, l, i + 1, to);
+}
+
+// CRC-32C (Castagnoli, reflected polynomial 0x82F63B78) of bytes
+// from..from + n of l, continuing from `state`: the running value without
+// the final complement, so a caller starts at 0xFFFFFFFF, chains ranges,
+// and complements at the end. Eight tables of 256 words, built once a
+// thread, take a word of input a step.
+@export("resid_crc32c", "i64(ptr,i64,i64,i64)")
+pub Int rt_crc32c(Int l, Int from, Int n, Int state) {
+    if (from < 0 || n < 0 || from > lcount(l) - n) { return rt_index_abort(from + n, lcount(l), 0); }
+    Int t = crc_tables();
+    Int c = state & 4294967295;
+    if (lbytes(l)) { return crc_words(t, lroot(l) + 24 + from, n, c); }
+    return crc_each(t, l, from, from + n, c);
+}
+
+Int crc_tables() {
+    Int t = resid_raw_tls("rt_crc32c", 16392);
+    if (ld64(t + 16384) != 0) { return t; }
+    _ = crc_t0(t, 0) + crc_tk(t, 1, 0);
+    return st64(t + 16384, 1) * 0 + t;
+}
+
+Int crc_bit(Int c, Int k) {
+    if (k >= 8) { return c; }
+    return crc_bit(if ((c & 1) == 1) { 2197175160 ^ (c >> 1) } else { c >> 1 }, k + 1);
+}
+
+Int crc_t0(Int t, Int i) {
+    if (i >= 256) { return 0; }
+    _ = st64(t + i * 8, crc_bit(i, 0));
+    return crc_t0(t, i + 1);
+}
+
+Int crc_tk(Int t, Int k, Int i) {
+    if (k >= 8) { return 0; }
+    if (i >= 256) { return crc_tk(t, k + 1, 0); }
+    Int p = ld64(t + (k - 1) * 2048 + i * 8);
+    _ = st64(t + k * 2048 + i * 8, (p >> 8) ^ ld64(t + (p & 255) * 8));
+    return crc_tk(t, k, i + 1);
+}
+
+Int crc_words(Int t, Int p, Int n, Int c) {
+    if (n < 8) { return crc_bytes(t, p, n, c); }
+    Int w = ld64(p) ^ c;
+    Int x = ld64(t + 14336 + (w & 255) * 8) ^ ld64(t + 12288 + ((w >> 8) & 255) * 8) ^ ld64(t + 10240 + ((w >> 16) & 255) * 8) ^ ld64(t + 8192 + ((w >> 24) & 255) * 8)
+          ^ ld64(t + 6144 + ((w >> 32) & 255) * 8) ^ ld64(t + 4096 + ((w >> 40) & 255) * 8) ^ ld64(t + 2048 + ((w >> 48) & 255) * 8) ^ ld64(t + ((w >> 56) & 255) * 8);
+    return crc_words(t, p + 8, n - 8, x);
+}
+
+Int crc_bytes(Int t, Int p, Int n, Int c) {
+    if (n <= 0) { return c; }
+    return crc_bytes(t, p + 1, n - 1, ld64(t + ((c ^ ld8(p)) & 255) * 8) ^ (c >> 8));
+}
+
+Int crc_each(Int t, Int l, Int i, Int to, Int c) {
+    if (i >= to) { return c; }
+    return crc_each(t, l, i + 1, to, ld64(t + ((c ^ list_at_k(l, i)) & 255) * 8) ^ (c >> 8));
+}
