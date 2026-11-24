@@ -647,6 +647,44 @@ UInt(128) b16_be16_slow(Int l, Int p) {
     return (hi << (UInt(128)) 64) | lo;
 }
 
+// How bytes ao..ao + an of a and bo..bo + bn of b order (unsigned, byte
+// by byte, a prefix first): 0 when equal, otherwise i + 1 with i the first
+// place they differ (the shorter's length when it is a prefix), negative
+// when a's range sorts first. Packed byte lists compare a word at a time.
+@export("resid_bytes_cmp", "i64(ptr,i64,i64,ptr,i64,i64)")
+pub Int rt_bytes_cmp(Int a, Int ao, Int an, Int b, Int bo, Int bn) {
+    _ = bc_check(a, ao, an) + bc_check(b, bo, bn);
+    Int m = if (an < bn) { an } else { bn };
+    if (lbytes(a) && lbytes(b)) { return bc_words(lroot(a) + 24 + ao, an, lroot(b) + 24 + bo, bn, 0, m); }
+    return bc_slow(a, ao, an, b, bo, bn, 0, m);
+}
+
+Int bc_check(Int l, Int o, Int n) {
+    if (o < 0 || n < 0 || o > lcount(l) - n) { return rt_index_abort(o + n, lcount(l), 0); }
+    return 0;
+}
+
+Int bc_words(Int p, Int an, Int q, Int bn, Int i, Int m) {
+    if (i + 8 <= m && ld64(p + i) == ld64(q + i)) { return bc_words(p, an, q, bn, i + 8, m); }
+    return bc_tail(p, an, q, bn, i, m);
+}
+
+Int bc_tail(Int p, Int an, Int q, Int bn, Int i, Int m) {
+    if (i >= m) { return if (an == bn) { 0 } else { if (an < bn) { 0 - (m + 1) } else { m + 1 } }; }
+    Int x = ld8(p + i);
+    Int y = ld8(q + i);
+    if (x != y) { return if (x < y) { 0 - (i + 1) } else { i + 1 }; }
+    return bc_tail(p, an, q, bn, i + 1, m);
+}
+
+Int bc_slow(Int a, Int ao, Int an, Int b, Int bo, Int bn, Int i, Int m) {
+    if (i >= m) { return if (an == bn) { 0 } else { if (an < bn) { 0 - (m + 1) } else { m + 1 } }; }
+    Int x = list_at_k(a, ao + i) & 255;
+    Int y = list_at_k(b, bo + i) & 255;
+    if (x != y) { return if (x < y) { 0 - (i + 1) } else { i + 1 }; }
+    return bc_slow(a, ao, an, b, bo, bn, i + 1, m);
+}
+
 // Builder b with bytes p..p + 16 of l pushed, byte i XORed with bits
 // 8i..8i + 7 of ks (a CTR keystream block): room for all 16 made once,
 // then the slots written.

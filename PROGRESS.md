@@ -148,6 +148,20 @@ region, with no diagnostic.
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.
 
+### 0zzb. Byte-range compare, packed positioned reads (2026-11-24)
+
+For BurrowDB, which is moving its keys, rows and pages to packed bytes.
+
+- **`resid_bytes_cmp(a, a_from, a_len, b, b_from, b_len)`**: how two
+  ranges of `List(UInt(8))` order, unsigned and byte by byte, compared a
+  word at a time. 0 when equal; otherwise `i + 1` with `i` the first place
+  they differ (the shorter's length when it is a prefix), negative when
+  `a`'s range sorts first. A range outside its list aborts as an index
+  does. A loop over the elements in Resid cost about 2 ns a byte.
+- **`filesystem.read_range_u8(path, offset, n)`**: `read_range` as
+  `List(UInt(8))`, no widening.
+- Test: `bytes_cmp_and_read_range_u8`.
+
 ### 0zza. Large objects in loop regions; packed file reads (2026-11-20)
 
 Found through Pylon: `pylon put` of a 20 MB file peaked at 1.08 GB (40 MB

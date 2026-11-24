@@ -2629,7 +2629,7 @@ Str gk_provider_params(Str fam, Str m) {
     if (m == "read_at") { return "File,Int,Int"; }
     if (m == "write_all" || m == "write_hex" || m == "append_hex" || m == "rename") { return "Str,Str"; }
     if (m == "write_bytes" || m == "write_secret" || m == "append_bytes") { return "Str,List(Int)"; }
-    if (m == "read_range") { return "Str,Int,Int"; }
+    if (m == "read_range" || m == "read_range_u8") { return "Str,Int,Int"; }
     if (m == "write_at") { return "Str,Int,List(Int)"; }
     if (m == "sync") { return "Str"; }
     if (m == "truncate") { return "Str,Int"; }
@@ -2675,6 +2675,7 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
         if (m == "remove" || m == "rename") { return gt(k, "Bool", id); }
         if (m == "size" || m == "modified_ms") { return gt(k, "Int", id); }
         if (m == "read_range") { return gt(k, "List(Int)", id); }
+        if (m == "read_range_u8") { return gt(k, "List(UInt(8))", id); }
         if (m == "write_at" || m == "sync" || m == "truncate") { return gt(k, "Bool", id); }
     }
     if (fam == "args" && m == "count") { return gt(k, "Int", id); }
