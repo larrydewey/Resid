@@ -1,0 +1,1 @@
+error[E0298]: register block Blk: a (offset 0, 4 bytes) and b (offset 2, 2 bytes) overlap

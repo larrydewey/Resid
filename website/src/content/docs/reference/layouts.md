@@ -143,6 +143,34 @@ literal sets to clear the bit or leaves out to keep it. Writing back a
 value that was read writes zero there, so it never clears an event the
 driver has not handled.
 
-This is the second stage of device registers
-(`PLAN-hardware-access.md` §11): sum-typed fields, reads with an effect
-and regions are not here yet.
+## Register blocks
+
+A device's registers are a record of word types marked
+`@registers(size = N)`, each at the byte offset its datasheet gives:
+
+```resid
+@word(32) type AddrLo = { UInt(32) bits; };
+@word(32) type AddrHi = { UInt(32) bits; };
+
+@registers(size = 0x100)
+type QueueRegs = {
+    @at(0x80) AddrLo desc_lo;
+    @at(0x84) AddrHi desc_hi;
+};
+
+Int main() {
+    Reg(AddrHi) hi = queue_regs_desc_hi();
+    println(f"{queue_regs_size()} {hi.off} {hi.bits}");     //> 256 132 32
+    return 0;
+}
+```
+
+An offset is a multiple of its register's size, every register lies
+inside the block, and no two overlap; a gap is an offset nothing claims.
+For each register the compiler writes a handle, a `Reg(T)` typed by the
+register's word (`queue_regs_desc_hi()` is a `Reg(AddrHi)`), holding its
+offset and width, and `queue_regs_size()`. A malformed block is `E0298`.
+
+The handles are what reading and writing a device's memory will take.
+That part, and sum-typed fields and reads with an effect, are not here
+yet (`PLAN-hardware-access.md` §11).

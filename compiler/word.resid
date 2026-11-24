@@ -32,6 +32,9 @@
 // are ignored when read and the driver's fields read as zero, so every
 // word is some record and reading cannot fail.
 //
+// A `@registers(size = N)` record of word types is a device's register
+// block (Register blocks, below).
+//
 // Not here yet: sum-typed fields and `@clears_on_read`.
 //
 // Imported by compiler/driver.resid.
@@ -44,8 +47,8 @@ import "layout.resid";
 // half of a latch).
 type WdF = { Str name; Str ty; Int bits; Int off; Str mode; };
 
-// A word type that was declared: its name and fields.
-type WdT = { Str name; List(WdF) fs; };
+// A word type that was declared: its name, its width in bits, its fields.
+type WdT = { Str name; Int width; List(WdF) fs; };
 
 // One scan step: the rewritten text so far, where the scan is, what has
 // been generated, the types found, and an error (code "" when none).
@@ -189,7 +192,7 @@ WdS wd_decl(Str s, Int k, WdS st) {
     Str modes = wd_modes(b.fs, 0, "");
     List(Str) o1 = if (modes == "") { wd_blank(st.out, s, k, e) } else { st.out.concat([wd_in_place(s, k, e, "@word_modes(" + modes + ")")]) };
     List(Str) o2 = wd_copy(o1, s, e, ob + 1).concat(b.out).concat(["}"]);
-    return WdS {.out = o2, .i = cb, .gen = st.gen + wd_gen(name, width, b.fs), .ts = st.ts.concat([WdT {.name = name, .fs = b.fs}]), .code = "", .err = "", .at = -1};
+    return WdS {.out = o2, .i = cb, .gen = st.gen + wd_gen(name, width, b.fs), .ts = st.ts.concat([WdT {.name = name, .width = width, .fs = b.fs}]), .code = "", .err = "", .at = -1};
 }
 
 Bool wd_any_named(List(WdF) fs, Int i) {
@@ -438,12 +441,162 @@ LyR wd_lits_all(Str s, List(WdT) ts, Int i) {
     return wd_lits_all(str_join(r.out, ""), ts, i + 1);
 }
 
+// ─── Register blocks ────────────────────────────────────────────────
+// `@registers(size = N) type Name = { @at(off) WordType name; ... };` is a
+// device's registers: each a word type at its byte offset, as a datasheet
+// gives them. An offset is a multiple of its register's size, every
+// register lies inside the N bytes, and no two overlap (E0298); a gap is
+// an offset nothing claims. The annotations are blanked, so the checker
+// sees a record of the word types, and for each register a typed handle
+// is written:
+//
+//   Reg(VirtioStatus) virtio_regs_status()     (.off = 112, .bits = 32)
+//   Int virtio_regs_size()
+//
+// `Reg(T)` is declared once, after the program, when a block is present.
+
+// A register: its name, its word type, its offset and size in bytes.
+type WdR = { Str name; Str ty; Int off; Int bytes; };
+
+// The registers of one block as they are read.
+type WdRB = { List(WdR) rs; List(Str) out; Int i; Str err; Int at; };
+
+// A decimal or 0x number, or -1.
+Int wd_num(Str t0) {
+    Str t = str_trim(t0);
+    if (str_starts_with(t, "0x") || str_starts_with(t, "0X")) { return if (str_len(t) > 2 && str_len(t) <= 14) { wd_hex(t, 2, 0) } else { -1 }; }
+    return if (str_is_int(t) && str_len(t) <= 15 && str_parse_int(t) >= 0) { str_parse_int(t) } else { -1 };
+}
+
+Int wd_hex(Str t, Int i, Int acc) {
+    if (i >= str_len(t)) { return acc; }
+    Int c = str_char_at(t, i);
+    Int d = if (c >= 48 && c <= 57) { c - 48 } else { if (c >= 97 && c <= 102) { c - 87 } else { if (c >= 65 && c <= 70) { c - 55 } else { -1 } } };
+    if (d < 0) { return -1; }
+    return wd_hex(t, i + 1, acc * 16 + d);
+}
+
+Int wd_type_idx(List(WdT) ts, Str name, Int i) {
+    if (i >= ts.len()) { return -1; }
+    if (ts[i].name == name) { return i; }
+    return wd_type_idx(ts, name, i + 1);
+}
+
+WdS wd_rbad(WdS st, Str msg, Int at) { return WdS {.out = st.out, .i = st.i, .gen = st.gen, .ts = st.ts, .code = "E0298", .err = msg, .at = at}; }
+
+WdS wd_rscan(Str s, WdS st) {
+    Int n = str_len(s);
+    Int k = ly_find_pub(s, "@registers(", st.i);
+    if (k < 0 || st.err != "") { return WdS {.out = wd_copy(st.out, s, st.i, n), .i = n, .gen = st.gen, .ts = st.ts, .code = st.code, .err = st.err, .at = st.at}; }
+    if (!ly_line_start_pub(s, k)) {
+        return wd_rscan(s, WdS {.out = wd_copy(st.out, s, st.i, k + 11), .i = k + 11, .gen = st.gen, .ts = st.ts, .code = "", .err = "", .at = -1});
+    }
+    return wd_rscan(s, wd_rdecl(s, k, WdS {.out = wd_copy(st.out, s, st.i, k), .i = k, .gen = st.gen, .ts = st.ts, .code = "", .err = "", .at = -1}));
+}
+
+// `@registers(size = N) [pub] type Name = { registers };` at k.
+WdS wd_rdecl(Str s, Int k, WdS st) {
+    Int n = str_len(s);
+    Int e = ly_close_pub(s, k + 10);
+    if (e < 0) { return wd_rbad(st, "@registers(...) does not close", k); }
+    Str arg = str_trim(str_slice(s, k + 11, e - 1));
+    Int eqa = wd_char(arg, 61, 0, str_len(arg));
+    Int size = if (eqa > 0 && str_trim(str_slice(arg, 0, eqa)) == "size") { wd_num(str_slice(arg, eqa + 1, str_len(arg))) } else { -1 };
+    if (size <= 0) { return wd_rbad(st, "@registers takes the block's size in bytes: `@registers(size = 0x100)`, got `" + arg + "`", k); }
+    Int t0 = wd_ws(s, e, n);
+    Int t1 = if (t0 + 4 <= n && str_slice(s, t0, t0 + 4) == "pub ") { wd_ws(s, t0 + 4, n) } else { t0 };
+    Bool isty = t1 + 5 <= n && str_slice(s, t1, t1 + 5) == "type ";
+    Int eq = if (isty) { wd_char(s, 61, t1, n) } else { -1 };
+    Int ob = if (eq < 0) { -1 } else { wd_ws(s, eq + 1, n) };
+    if (ob < 0 || ob >= n || str_char_at(s, ob) != 123) { return wd_rbad(st, "@registers marks a record type: `@registers(size = N) type Name = { @at(0) Word name; ... };`", k); }
+    Str name = str_trim(str_slice(s, t1 + 5, eq));
+    Int cb = ly_close_brace_pub(s, ob);
+    if (cb < 0) { return wd_rbad(st, "register block " + name + " does not close", k); }
+    WdRB b = wd_regs(s, ob + 1, cb - 1, name, size, st.ts, WdRB {.rs = [], .out = [], .i = ob + 1, .err = "", .at = -1});
+    if (b.err != "") { return wd_rbad(st, b.err, b.at); }
+    if (b.rs.len() == 0) { return wd_rbad(st, "register block " + name + " has no register", k); }
+    Str clash = wd_overlap(b.rs, 0);
+    if (clash != "") { return wd_rbad(st, "register block " + name + ": " + clash, k); }
+    List(Str) o = wd_copy(wd_blank(st.out, s, k, e), s, e, ob + 1).concat(b.out).concat(["}"]);
+    return WdS {.out = o, .i = cb, .gen = st.gen + wd_rgen(name, size, b.rs), .ts = st.ts, .code = "", .err = "", .at = -1};
+}
+
+WdRB wd_rfail(WdRB b, Str msg, Int at) { return WdRB {.rs = b.rs, .out = b.out, .i = b.i, .err = msg, .at = at}; }
+
+// Registers up to end (the closing brace): `@at(off) WordType name;` each.
+WdRB wd_regs(Str s, Int i, Int end, Str name, Int size, List(WdT) ts, WdRB b) {
+    Int j = wd_ws(s, i, end);
+    List(Str) o = wd_copy(b.out, s, i, j);
+    if (j >= end) { return WdRB {.rs = b.rs, .out = o, .i = end, .err = "", .at = -1}; }
+    WdRB b1 = WdRB {.rs = b.rs, .out = o, .i = j, .err = "", .at = -1};
+    if (!(j + 4 <= end && str_slice(s, j, j + 4) == "@at(")) { return wd_rfail(b1, "a register states its offset: `@at(0x10) WordType name;` (" + name + ")", j); }
+    Int e = ly_close_pub(s, j + 3);
+    Int off = if (e < 0) { -1 } else { wd_num(str_slice(s, j + 4, e - 1)) };
+    if (off < 0) { return wd_rfail(b1, "@at(offset) takes a byte offset, decimal or 0x (" + name + ")", j); }
+    Int sc = wd_char(s, 59, e, end);
+    if (sc < 0) { return wd_rfail(b1, "a register is `@at(offset) WordType name;` (" + name + ")", j); }
+    Str decl = str_trim(str_slice(s, e, sc));
+    Int sp = wd_last_space(decl, str_len(decl) - 1);
+    if (sp < 0) { return wd_rfail(b1, "a register is `@at(offset) WordType name;` (" + name + ")", j); }
+    Str rty = str_trim(str_slice(decl, 0, sp));
+    Str rname = str_slice(decl, sp + 1, str_len(decl));
+    Int ti = wd_type_idx(ts, rty, 0);
+    if (ti < 0) { return wd_rfail(b1, name + "." + rname + ": a register's type is a @word type declared before the block, got `" + rty + "`", j); }
+    Int bytes = ts[ti].width / 8;
+    if (off % bytes != 0) { return wd_rfail(b1, name + "." + rname + f": offset {off} is not a multiple of the register's {bytes} bytes", j); }
+    if (off + bytes > size) { return wd_rfail(b1, name + "." + rname + f": offset {off} and {bytes} bytes pass the block's size, {size}", j); }
+    if (wd_rhas(b.rs, rname, 0)) { return wd_rfail(b1, name + " has two registers named " + rname, j); }
+    WdR r = WdR {.name = rname, .ty = rty, .off = off, .bytes = bytes};
+    return wd_regs(s, sc + 1, end, name, size, ts, WdRB {.rs = b.rs.concat([r]), .out = wd_copy(wd_blank(o, s, j, e), s, e, sc + 1), .i = sc + 1, .err = "", .at = -1});
+}
+
+Bool wd_rhas(List(WdR) rs, Str name, Int i) {
+    if (i >= rs.len()) { return false; }
+    return rs[i].name == name || wd_rhas(rs, name, i + 1);
+}
+
+// Two registers that share a byte, as a message, or "".
+Str wd_overlap(List(WdR) rs, Int i) {
+    if (i >= rs.len()) { return ""; }
+    Str hit = wd_overlap_with(rs, i, i + 1);
+    if (hit != "") { return hit; }
+    return wd_overlap(rs, i + 1);
+}
+
+Str wd_overlap_with(List(WdR) rs, Int i, Int j) {
+    if (j >= rs.len()) { return ""; }
+    WdR a = rs[i];
+    WdR b = rs[j];
+    if (a.off < b.off + b.bytes && b.off < a.off + a.bytes) { return a.name + f" (offset {a.off}, {a.bytes} bytes) and " + b.name + f" (offset {b.off}, {b.bytes} bytes) overlap"; }
+    return wd_overlap_with(rs, i, j + 1);
+}
+
+Str wd_rgen(Str name, Int size, List(WdR) rs) {
+    Str sn = wd_snake(name);
+    Str head = "\n// generated from @registers " + name + "\npub Int " + sn + "_size() { return " + f"{size}" + "; }\n";
+    return head + wd_rgen_regs(sn, rs, 0, StrBuf());
+}
+
+Str wd_rgen_regs(Str sn, List(WdR) rs, Int i, StrBuf acc) {
+    if (i >= rs.len()) { return acc.finish(); }
+    WdR r = rs[i];
+    return wd_rgen_regs(sn, rs, i + 1, acc.push("pub Reg(" + r.ty + ") " + sn + "_" + r.name + "() { return Reg {.off = " + f"{r.off}" + ", .bits = " + f"{r.bytes * 8}" + "}; }\n"));
+}
+
+// The handle type, declared once when a block is present.
+Str wd_reg_type() { return "\n// a register of word type T: its byte offset in its block and its width\npub type Reg(T) = { Int off; Int bits; };\n"; }
+
 /// Expand every word type in the merged text src.
 pub LyR wd_expand(Str src) {
     if (!str_contains(src, "@word(")) { return LyR {.text = src, .code = "", .err = "", .at = -1}; }
     WdS st = wd_scan(src, WdS {.out = [], .i = 0, .gen = "", .ts = [], .code = "", .err = "", .at = -1});
     if (st.err != "") { return LyR {.text = src, .code = st.code, .err = st.err, .at = st.at}; }
-    LyR lits = wd_lits_all(str_join(st.out, ""), st.ts, 0);
+    Str t1 = str_join(st.out, "");
+    Bool regs = str_contains(t1, "@registers(");
+    WdS rs = if (regs) { wd_rscan(t1, WdS {.out = [], .i = 0, .gen = "", .ts = st.ts, .code = "", .err = "", .at = -1}) } else { WdS {.out = [t1], .i = 0, .gen = "", .ts = st.ts, .code = "", .err = "", .at = -1} };
+    if (rs.err != "") { return LyR {.text = src, .code = rs.code, .err = rs.err, .at = rs.at}; }
+    LyR lits = wd_lits_all(str_join(rs.out, ""), st.ts, 0);
     if (lits.err != "") { return lits; }
-    return LyR {.text = lits.text + st.gen, .code = "", .err = "", .at = -1};
+    Str rgen = if (rs.gen == "") { "" } else { wd_reg_type() + rs.gen };
+    return LyR {.text = lits.text + st.gen + rgen, .code = "", .err = "", .at = -1};
 }

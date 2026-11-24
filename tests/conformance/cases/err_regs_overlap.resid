@@ -1,0 +1,5 @@
+@word(32) type Wa = { UInt(32) v; };
+@word(16) type Wb = { UInt(16) v; };
+@registers(size = 16)
+type Blk = { @at(0) Wa a; @at(2) Wb b; };
+Int main() { return 0; }

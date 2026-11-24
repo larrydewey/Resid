@@ -1,0 +1,37 @@
+@word(32)
+type DeviceMagic = { DeviceOwned(UInt(32)) value; };
+
+@word(32)
+type VirtioStatus = {
+    Bool acknowledge;
+    Bool driver;
+    Bool driver_ok;
+    Bool features_ok;
+    @reserved(2);
+    DeviceOwned(Bool) needs_reset;
+    Bool failed;
+    @reserved(24);
+};
+
+@word(32) type AddrLo = { UInt(32) bits; };
+@word(32) type AddrHi = { UInt(32) bits; };
+@word(16) type QueueSel = { UInt(16) index; };
+
+@registers(size = 0x100)
+type VirtioRegs = {
+    @at(0x00) DeviceMagic  magic;     // "virt"
+    @at(0x30) QueueSel     queue_sel;
+    @at(0x70) VirtioStatus status;
+    @at(0x80) AddrLo       desc_lo;
+    @at(132)  AddrHi       desc_hi;
+};
+
+// A handle is typed by its register's word.
+Int where(Reg(VirtioStatus) r) { return r.off; }
+
+Int main() {
+    Reg(VirtioStatus) st = virtio_regs_status();
+    Reg(QueueSel) qs = virtio_regs_queue_sel();
+    println(f"{virtio_regs_size()} {virtio_regs_magic().off} {qs.off} {qs.bits} {where(st)} {st.bits} {virtio_regs_desc_lo().off} {virtio_regs_desc_hi().off}");
+    return 0;
+}

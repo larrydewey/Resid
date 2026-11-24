@@ -1,0 +1,1 @@
+error[E0298]: Blk.b: offset 16 and 4 bytes pass the block's size, 16

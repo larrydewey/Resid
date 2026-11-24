@@ -160,8 +160,15 @@ region, with no diagnostic.
   read. Conformance: `word_owned`, `word_literal_text`,
   `err_word_device_owned`, `err_word_driver_owned`,
   `err_word_latch_clear`. Known wart: a diagnostic on a completed
-  literal's line shows the fields that were filled in. Not yet:
-  sum-typed fields, `@clears_on_read`, `Region(T)`.
+  literal's line shows the fields that were filled in.
+- **Stage C: register blocks.** `@registers(size = N) type T = {
+  @at(off) Word r; ... };` with offsets a multiple of the register's
+  size, inside the block and not overlapping (E0298), and for each
+  register a handle `t_r()` of type `Reg(Word)` (offset and width; the
+  generic `Reg(T)` is declared once after the program). Conformance:
+  `regs_block`, `err_regs_overlap`, `err_regs_bounds`,
+  `err_regs_handle`. Not yet: the `device.read/write/take` verbs that
+  take a handle, `Region(T)`, sum-typed fields, `@clears_on_read`.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.
