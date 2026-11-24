@@ -371,6 +371,28 @@ could not exist; they are corrected above.
   state for each step); calls only (nothing testable without a fake
   device).
 
+**How the first version reaches hardware** (decided 2026-11-24).
+
+- One confined helper per access, as every device call works today
+  (device access R2.1): the helper opens and maps the device memory
+  before its lockdown is installed, does the one read or write, and
+  exits. The seccomp filter does not change (it allows mapping of
+  anonymous memory only, and still does once it is in place), and the
+  kernel still never writes into the program's memory. An access costs
+  about what a device call does, 2 ms: enough for start-up and
+  configuration, not for a data path. The driver process of §3 serves
+  the same calls later, for speed. Rejected: the driver process first
+  (a large piece before one register can be read); mapping in the
+  program (the model §1 rejects).
+- A mappable device is declared in `lib/dev/` only, as every descriptor
+  is (E0260). Driver packages bound by manifest (§1) are a step of
+  their own, with their own review, once this is proven. Rejected for
+  now: driver packages in the same step (the trust rule and the
+  mechanism would change at once); a development flag.
+- Tested first against a fixture, a file the test prepares, as the
+  `fx_` descriptors test the other verbs against `/dev/zero` and the
+  like; a virtio device under QEMU after.
+
 First slice to build, before `Region(T)` exists: `@word(N)` types alone,
 with the packing the compiler generates exposed as two functions (a
 record to its word, a word to a record or an error value), the way a
