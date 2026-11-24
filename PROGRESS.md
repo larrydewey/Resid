@@ -188,6 +188,25 @@ region, with no diagnostic.
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.
 
+### 0zzc. Lists as map keys (2026-11-24)
+
+A `Map` or `Set` keyed by a list lost entries: the runtime hashed and
+compared any key that was not an `Int` or a `Str` as a C string, so a
+list's header was read as text. Every list of one length hashed alike and
+compared equal (`Map(List(UInt(8)), Int)` with two different 4-byte keys
+had one entry), and a lookup, which passed kind 0 where an insert passed
+kind 5, missed.
+
+- `rt/map.resid`: `key_hash` and `key_eq` take kind 5 by the list's
+  elements (`list_key_hash`, `list_key_eq`): packed bytes, raw words,
+  boxed values and strings.
+- `compiler/lower.resid`: `lin_key_kind` gives 5 for a list of words,
+  strings, bytes or 33..64-bit integers (`lr_list_key`), and every map
+  and set operation passes that one kind (`lin_typed_key`; puts used
+  `lo_put_kind`).
+- Not covered: keys that are lists of lists, or records.
+- Test: `map_list_keys`.
+
 ### 0zzb. Byte-range compare, packed positioned reads (2026-11-24)
 
 For BurrowDB, which is moving its keys, rows and pages to packed bytes.

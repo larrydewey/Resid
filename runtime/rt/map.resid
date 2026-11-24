@@ -209,8 +209,52 @@ Bool boxed_eq(Int a, Int b) {
     return a == b;
 }
 
-Int key_hash(Int kk, Int k) { return if (kk == 1) { fnv_i64(k) } else { if (kk == 4) { fnv_str(k) } else { value_hash(k) } }; }
-Bool key_eq(Int kk, Int a, Int b) { return if (kk == 1) { a == b } else { if (kk == 4) { str_key_eq(a, b) } else { value_eq(a, b) } }; }
+Int key_hash(Int kk, Int k) { return if (kk == 1) { fnv_i64(k) } else { if (kk == 4) { fnv_str(k) } else { if (kk == 5) { list_key_hash(k) } else { value_hash(k) } } }; }
+Bool key_eq(Int kk, Int a, Int b) { return if (kk == 1) { a == b } else { if (kk == 4) { str_key_eq(a, b) } else { if (kk == 5) { list_key_eq(a, b) } else { value_eq(a, b) } } }; }
+
+// A list as a key (kind 5: a list of words, strings or bytes) is hashed
+// and compared by its elements. Taken for a string, as any other
+// unboxed key is, its header was read as text: every list of one length
+// hashed alike and compared equal.
+Int list_key_hash(Int l) {
+    if (l == 0) { return fnv_off(); }
+    Int n = lcount(l);
+    Int h0 = (fnv_off() ^ (n & 255)) * fnv_p();
+    if (lbytes(l)) { return bytes_key_hash(lroot(l) + 24, 0, n, h0); }
+    return words_key_hash(l, ltype(l) == 1, 0, n, h0);
+}
+
+Int bytes_key_hash(Int p, Int i, Int n, Int h) {
+    if (i >= n) { return h; }
+    return bytes_key_hash(p, i + 1, n, (h ^ ld8(p + i)) * fnv_p());
+}
+
+Int words_key_hash(Int l, Bool raw, Int i, Int n, Int h) {
+    if (i >= n) { return h; }
+    Int w = list_at(l, i);
+    Int e = if (raw) { fnv_i64(w) } else { value_hash(w) };
+    return words_key_hash(l, raw, i + 1, n, (h ^ (e & 4294967295)) * fnv_p());
+}
+
+Bool list_key_eq(Int a, Int b) {
+    if (a == b) { return true; }
+    if (a == 0 || b == 0) { return false; }
+    Int n = lcount(a);
+    if (n != lcount(b)) { return false; }
+    if (lbytes(a) && lbytes(b)) { return rt_bytes_cmp(a, 0, n, b, 0, n) == 0; }
+    return words_key_eq(a, b, ltype(a) == 1, ltype(b) == 1, 0, n);
+}
+
+// Elements one against the other: two raw words by value, two boxed
+// values or strings as keys of their own, a raw word against a boxed one
+// (the same list of integers held either way) as integers.
+Bool words_key_eq(Int a, Int b, Bool ra, Bool rb, Int i, Int n) {
+    if (i >= n) { return true; }
+    Int x = list_at(a, i);
+    Int y = list_at(b, i);
+    Bool same = if (ra && rb) { x == y } else { if (!ra && !rb) { value_eq(x, y) } else { list_at_k(a, i) == list_at_k(b, i) } };
+    return same && words_key_eq(a, b, ra, rb, i + 1, n);
+}
 
 // Kind 4 keys are strings by type: no is_boxed guess (a string may start with 0xFF).
 Bool str_key_eq(Int a, Int b) {
