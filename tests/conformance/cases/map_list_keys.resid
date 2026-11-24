@@ -1,0 +1,41 @@
+// A list as a map key is told from another by its elements: bytes,
+// integers and strings, in maps and sets, across insert, get, contains,
+// remove and keys.
+List(UInt(8)) bytes(Int a, Int b, Int c) { return [(UInt(8))a, (UInt(8))b, (UInt(8))c]; }
+
+Map(List(UInt(8)), Int) fill(Map(List(UInt(8)), Int) m, Int i, Int n) {
+    return if (i >= n) { m } else { fill(m.insert(bytes(i / 65536, (i / 256) % 256, i % 256), i), i + 1, n) };
+}
+
+Int missing(Map(List(UInt(8)), Int) m, Int i, Int n, Int bad) {
+    if (i >= n) { return bad; }
+    Int got = m.get(bytes(i / 65536, (i / 256) % 256, i % 256)) else { 0 - 1 };
+    return missing(m, i + 1, n, if (got == i) { bad } else { bad + 1 });
+}
+
+Int main() {
+    Map(List(UInt(8)), Int) none = {};
+    Map(List(UInt(8)), Int) m = none.insert(bytes(2, 128, 1), 10).insert(bytes(2, 128, 2), 20).insert(bytes(2, 128, 1), 11);
+    println(f"{m.len()} {m.get(bytes(2, 128, 1)) else { 0 - 1 }} {m.get(bytes(2, 128, 2)) else { 0 - 1 }} {m.contains(bytes(2, 128, 3))} {m.contains(bytes(2, 128, 2))}");
+    Map(List(UInt(8)), Int) big = fill(none, 0, 5000);
+    println(f"{big.len()} {missing(big, 0, 5000, 0)} {big.remove(bytes(0, 0, 7)).len()} {big.remove(bytes(9, 9, 9)).len()} {big.keys().len()}");
+    Map(List(UInt(8)), List(UInt(8))) bb = {};
+    Map(List(UInt(8)), List(UInt(8))) bb2 = bb.insert(bytes(1, 2, 3), bytes(4, 5, 6)).insert(bytes(1, 2, 4), bytes(7, 8, 9));
+    List(UInt(8)) e = [];
+    println(f"{bb2.len()} {(bb2.get(bytes(1, 2, 3)) else { e }).len()} {(bb2.get(bytes(1, 2, 4)) else { e })[0]}");
+    Map(List(Int), Str) mi = {};
+    Map(List(Int), Str) mi2 = mi.insert([1, 2, 3], "a").insert([1, 2, 4], "b").insert([1, 2], "c").insert([1, 2, 3], "d");
+    println(f"{mi2.len()} {mi2.get([1, 2, 3]) else { "?" }} {mi2.get([1, 2, 4]) else { "?" }} {mi2.get([1, 2]) else { "?" }} {mi2.contains([3, 2, 1])}");
+    Map(List(Str), Int) ms = {};
+    Map(List(Str), Int) ms2 = ms.insert(["a", "b"], 1).insert(["a", "c"], 2).insert(["a", "b"], 3);
+    println(f"{ms2.len()} {ms2.get(["a", "b"]) else { 0 }} {ms2.get(["a", "c"]) else { 0 }} {ms2.contains(["b", "a"])}");
+    Set(List(UInt(8))) s0 = {};
+    Set(List(UInt(8))) s = s0.insert(bytes(1, 1, 1)).insert(bytes(1, 1, 2)).insert(bytes(1, 1, 1));
+    println(f"{s.len()} {s.contains(bytes(1, 1, 2))} {s.contains(bytes(2, 1, 1))}");
+    Map(List(UInt(64)), Int) mw = {};
+    List(UInt(64)) w1 = [18446744073709551615, 1];
+    List(UInt(64)) w2 = [18446744073709551615, 2];
+    Map(List(UInt(64)), Int) mw2 = mw.insert(w1, 1).insert(w2, 2).insert(w1, 3);
+    println(f"{mw2.len()} {mw2.get(w1) else { 0 }} {mw2.get(w2) else { 0 }} {mw2.contains([1, 18446744073709551615])} {mw2.remove(w2).len()}");
+    return 0;
+}

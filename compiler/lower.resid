@@ -1633,7 +1633,7 @@ Bool lp_fusible(Kg g, Int blk, Int i) {
 GT lw_list_push(LW w, Int id, GT base, GT ka, Int cv, Int sid, Str kt, Str vt, Bool owned, List(Str) env) {
     Funcs fs = w.fs;
     Str et = str_slice(vt, 5, str_len(vt) - 1);
-    Int kk = lo_put_kind(lin_kk(kt), kt);
+    Int kk = lin_key_kind(kt);
     GT kw = lin_word("", ka, kk, env, fs);
     GT e0 = lw_expr(w, lw_kid(w, lw_kid(w, cv, 1), 0), env, kw);
     if (e0.err != "") { return e0; }
@@ -2351,8 +2351,13 @@ GT lw_builder(LW w, Int id, GT base, Str m, List(Str) env) {
 }
 
 // Int and Str keys cross as words of their kind (1 / 4); others boxed.
-Bool lin_typed_key(Str kt) { return lin_kk(kt) == 1 || kt == "Str"; }
-Int lin_key_kind(Str kt) { return if (kt == "Str") { 4 } else { lin_kk(kt) }; }
+Bool lin_typed_key(Str kt) { return lin_kk(kt) == 1 || kt == "Str" || lr_list_key(kt); }
+
+/// A list that is a map key by its elements: of words, strings or bytes, or of 33..64-bit integers.
+Bool lr_list_key(Str kt) { return lr_list_word(kt) || lr_list_wide(kt); }
+// A list of words, strings or bytes as a key is kind 5 for every map
+// operation (it was 5 only where a key was put, and looked up as 0).
+Int lin_key_kind(Str kt) { return if (kt == "Str") { 4 } else { if (lr_list_key(kt)) { 5 } else { lin_kk(kt) } }; }
 
 // m.get(k) / m[k]: the stored value boxed, as an Option.
 GT lw_map_get(GT base, GT arg, Str kt, Str vt, List(Str) env, Funcs fs) {
@@ -2395,14 +2400,14 @@ GT lw_map_method(LW w, Int id, GT base, Str m, List(Str) env) {
     Int fsid = if (fv >= 0 && lw_kind(w, fv) == "mcall" && lw_text(w, fv) == "concat" && lw_kind(w, lw_kid(w, fv, 0)) == "ref") { lp_fuse_sid(env, lw_text(w, lw_kid(w, fv, 0))) } else { -1 };
     if (fsid >= 0 && lst_rec(fs, elem_type(strip_owned_cg(vt))) == 0) { return lw_list_push(w, id, base, arg, fv, fsid, kt, vt, m_owned, env); }
     if (m == "insert" && (m_owned || lin_kk(kt) == 1 || lin_vk(vt) != 0 || kt == "Str" || vt == "Str" || lr_list_word(vt))) {
-        GT kw = lin_word(src, arg, lo_put_kind(lin_kk(kt), kt), env, fs);
+        GT kw = lin_word(src, arg, lin_key_kind(kt), env, fs);
         GT tva = lw_marg_as(w, id, 1, vt, env, kw);
         if (tva.err != "") { return tva; }
         GT vw = lin_word(src, tva, lo_put_kind(lin_vk(vt), vt), env, fs);
         Int ti = vw.tmp + 1;
         Str treg = f"%t{ti}";
         Str own = if (m_owned) { "1" } else { "0" };
-        return lw_step(vw, treg, base.ty, vw.lines.concat([treg + " = call ptr @resid_map_put(ptr " + base.val + ", i8 " + own + f", i8 {lo_put_kind(lin_kk(kt), kt)}, i64 " + kw.val + f", i8 {lo_put_kind(lin_vk(vt), vt)}, i64 " + vw.val + ")"]), ti);
+        return lw_step(vw, treg, base.ty, vw.lines.concat([treg + " = call ptr @resid_map_put(ptr " + base.val + ", i8 " + own + f", i8 {lin_key_kind(kt)}, i64 " + kw.val + f", i8 {lo_put_kind(lin_vk(vt), vt)}, i64 " + vw.val + ")"]), ti);
     }
     if (m == "insert") {
         GT va0 = lw_marg_as(w, id, 1, vt, env, arg);
@@ -2449,7 +2454,7 @@ GT lw_set_method(LW w, Int id, GT base, Str m, List(Str) env) {
     if (arg.err != "") { return arg; }
     if (m == "contains" && lin_typed_key(set_et)) { return lw_map_has(base, arg, set_et, env, fs); }
     if ((m == "insert" || m == "remove") && (s_owned || lin_typed_key(set_et))) {
-        Int sk = if (m == "insert") { lo_put_kind(lin_kk(set_et), set_et) } else { lin_key_kind(set_et) };
+        Int sk = if (m == "insert") { lin_key_kind(set_et) } else { lin_key_kind(set_et) };
         GT kw = lin_word(src, arg, sk, env, fs);
         Int ti = kw.tmp + 1;
         Str treg = f"%t{ti}";
