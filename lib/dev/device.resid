@@ -24,6 +24,7 @@
 //     device.mmio_pci(MmioPci, PciAddr, MmioAccess)    -> Result(List(DevOut), DeviceError)
 //     device.mmio_win(MmioWin, PciWindow, MmioAccess)  -> Result(List(DevOut), DeviceError)
 //     device.session_open(MmioWin, List(PciWindow))    -> Result(List(DevOut), DeviceError)
+//     device.dma_open(DmaDev, List(PciWindow))         -> Result(List(DevOut), DeviceError)
 //     device.pci_list(PciList)                         -> Result(List(DevOut), DeviceError)
 //
 // Each verb is a provider call of the `device` family: @requires(device) or,
@@ -188,6 +189,23 @@ type MmioWin = { Str name; Int vendor; Int device; Int size; Bool write; Stabili
 /// the function at `addr`.
 @descriptor(pci_window)
 pub type PciWindow = { PciAddr addr; Int resource; Int base; Int len; };
+
+/// A PCI function that reads and writes memory its driver gives it: a
+/// function with the ids `vendor` and `device`, bound to vfio-pci, whose
+/// register blocks are within `size` bytes of their resources.
+/// `device.dma_open` starts a session for it whose host maps `dma` bytes
+/// (whole pages) of its own memory for the device at the address `iova`,
+/// through the IOMMU: the device reaches those bytes and nothing else, and
+/// a function with no IOMMU group is Unsupported. The program reads and
+/// writes that memory through the session, as it does the registers
+/// (PLAN-hardware-access.md §11). Such a session always writes.
+@descriptor(dma_dev)
+type DmaDev = { Str name; Int vendor; Int device; Int size; Int dma; Int iova; Stability stability; };
+
+/// The memory of a DMA session: `len` bytes that the device sees at
+/// `iova`. Run-time data, made by the scope a `@device(dma = ...)`
+/// declaration generates.
+pub type DmaRegion = { Int id; Int map; Int iova; Int len; };
 
 /// The PCI functions present: the names under /sys/bus/pci/devices, at
 /// most `max` bytes of them. `device.pci_list` returns them as OutBytes, a
@@ -750,7 +768,7 @@ pub Result(List(DevOut), DeviceError) device_engine_mmio_win(MmioWin op, PciWind
 /// windows of different functions, or one that dv_prep_mmio_win refuses.
 pub DvReq dv_prep_session(MmioWin op, List(PciWindow) ws) {
     if (ws.len() == 0 || ws.len() > 16) { return dv_bad("a session has 1 to 16 windows"); }
-    Str bad = dv_session_bad(op, ws, 0);
+    Str bad = dv_session_bad(op.size, ws, 0);
     if (bad != "") { return dv_bad(bad); }
     List(Int) none = [];
     List(Int) rs = dv_session_res(ws, 0, none);
@@ -759,30 +777,30 @@ pub DvReq dv_prep_session(MmioWin op, List(PciWindow) ws) {
     return DvReq {.err = "", .req = dv_session_more(b1, ws, rs, 1).finish(), .outs = [DvSlot {.num = true, .max = 8, .secret = false}]};
 }
 
-Str dv_session_bad(MmioWin op, List(PciWindow) ws, Int i) {
+pub Str dv_session_bad(Int size, List(PciWindow) ws, Int i) {
     if (i >= ws.len()) { return ""; }
     PciWindow w = ws[i];
     if (!pci_addr_ok(w.addr)) { return "the PCI address is out of range"; }
     if (pci_addr_text(w.addr) != pci_addr_text(ws[0].addr)) { return "a session's windows are all of one PCI function"; }
     if (w.resource < 0 || w.resource > 5) { return "a window is in resource 0 to 5"; }
-    if (w.base < 0 || w.len <= 0 || w.base + w.len > op.size) { return "the window is not inside the descriptor's size"; }
-    return dv_session_bad(op, ws, i + 1);
+    if (w.base < 0 || w.len <= 0 || w.base + w.len > size) { return "the window is not inside the descriptor's size"; }
+    return dv_session_bad(size, ws, i + 1);
 }
 
 // The resources the windows name, each once, in the order first named.
-List(Int) dv_session_res(List(PciWindow) ws, Int i, List(Int) acc) {
+pub List(Int) dv_session_res(List(PciWindow) ws, Int i, List(Int) acc) {
     if (i >= ws.len()) { return acc; }
     return dv_session_res(ws, i + 1, if (acc.contains(ws[i].resource)) { acc } else { acc.concat([ws[i].resource]) });
 }
 
 // The end of the last window in resource `res`.
-Int dv_session_size(List(PciWindow) ws, Int res, Int i, Int acc) {
+pub Int dv_session_size(List(PciWindow) ws, Int res, Int i, Int acc) {
     if (i >= ws.len()) { return acc; }
     Int end = if (ws[i].resource == res) { ws[i].base + ws[i].len } else { 0 };
     return dv_session_size(ws, res, i + 1, if (end > acc) { end } else { acc });
 }
 
-ListBuf(Int) dv_session_more(ListBuf(Int) b, List(PciWindow) ws, List(Int) rs, Int i) {
+pub ListBuf(Int) dv_session_more(ListBuf(Int) b, List(PciWindow) ws, List(Int) rs, Int i) {
     if (i >= rs.len()) { return b; }
     return dv_session_more(dv_u(dv_u(b, rs[i], 1), dv_session_size(ws, rs[i], 0, 0), 4), ws, rs, i + 1);
 }
@@ -807,6 +825,41 @@ pub Result(List(DevOut), DeviceError) device_engine_session_open(MmioWin op, Lis
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
     Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
     return dv_tr_out(op.name, 0 - 1, dv_session_answer(op.name, dv_answer(op.name, r, resid_device_call(r.req))));
+}
+
+/// The request that opens a session with memory for the device: as
+/// dv_prep_session, then the memory's size and address.
+pub DvReq dv_prep_dma(DmaDev op, List(PciWindow) ws) {
+    if (ws.len() == 0 || ws.len() > 16) { return dv_bad("a session has 1 to 16 windows"); }
+    Str bad = dv_session_bad(op.size, ws, 0);
+    if (bad != "") { return dv_bad(bad); }
+    List(Int) none = [];
+    List(Int) rs = dv_session_res(ws, 0, none);
+    ListBuf(Int) b = dv_u(dv_u(dv_u(dv_u(dv_head(ListBuf(), 14, true, op.name, "/sys/bus/pci/devices/" + pci_addr_text(ws[0].addr)), dv_session_size(ws, rs[0], 0, 0), 4), 0, 1), 0, 4), 1, 1);
+    ListBuf(Int) b1 = dv_u(dv_u(dv_u(dv_u(dv_u(b, 0, 8), rs[0], 1), op.vendor, 2), op.device, 2), rs.len() - 1, 1);
+    return DvReq {.err = "", .req = dv_u(dv_u(dv_session_more(b1, ws, rs, 1), op.dma, 4), op.iova, 8).finish(), .outs = [DvSlot {.num = true, .max = 8, .secret = false}]};
+}
+
+/// Reads `n` bytes at `off` of a DMA session's memory, at most 65536 a
+/// message. Err(BadInput) outside the memory or after the session's end.
+@requires(device(readonly))
+pub Result(List(UInt(8)), DeviceError) dma_read(DmaRegion r, Int off, Int n) {
+    if (off < 0 || n < 0 || off + n > r.len) { return Err(BadInput("dma", "the bytes are not inside the memory")); }
+    List(UInt(8)) none = [];
+    return dma_read_from(r, off, n, none);
+}
+
+@requires(device(readonly))
+Result(List(UInt(8)), DeviceError) dma_read_from(DmaRegion r, Int off, Int left, List(UInt(8)) acc) {
+    if (left <= 0) { return Ok(acc); }
+    Int n = if (left > 65536) { 65536 } else { left };
+    ListBuf(Int) none = ListBuf();
+    List(Int) req = dv_u(dv_u(dv_u(dv_u(none.push(82).push(68).push(86).push(1).push(15).push(0), r.id, 8), r.map, 1), off, 4), n, 4).finish();
+    List(DevOut) o = dv_session_answer("dma", dv_reply("dma", [DvSlot {.num = false, .max = n, .secret = false}], resid_device_call(req)))?;
+    List(UInt(8)) empty = [];
+    List(UInt(8)) part = if (o.len() == 1) { dv_out_raw(o[0]) } else { empty };
+    if (part.len() != n) { return Err(BadReply("dma", "not the bytes asked for")); }
+    return dma_read_from(r, off + n, left - n, acc.concat(part));
 }
 
 /// The request for one access to session `id`: `off` from the start of
@@ -1050,7 +1103,7 @@ Bool dv_fits(Int v, Int width) {
 // without the Yama ptrace policy); 12 the host did not finish
 // within the call's wall-clock limit (Timeout).
 
-ListBuf(Int) dv_u(ListBuf(Int) b, Int v, Int n) {
+pub ListBuf(Int) dv_u(ListBuf(Int) b, Int v, Int n) {
     if (n <= 0) { return b; }
     return dv_u(b.push(v & 255), v >> 8, n - 1);
 }

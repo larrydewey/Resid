@@ -6183,16 +6183,16 @@ Str dv_role_at(Kg g, Str tag, Int i) {
 
 // device.<m>(...): the descriptor of its kind, then the inputs.
 GKT dv_gk_verb(GK k, Int id, Str m) {
-    if (!dev_verb(m)) { return gterr(k, "unknown provider method device." + m + " (the device verbs are ioctl, transact, transact_chain, configfs_report, read_attr, read_pci_attr, sequence, ctaphid, mmio, mmio_pci, mmio_win, session_open and pci_list)", id); }
+    if (!dev_verb(m)) { return gterr(k, "unknown provider method device." + m + " (the device verbs are ioctl, transact, transact_chain, configfs_report, read_attr, read_pci_attr, sequence, ctaphid, mmio, mmio_pci, mmio_win, session_open, dma_open and pci_list)", id); }
     // A session is opened under the descriptor of a block the device places.
-    Str dt = dv_role_ty(k.g, if (m == "transact_chain") { "transact" } else if (m == "session_open") { "mmio_win" } else { m });
+    Str dt = dv_role_ty(k.g, if (m == "transact_chain") { "transact" } else if (m == "session_open") { "mmio_win" } else if (m == "dma_open") { "dma_dev" } else { m });
     Str outt = dv_role_ty(k.g, "out");
     Str errt = dv_role_ty(k.g, "error");
     if (dt == "" || outt == "" || errt == "") { return gterr(k, "E0260: device." + m + " takes a descriptor from lib/dev/: import a device module (for example dev/sev_guest.resid)", id); }
     Int want = if (m == "read_attr" || m == "pci_list") { 1 } else if (m == "transact_chain" || m == "mmio_pci" || m == "mmio_win") { 3 } else { 2 };
     Int na = k.g.ns[id].nk - 1;
     if (na != want) { return gterr(k, f"device.{m} takes {want} argument(s), got {na}", id); }
-    Str second = if (m == "ioctl" || m == "sequence") { "List(" + dv_role_ty(k.g, "in") + ")" } else if (m == "transact" || m == "ctaphid") { "List(UInt(8))" } else if (m == "transact_chain") { "List(List(UInt(8)))" } else if (m == "configfs_report") { dv_role_ty(k.g, "report_req") } else if (m == "read_pci_attr" || m == "mmio_pci") { dv_role_ty(k.g, "pci_addr") } else if (m == "mmio_win") { dv_role_ty(k.g, "pci_window") } else if (m == "session_open") { "List(" + dv_role_ty(k.g, "pci_window") + ")" } else if (m == "mmio") { dv_role_ty(k.g, "mmio_access") } else { "" };
+    Str second = if (m == "ioctl" || m == "sequence") { "List(" + dv_role_ty(k.g, "in") + ")" } else if (m == "transact" || m == "ctaphid") { "List(UInt(8))" } else if (m == "transact_chain") { "List(List(UInt(8)))" } else if (m == "configfs_report") { dv_role_ty(k.g, "report_req") } else if (m == "read_pci_attr" || m == "mmio_pci") { dv_role_ty(k.g, "pci_addr") } else if (m == "mmio_win") { dv_role_ty(k.g, "pci_window") } else if (m == "session_open" || m == "dma_open") { "List(" + dv_role_ty(k.g, "pci_window") + ")" } else if (m == "mmio") { dv_role_ty(k.g, "mmio_access") } else { "" };
     GKT d = gk_expr(k, gk_kid(k, id, 1), dt);
     if (d.err != "") { return d; }
     if (!ty_same(d.ty, dt)) { return gterr(d.k, "E0260: device." + m + " takes a descriptor of type " + dt + " from lib/dev/, got " + d.ty, id); }
@@ -6272,7 +6272,7 @@ pub Str dv_no_std() { return "\x01/dev/"; }
 
 // The descriptor kinds a program may not write a literal of.
 Bool dv_kind_tag(Str aux) {
-    return str_contains(aux, "@descriptor(ioctl)") || str_contains(aux, "@descriptor(transact)") || str_contains(aux, "@descriptor(read_attr)") || str_contains(aux, "@descriptor(read_pci_attr)") || str_contains(aux, "@descriptor(configfs_report)") || str_contains(aux, "@descriptor(sequence)") || str_contains(aux, "@descriptor(mmio)") || str_contains(aux, "@descriptor(mmio_pci)") || str_contains(aux, "@descriptor(mmio_win)") || str_contains(aux, "@descriptor(pci_list)");
+    return str_contains(aux, "@descriptor(ioctl)") || str_contains(aux, "@descriptor(transact)") || str_contains(aux, "@descriptor(read_attr)") || str_contains(aux, "@descriptor(read_pci_attr)") || str_contains(aux, "@descriptor(configfs_report)") || str_contains(aux, "@descriptor(sequence)") || str_contains(aux, "@descriptor(mmio)") || str_contains(aux, "@descriptor(mmio_pci)") || str_contains(aux, "@descriptor(mmio_win)") || str_contains(aux, "@descriptor(dma_dev)") || str_contains(aux, "@descriptor(pci_list)");
 }
 
 // E0260 at node `id`: what is wrong, or "". `inlib`: the node is in
@@ -6348,7 +6348,7 @@ Bool dv_scan(GK k, Int id, List(Int) nls, Str src, Str smap, Str stddev, Bool ac
 // included, would be a session with no end but the program's. The opens
 // under the marked functions are collected, and any other is E0260.
 Bool dv_is_open(Kg g, Int id) {
-    if (g.ns[id].kind != "mcall" || g.ns[id].text != "session_open" || g.ns[id].nk < 1) { return false; }
+    if (g.ns[id].kind != "mcall" || (g.ns[id].text != "session_open" && g.ns[id].text != "dma_open") || g.ns[id].nk < 1) { return false; }
     Int r = kg_kid(g, id, 0);
     return g.ns[r].kind == "ref" && g.ns[r].text == "device";
 }
@@ -6380,7 +6380,7 @@ Map(Int, Int) dv_opens_under(Kg g, Int id, Int i, Map(Int, Int) acc) {
 
 Bool dv_raw_at(GK k, Int id, Map(Int, Int) ok, Str src, Str smap, Bool acc) {
     if (id >= k.g.ns.len()) { return acc; }
-    Bool bad = if (dv_is_open(k.g, id) && !ok.contains(id)) { dv_diag("E0260", "`device.session_open` is written only by a register block: declare the block `@registers(size = N, session = d, session_write = dw)` and call the scope it generates (`t_session(w, f)`), which ends the session when it returns", k.g, id, src, smap) } else { false };
+    Bool bad = if (dv_is_open(k.g, id) && !ok.contains(id)) { dv_diag("E0260", "`device." + k.g.ns[id].text + "` is written only by a register block or a device: declare `@registers(size = N, session = d, session_write = dw)` or `@device(...)` and call the scope it generates (`t_session(w, f)`), which ends the session when it returns", k.g, id, src, smap) } else { false };
     return dv_raw_at(k, id + 1, ok, src, smap, acc || bad);
 }
 

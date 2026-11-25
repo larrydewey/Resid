@@ -494,6 +494,11 @@ memory the driver gives it.
   regions first).
 - **Completion by polling** the used index. Interrupts as events later.
 
+Built as stage I, and a virtio entropy device read through it in a
+virtual machine with an emulated IOMMU. Every privileged call the host
+makes (the VFIO descriptors, the mappings) comes before its filter, so
+the confined host needed no new permission.
+
 Built (PROGRESS.md, stage E): `device.mmio_pci`, `device.pci_list`,
 `lib/dev/pci.resid`. What the check does and does not give: the ids
 are read after the host's filter is in and the resource is mapped but

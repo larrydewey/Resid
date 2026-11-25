@@ -12,7 +12,15 @@
 # Not part of run.sh: it needs qemu-system-x86_64, a static busybox, cpio
 # and a kernel image, and about a minute without KVM.
 #
-#   tests/device/virtio_vm.sh [-c COMPILER] [-k KERNEL_IMAGE]
+#   tests/device/virtio_vm.sh [-c COMPILER] [-k KERNEL_IMAGE] [-m MODULES]
+#
+# With MODULES (or $RESID_VM_MODULES), a directory holding that kernel's
+# VFIO modules (irqbypass, iommufd, vfio, vfio_iommu_type1, vfio-pci-core,
+# vfio-pci, as .ko files; a module built into the kernel may be missing),
+# a second machine is booted with an emulated IOMMU, the device is bound
+# to vfio-pci, and tests/device/vm/virtio_rng.resid drives it: a
+# virtqueue laid out in memory the device host maps for the device, one
+# buffer offered, and the random bytes the device wrote read back.
 #
 # KERNEL_IMAGE defaults to $RESID_VM_KERNEL, then the newest readable
 # /boot/vmlinuz-*. Exit 0 on a pass or a skip (a tool is missing), 1 on a
@@ -22,10 +30,12 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CASES="$ROOT/tests/device/cases"
 COMPILER="$ROOT/build/boot/residc"
 KERNEL="${RESID_VM_KERNEL:-}"
-while getopts "c:k:" opt; do
+MODULES="${RESID_VM_MODULES:-}"
+while getopts "c:k:m:" opt; do
     case "$opt" in
         c) COMPILER="$(realpath "$OPTARG")" ;;
         k) KERNEL="$(realpath "$OPTARG")" ;;
+        m) MODULES="$(realpath "$OPTARG")" ;;
         *) exit 2 ;;
     esac
 done
@@ -53,7 +63,7 @@ mkdir -p "$HOME_DIR"
 cp -r "$ROOT/lib" "$HOME_DIR/lib"
 ln -s "$ROOT/build/boot/rt.ll" "$HOME_DIR/rt.ll"
 cp "$CASES/device_virtio_window.dev" "$HOME_DIR/lib/dev/fx_device_virtio_window.resid"
-for prog in virtio_bring_up virtio_session; do
+for prog in virtio_bring_up virtio_session virtio_rng; do
     if ! RESID_HOME="$HOME_DIR" "$COMPILER" "$ROOT/tests/device/vm/$prog.resid" -o "$WORK/$prog" > "$WORK/compile.log" 2>&1; then
         echo "FAIL virtio_vm: $prog: compile failed"; grep -v '^OK ' "$WORK/compile.log" | head -20; exit 1
     fi
@@ -103,4 +113,47 @@ if cmp -s "$WORK/out.txt" "$ROOT/tests/device/vm/virtio_vm.out"; then
     echo "PASS virtio_vm"; cat "$WORK/out.txt" | sed 's/^/    /'
 else
     echo "FAIL virtio_vm: output differs from vm/virtio_vm.out"; diff "$WORK/out.txt" "$ROOT/tests/device/vm/virtio_vm.out" 2>&1 | head -20; echo "  got:"; sed 's/^/    /' "$WORK/out.txt"; exit 1
+fi
+
+# The queue: a machine with an IOMMU, the device bound to vfio-pci.
+if [ -z "$MODULES" ] || [ ! -d "$MODULES" ]; then
+    echo "SKIP virtio_vm queue (no VFIO modules: pass -m DIR)"; exit 0
+fi
+mkdir -p "$R/ko"
+cp "$MODULES"/*.ko "$R/ko/" 2>/dev/null
+cp "$WORK/virtio_rng" "$R/"
+cat > "$R/init" <<'INIT'
+#!/bin/busybox sh
+/bin/busybox --install -s /bin
+mount -t proc proc /proc; mount -t sysfs sys /sys; mount -t devtmpfs dev /dev
+mkdir -p /dev/shm; mount -t tmpfs shm /dev/shm
+for m in irqbypass iommufd vfio vfio_iommu_type1 vfio-pci-core vfio-pci; do
+    [ -f /ko/$m.ko ] && insmod /ko/$m.ko
+done
+# Give the entropy device (1af4:1044) to vfio-pci.
+for d in /sys/bus/pci/devices/*; do
+    if [ "$(cat $d/vendor)" = "0x1af4" ] && [ "$(cat $d/device)" = "0x1044" ]; then
+        [ -e "$d/driver" ] && echo "$(basename $d)" > "$d/driver/unbind"
+        echo vfio-pci > "$d/driver_override"
+        echo "$(basename $d)" > /sys/bus/pci/drivers_probe
+    fi
+done
+echo "VM-BEGIN"
+/virtio_rng
+echo "VM-END $?"
+poweroff -f
+INIT
+chmod +x "$R/init"
+(cd "$R" && find . | cpio -o -H newc 2>/dev/null | gzip > "$WORK/initrd2.gz")
+timeout 600 qemu-system-x86_64 -M q35,kernel-irqchip=split $ACCEL -m 512 -nographic -no-reboot \
+    -kernel "$KERNEL" -initrd "$WORK/initrd2.gz" -append "console=ttyS0 quiet panic=-1 intel_iommu=on" \
+    -device intel-iommu,intremap=on -device virtio-rng-pci,disable-legacy=on,iommu_platform=on < /dev/null > "$WORK/console2.log" 2>&1
+tr -d '\r' < "$WORK/console2.log" | sed -n '/VM-BEGIN$/,/^VM-END/p' | sed '1d;$d' > "$WORK/out2.txt"
+if ! grep -q '^VM-END 0' <(tr -d '\r' < "$WORK/console2.log"); then
+    echo "FAIL virtio_vm queue: the program did not finish in the machine"; tail -20 "$WORK/console2.log"; exit 1
+fi
+if cmp -s "$WORK/out2.txt" "$ROOT/tests/device/vm/virtio_rng.out"; then
+    echo "PASS virtio_vm queue"; cat "$WORK/out2.txt" | sed 's/^/    /'
+else
+    echo "FAIL virtio_vm queue: output differs from vm/virtio_rng.out"; diff "$WORK/out2.txt" "$ROOT/tests/device/vm/virtio_rng.out" 2>&1 | head -20; echo "  got:"; sed 's/^/    /' "$WORK/out2.txt"; exit 1
 fi

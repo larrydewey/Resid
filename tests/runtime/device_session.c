@@ -67,6 +67,26 @@ static void req_open2(Req* r, int write, const char* addr, uint32_t size, int re
     r->n--;
     u(r, 1, 1); u(r, res2, 1); u(r, size2, 4);
 }
+/* A session with `dma` bytes of memory for the device at address `iova`
+ * (kind 14): the open's request, then the two. Under self-test 30 the
+ * host holds plain memory there, as the last of the session's resources. */
+static void req_dma(Req* r, const char* addr, uint32_t size, int res, int ven, int dev, uint32_t dma, uint64_t iova) {
+    req_open(r, 1, addr, size, res, ven, dev);
+    r->b[4] = 14;
+    u(r, dma, 4); u(r, iova, 8);
+}
+/* Bytes of that memory read (kind 15) or written (kind 16) whole. */
+static void req_bulk(Req* r, uint64_t id, int map, uint32_t off, uint32_t len, const uint8_t* data) {
+    r->n = 0;
+    u(r, 'R', 1); u(r, 'D', 1); u(r, 'V', 1); u(r, 1, 1); u(r, data ? 16 : 15, 1); u(r, data ? 1 : 0, 1);
+    u(r, id, 8); u(r, map, 1); u(r, off, 4); u(r, len, 4);
+    if (data) { memcpy(r->b + r->n, data, len); r->n += len; }
+}
+/* A reply of one run of bytes equal to `want`. */
+static int bytes_are(Rep* r, const uint8_t* want, int len) {
+    if (r->n != 10 + len || r->b[0] != 0 || r->b[1] != 1 || r->b[5] != 1) return 0;
+    return (r->b[6] | (r->b[7] << 8)) == len && memcmp(r->b + 10, want, len) == 0;
+}
 static int map_index = 0;   /* which of the session's resources the next accesses name */
 static void req_access(Req* r, uint64_t id, int store, uint32_t off, int width, uint64_t v) {
     r->n = 0;
@@ -318,6 +338,63 @@ int main(int argc, char** argv, char** envp) {
     req_open2(&q, 0, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041, 6, 4096);
     r = call(&q, 0);
     check("session_refuses_resource_6", code(&r) == 10 && value(&r) == 67);
+
+    /* A session with memory for the device: its words and whole runs of
+     * its bytes are read and written; a register is not read by the run. */
+    req_dma(&q, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041, 8192, 0x100000);
+    r = call(&q, 1);
+    uint64_t dm = number(&r);
+    check("dma_open", dm > 0);
+    r = call(&q, 0);
+    check("dma_open_needs_write_grant", code(&r) == 2);
+    uint8_t pat[300];
+    for (int i = 0; i < 300; i++) pat[i] = (uint8_t)(i * 7 + 3);
+    req_bulk(&q, dm, 1, 50, 300, pat);
+    r = call(&q, 1);
+    check("dma_write_bytes", stored(&r));
+    req_bulk(&q, dm, 1, 50, 300, NULL);
+    r = call(&q, 0);
+    check("dma_read_bytes", bytes_are(&r, pat, 300));
+    map_index = 1;
+    req_access(&q, dm, 0, 52, 4, 0);
+    r = call(&q, 0);
+    memcpy(&w32, pat + 2, 4);
+    check("dma_load_word", loaded(&r, w32));
+    req_access(&q, dm, 1, 4096, 8, 0x1122334455667788ull);
+    r = call(&q, 1);
+    req_access(&q, dm, 0, 4096, 8, 0);
+    r = call(&q, 0);
+    check("dma_store_word", loaded(&r, 0x1122334455667788ull));
+    map_index = 0;
+    req_access(&q, dm, 0, 16, 4, 0);
+    r = call(&q, 0);
+    memcpy(&w32, blk + 16, 4);
+    check("dma_register_load", loaded(&r, w32));
+    req_bulk(&q, dm, 0, 0, 16, NULL);
+    r = call(&q, 0);
+    check("dma_no_run_from_register", code(&r) == 10 && value(&r) == 72);
+    req_bulk(&q, dm, 1, 8000, 300, NULL);
+    r = call(&q, 0);
+    check("dma_run_past_end", code(&r) == 10 && value(&r) == 72);
+    req_bulk(&q, dm, 1, 0, 300, pat);
+    r = call(&q, 0);
+    check("dma_write_bytes_needs_grant", code(&r) == 2);
+    req_bulk(&q, dm, 1, 0, 8, NULL);
+    r = call(&q, 0);
+    uint8_t zero[8] = {0};
+    check("dma_untouched_is_zero", bytes_are(&r, zero, 8));
+    req_close(&q, dm);
+    r = call(&q, 0);
+    check("dma_close", stored(&r));
+    req_dma(&q, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041, 5000, 0x100000);
+    r = call(&q, 1);
+    check("dma_refuses_part_page", code(&r) == 10 && value(&r) == 68);
+    req_dma(&q, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041, 8192, 0x100800);
+    r = call(&q, 1);
+    check("dma_refuses_unaligned_address", code(&r) == 10 && value(&r) == 68);
+    req_dma(&q, "0000:00:05.0", 4096, 0, 0x1af4, 0x1041, 8192, 0x100000);
+    r = call(&q, 1);
+    check("dma_wrong_ids", code(&r) == 6);
 
     /* Eight at once on a thread, and no ninth; all end. */
     uint64_t ids[9];

@@ -1,0 +1,17 @@
+// A DmaDev's memory is a multiple of the page size (E0263).
+import "dev/fx_e0263_dma_pages.resid";
+
+@word(16) type Half = { UInt(16) v; };
+
+@registers(size = 4, session = device)
+type Regs = { @at(0) Half first; };
+
+@device(dma = fx_card)
+type Card = { Regs regs; };
+
+@requires(device)
+Int main() {
+    PciAddr a = PciAddr {.domain = 0, .bus = 0, .device = 4, .function = 0};
+    Result(Result(Half, DeviceError), DeviceError) r = card_session(CardWindows {.regs = PciWindow {.addr = a, .resource = 0, .base = 0, .len = 4}}, lambda(s) { regs_read_first(s.regs) });
+    return 0;
+}

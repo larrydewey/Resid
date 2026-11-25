@@ -670,7 +670,7 @@ Bool wd_writable(List(WdF) fs, Int i) {
 
 Str wd_racc(Str name, List(WdR) rs, List(WdT) ts, Str dev, Str devw, Str mode) {
     if (dev == "") { return ""; }
-    if (mode == "session") { return "\n// generated from @registers " + name + ": its sessions and accesses\n" + wd_sess(name, wd_snake(name), dev, devw) + wd_sacc_regs(name, wd_snake(name), rs, ts, devw != "" || dev == "device", 0, StrBuf()); }
+    if (mode == "session") { return "\n// generated from @registers " + name + ": its sessions and accesses\n" + wd_sess(name, wd_snake(name), dev, devw) + (if (dev == "device") { wd_sess_in(name, wd_snake(name)) } else { "" }) + wd_sacc_regs(name, wd_snake(name), rs, ts, devw != "" || dev == "device", 0, StrBuf()); }
     return "\n// generated from @registers " + name + ": its accesses\n" + wd_racc_regs(name, wd_snake(name), rs, ts, dev, devw, mode, 0, StrBuf());
 }
 
@@ -712,7 +712,8 @@ pub Str wd_scope_mark() { return "@session" + "_scope"; }
 Str wd_sess(Str name, Str sn, Str dev, Str devw) {
     Str ty = name + "Session";
     Str head = "pub type " + ty + " = { Int id; Int map; Int base; Int len; };\n";
-    // `session = device`: the block's sessions come from a @device.
+    // `session = device`: the block's sessions come from a @device, or
+    // the block is placed in a device's memory.
     if (dev == "device") { return head; }
     Str ro = wd_sess_fn(sn + "_session_ro", "device(readonly)", ty, sn, dev);
     Str rw = if (devw == "") { "" } else { wd_sess_fn(sn + "_session", "device", ty, sn, devw) };
@@ -727,6 +728,13 @@ Str wd_sess_fn(Str fname, Str grant, Str ty, Str sn, Str dev) {
         "    T __wd_r = __wd_f(" + ty + " {.id = __wd_id, .map = 0, .base = __wd_w.base, .len = __wd_w.len});\n" +
         "    Result(Bool, DeviceError) __wd_e = device_session_end(\"" + sn + "\", __wd_id);\n" +
         "    return match (__wd_e) { Ok(__wd_b) => Ok(__wd_r), Err(__wd_x) => Ok(__wd_r) };\n}\n";
+}
+
+// A `session = device` block placed at `off` of a device's memory: its
+// session there. A place the memory does not hold gives a session of no
+// bytes, whose every access is Err(BadInput).
+Str wd_sess_in(Str name, Str sn) {
+    return "pub " + name + "Session " + sn + "_in(DmaRegion __wd_d, Int __wd_o) {\n    Bool __wd_k = __wd_o >= 0 && __wd_o + " + sn + "_size() <= __wd_d.len;\n    return " + name + "Session {.id = __wd_d.id, .map = __wd_d.map, .base = __wd_o, .len = if (__wd_k) { " + sn + "_size() } else { 0 }};\n}\n";
 }
 
 // The accessors of a session block: as wd_racc_regs, over the session.
@@ -783,9 +791,11 @@ WdS wd_ddecl(Str s, Int k, WdS st) {
     if (e < 0) { return wd_rbad(st, "@device(...) does not close", k); }
     Str arg = str_trim(str_slice(s, k + 8, e - 1));
     List(Str) args = str_split(arg, ",");
+    Str dma = wd_arg(args, "dma", 0);
     Str dev = wd_arg(args, "session", 0);
     Str devw = wd_arg(args, "session_write", 0);
-    if (dev == "" || !wd_dargs_known(args, 0)) { return wd_rbad(st, "@device names the descriptors its session is opened under: `@device(session = dev, session_write = dev_w)`, got `" + arg + "`", k); }
+    Bool one = (dma != "") != (dev != "" || devw != "");
+    if (!one || (dma == "" && dev == "") || !wd_dargs_known(args, 0)) { return wd_rbad(st, "@device names the descriptors its session is opened under: `@device(session = dev, session_write = dev_w)`, or `@device(dma = dev)` for a device that is given memory, got `" + arg + "`", k); }
     Int t0 = wd_ws(s, e, n);
     Int t1 = if (t0 + 4 <= n && str_slice(s, t0, t0 + 4) == "pub ") { wd_ws(s, t0 + 4, n) } else { t0 };
     Bool isty = t1 + 5 <= n && str_slice(s, t1, t1 + 5) == "type ";
@@ -798,14 +808,15 @@ WdS wd_ddecl(Str s, Int k, WdS st) {
     WdDB b = wd_dmembers(str_split(str_slice(s, ob + 1, cb - 1), ";"), name, st.gen, 0, WdDB {.ms = [], .err = ""});
     if (b.err != "") { return wd_rbad(st, b.err, k); }
     if (b.ms.len() == 0 || b.ms.len() > 16) { return wd_rbad(st, "device " + name + " has 1 to 16 register blocks", k); }
-    return WdS {.out = wd_copy(wd_blank(st.out, s, k, e), s, e, cb), .i = cb, .gen = st.gen + wd_dgen(name, b.ms, dev, devw), .ts = st.ts, .code = "", .err = "", .at = -1};
+    if (dma != "" && wd_dhas(b.ms, "dma", 0)) { return wd_rbad(st, "device " + name + ": `dma` is the name of the memory a `@device(dma = ...)` session carries; call the block something else", k); }
+    return WdS {.out = wd_copy(wd_blank(st.out, s, k, e), s, e, cb), .i = cb, .gen = st.gen + (if (dma != "") { wd_dgen_dma(name, b.ms, dma) } else { wd_dgen(name, b.ms, dev, devw) }), .ts = st.ts, .code = "", .err = "", .at = -1};
 }
 
 Bool wd_dargs_known(List(Str) args, Int i) {
     if (i >= args.len()) { return true; }
     Int eq = wd_char(args[i], 61, 0, str_len(args[i]));
     Str key = if (eq > 0) { str_trim(str_slice(args[i], 0, eq)) } else { "" };
-    Bool ok = (key == "session" || key == "session_write") && str_trim(str_slice(args[i], eq + 1, str_len(args[i]))) != "";
+    Bool ok = (key == "session" || key == "session_write" || key == "dma") && str_trim(str_slice(args[i], eq + 1, str_len(args[i]))) != "";
     return ok && wd_dargs_known(args, i + 1);
 }
 
@@ -828,6 +839,26 @@ Str wd_dgen(Str name, List(WdDM) ms, Str dev, Str devw) {
     Str ro = wd_dfn(sn + "_session_ro", "device(readonly)", name, sn, ms, dev);
     Str rw = if (devw == "") { "" } else { wd_dfn(sn + "_session", "device", name, sn, ms, devw) };
     return head + ro + rw;
+}
+
+Bool wd_dhas(List(WdDM) ms, Str name, Int i) { return i < ms.len() && (ms[i].name == name || wd_dhas(ms, name, i + 1)); }
+
+// `@device(dma = d)`: the device is given memory (lib/dev/device.resid's
+// DmaDev). Its session record also carries that memory, a DmaRegion, as
+// `dma`: the program reads and writes it with dma_read and dma_write, or
+// places a register block in it (`avail_in(s.dma, off)`).
+Str wd_dgen_dma(Str name, List(WdDM) ms, Str dev) {
+    Str sn = wd_snake(name);
+    Str head = "\n// generated from @device " + name + "\npub type " + name + "Windows = { " + wd_dfields(ms, "PciWindow", false, 0, StrBuf()) + "};\npub type " + name + "Session = { " + wd_dfields(ms, "", true, 0, StrBuf()) + "DmaRegion dma; };\n";
+    Str n = f"{ms.len()}";
+    return head + wd_scope_mark() + "\n@requires(device)\npub Result(T, DeviceError) " + sn + "_session(" + name + "Windows __wd_w, T closure(" + name + "Session) __wd_f) {\n" +
+        "    List(PciWindow) __wd_ws = [" + wd_dwins(ms, 0, StrBuf()) + "];\n" +
+        "    List(DevOut) __wd_o = device.dma_open(" + dev + "(), __wd_ws)?;\n" +
+        "    Int __wd_id = match (dv_out_num(__wd_o, 0)) { Some(__wd_v) => __wd_v, None => 0 };\n" +
+        "    List(Int) __wd_n = [];\n" +
+        "    T __wd_r = __wd_f(" + name + "Session {" + wd_dinits(ms, 0, StrBuf()) + ", .dma = DmaRegion {.id = __wd_id, .map = dv_session_res(__wd_ws, 0, __wd_n).len(), .iova = " + dev + "().iova, .len = " + dev + "().dma}});\n" +
+        "    Result(Bool, DeviceError) __wd_e = device_session_end(\"" + sn + "\", __wd_id);\n" +
+        "    return match (__wd_e) { Ok(__wd_b) => Ok(__wd_r), Err(__wd_x) => Ok(__wd_r) };\n}\n";
 }
 
 Str wd_dfields(List(WdDM) ms, Str ty, Bool sess, Int i, StrBuf acc) {

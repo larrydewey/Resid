@@ -74,4 +74,30 @@ Option(PciWindow) vp_walk(List(UInt(8)) c, Int p, Int cfg_type, Int steps) {
     return Some(PciWindow {.addr = PciAddr {.domain = 0, .bus = 0, .device = 0, .function = 0}, .resource = (Int) c[p + 4], .base = vp_u32(c, p + 8), .len = len});
 }
 
+/// The notification step of the function at `a`: a queue is notified at
+/// its `queue_notify_off` times this many bytes into the notification
+/// block (§4.1.4.4). Err(Unsupported) as virtio_pci_window.
+@requires(device(readonly))
+pub Result(Int, DeviceError) virtio_pci_notify_step(PciAddr a) {
+    List(DevOut) outs = device.read_pci_attr(virtio_pci_config_op(), a)?;
+    if (outs.len() != 1) { return Err(BadReply("virtio_pci.config", "not one output")); }
+    List(UInt(8)) none = [];
+    List(UInt(8)) c = match (outs[0]) { OutBytes(b) => b, OutNum(v) => none, OutSecret(z) => none };
+    Int m = virtio_pci_notify_mult(c);
+    return if (m < 0) { Err(Unsupported("virtio_pci.config")) } else { Ok(m) };
+}
+
+/// The notify_off_multiplier in the configuration space `c`: the four
+/// bytes after the notification capability; -1 when there is none.
+pub Int virtio_pci_notify_mult(List(UInt(8)) c) {
+    if (c.len() < 64 || ((Int) c[6] & 16) == 0) { return 0 - 1; }
+    return vp_mult(c, (Int) c[52] & 252, 0);
+}
+
+Int vp_mult(List(UInt(8)) c, Int p, Int steps) {
+    if (p < 64 || p + 20 > c.len() || steps >= 48) { return 0 - 1; }
+    Bool hit = (Int) c[p] == 9 && (Int) c[p + 2] >= 20 && (Int) c[p + 3] == 2;
+    return if (hit) { vp_u32(c, p + 16) } else { vp_mult(c, (Int) c[p + 1] & 252, steps + 1) };
+}
+
 Int vp_u32(List(UInt(8)) c, Int i) { return (Int) c[i] | ((Int) c[i + 1] << 8) | ((Int) c[i + 2] << 16) | ((Int) c[i + 3] << 24); }

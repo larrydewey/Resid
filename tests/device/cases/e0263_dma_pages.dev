@@ -1,0 +1,5 @@
+// Fixture for e0263_dma_pages: the memory a device is given is whole pages (installed as lib/dev/fx_e0263_dma_pages.resid).
+import "device.resid";
+import "device_write.resid";
+
+pub DmaDev fx_card() { return DmaDev {.name = "fx.card", .vendor = 0x1af4, .device = 0x1044, .size = 4096, .dma = 5000, .iova = 0x100000, .stability = OutOfTree}; }

@@ -193,7 +193,7 @@ DvRun dv_check_all(Kg g, List(Int) calls, Int i, Map(Str, Int) vs, Bool a64, Str
         dv_diag_at("E0262", "the descriptor of device." + verb + " is not known after reduction: it must be a value the compiler computes, built only from literals (a descriptor from lib/dev/, not one chosen or computed at run time; spec Laws 1 and 5)", g, a, src, smap);
         return dv_check_all(g, calls, i + 1, vs, a64, src, smap, DvRun {.bad = true, .ds = acc.ds.concat([dv_none()])});
     }
-    Str want = dv_role_ty(g, if (verb == "transact_chain") { "transact" } else if (verb == "session_open") { "mmio_win" } else { verb });
+    Str want = dv_role_ty(g, if (verb == "transact_chain") { "transact" } else if (verb == "session_open") { "mmio_win" } else if (verb == "dma_open") { "dma_dev" } else { verb });
     Str got = dv_lit_type(g, a);
     if (want == "" || got != want) {
         dv_diag_at("E0260", "device." + verb + " takes a descriptor of type " + (if (want == "") { "?" } else { want }) + " declared in the standard library's lib/dev/, got a `" + got + "` value; a record of another type with the same fields is not a descriptor", g, a, src, smap);
@@ -322,8 +322,9 @@ DvD dv_parse(Kg g, Int a, Str verb) {
     // a PciList the directory of functions: neither has a path of its own.
     // An MmioWin's resource is run-time data (0 here; its path says any).
     Int pres = if (verb == "mmio_pci") { dv_ifld(g, st, "resource") } else { 0 };
-    Str path = if (verb == "read_pci_attr") { if (rel == "\x01") { rel } else { "/sys/bus/pci/devices/*/" + rel } } else if (verb == "mmio_pci") { "/sys/bus/pci/devices/*/resource" + f"{pres}" } else if (verb == "mmio_win" || verb == "session_open") { "/sys/bus/pci/devices/*/resource*" } else if (verb == "pci_list") { "/sys/bus/pci/devices" } else { dv_strv(g, dv_fld(g, st, "path", 0)) };
-    Str write = if (verb == "read_attr" || verb == "read_pci_attr" || verb == "pci_list") { "false" } else { dv_boolv(g, dv_fld(g, st, "write", 0)) };
+    Str path = if (verb == "read_pci_attr") { if (rel == "\x01") { rel } else { "/sys/bus/pci/devices/*/" + rel } } else if (verb == "mmio_pci") { "/sys/bus/pci/devices/*/resource" + f"{pres}" } else if (verb == "mmio_win" || verb == "session_open" || verb == "dma_open") { "/sys/bus/pci/devices/*/resource*" } else if (verb == "pci_list") { "/sys/bus/pci/devices" } else { dv_strv(g, dv_fld(g, st, "path", 0)) };
+    // A session with memory for the device always writes.
+    Str write = if (verb == "read_attr" || verb == "read_pci_attr" || verb == "pci_list") { "false" } else if (verb == "dma_open") { "true" } else { dv_boolv(g, dv_fld(g, st, "write", 0)) };
     Str stab = dv_stab_of(g, st);
     DvD base = DvD {.kind = verb, .name = if (name == "\x01") { "" } else { name }, .path = if (path == "\x01") { "" } else { path }, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = write, .vo = 0, .vw = 0, .vv = 0, .stab = stab, .maxs = [], .provs = [], .steps = [], .links = [], .err = ""};
     DvD b1 = if (name == "\x01") { dv_err(base, "`name` is not a string literal") } else if (path == "\x01") { dv_err(base, "`path` is not a string literal") } else if (write == "") { dv_err(base, "`write` is not a Bool literal") } else if (stab == "") { dv_err(base, "`stability` is not Uapi, AbiTesting or OutOfTree") } else { base };
@@ -333,13 +334,13 @@ DvD dv_parse(Kg g, Int a, Str verb) {
         // A CTAPHID exchange: its maximum message and its timeout (kept in size).
         return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [], .rn = [], .size = dv_ifld(g, st, "timeout_ms"), .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = b1.write, .vo = 0, .vw = 0, .vv = 0, .stab = b1.stab, .maxs = [dv_ifld(g, st, "max_message")], .provs = [], .steps = [], .links = [], .err = b1.err};
     }
-    if (verb == "mmio_pci" || verb == "mmio_win" || verb == "session_open") {
+    if (verb == "mmio_pci" || verb == "mmio_win" || verb == "session_open" || verb == "dma_open") {
         // The resource in `size`, the ids in vo and vv, and both as the
         // record's request number (vendor in the high half).
         Int ven = dv_ifld(g, st, "vendor");
         Int dev = dv_ifld(g, st, "device");
         Int rq = if (ven >= 0 && ven <= 65535 && dev >= 0 && dev <= 65535) { ven * 65536 + dev } else { 0 };
-        return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [0, 1], .rn = [rq, rq], .size = pres, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = b1.write, .vo = ven, .vw = 0, .vv = dev, .stab = b1.stab, .maxs = [dv_ifld(g, st, "size")], .provs = [], .steps = [], .links = [], .err = b1.err};
+        return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [0, 1], .rn = [rq, rq], .size = pres, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = b1.write, .vo = ven, .vw = 0, .vv = dev, .stab = b1.stab, .maxs = if (verb == "dma_open") { [dv_ifld(g, st, "size"), dv_ifld(g, st, "dma")] } else { [dv_ifld(g, st, "size")] }, .provs = [], .steps = [], .links = [], .err = b1.err};
     }
     List(Int) mx = if (verb == "transact" || verb == "transact_chain") { [dv_ifld(g, st, "max_command"), dv_ifld(g, st, "max_response")] } else if (verb == "read_attr" || verb == "read_pci_attr" || verb == "pci_list") { [dv_ifld(g, st, "max")] } else if (verb == "mmio") { [dv_ifld(g, st, "size")] } else { [dv_ifld(g, st, "max_inblob"), dv_ifld(g, st, "max_outblob"), dv_ifld(g, st, "max_auxblob"), dv_ifld(g, st, "max_manifestblob")] };
     List(Str) provs = if (verb == "configfs_report") { dv_strs(g, dv_items(g, dv_fld(g, st, "providers", 0)), 0, ListBuf()) } else { [] };
@@ -503,9 +504,10 @@ Str dv_check(DvD d, Bool a64) {
     }
     // A PCI function's memory by its address: which resource, and the ids
     // the helper compares with the function's before it touches it.
-    if (d.kind == "mmio_pci" || d.kind == "mmio_win" || d.kind == "session_open") {
+    if (d.kind == "dma_open" && d.maxs.len() == 2 && d.maxs[1] % 4096 != 0) { return "E0263: a DmaDev's `dma` is whole pages (a multiple of 4096 bytes)"; }
+    if (d.kind == "mmio_pci" || d.kind == "mmio_win" || d.kind == "session_open" || d.kind == "dma_open") {
         if (d.size < 0 || d.size > 5) { return "E0263: an MmioPci's `resource` is a literal from 0 to 5 (a function's resource0 to resource5)"; }
-        if (d.vo < 0 || d.vo > 65535 || d.vv < 0 || d.vv > 65535) { return "E0263: an " + (if (d.kind == "mmio_pci") { "MmioPci" } else { "MmioWin" }) + "'s `vendor` and `device` are literal ids from 0 to 65535 (0xffff)"; }
+        if (d.vo < 0 || d.vo > 65535 || d.vv < 0 || d.vv > 65535) { return "E0263: an " + (if (d.kind == "mmio_pci") { "MmioPci" } else if (d.kind == "dma_open") { "DmaDev" } else { "MmioWin" }) + "'s `vendor` and `device` are literal ids from 0 to 65535 (0xffff)"; }
     }
     // A Transact writes its command to the device, whatever it reads back.
     if ((d.kind == "transact" || d.kind == "transact_chain") && d.write != "true") { return "E0263: a Transact writes its command to the device, so it is a write: `write = true` (device(readonly) never covers one)"; }

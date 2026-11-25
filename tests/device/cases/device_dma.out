@@ -1,0 +1,7 @@
+fx.virtio_rng: device absent
+fx.virtio_rng: bad input: a window is in resource 0 to 5
+avail.idx: bad input: the session has ended
+avail.idx: bad input: the access is not inside the window
+dma: bad input: the session has ended
+dma: bad input: the bytes are not inside the memory
+dma: bad input: the bytes are not inside the memory

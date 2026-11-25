@@ -256,6 +256,25 @@ region, with no diagnostic.
   `device_session`, conformance `err_device_member`, and the virtual
   machine's virtio device through two blocks (common and interrupt
   status) of one session.
+- **Stage I: the virtio queue.** A device that is given memory. Request
+  kind 14 is a session whose host reaches the function through VFIO
+  (`dh_vfio`: the IOMMU group, the container, the device's descriptor;
+  ids from its configuration space; resources mapped through that
+  descriptor) and maps `dma` bytes of its own memory for the device at
+  `iova` (VFIO_IOMMU_MAP_DMA), all before the session's unchanged
+  filter. Kinds 15 and 16 read and write runs of that memory (at most
+  64 KiB a message; never a register). `DmaDev`, `DmaRegion`,
+  `device.dma_open`, `dma_read`, `dma_write`; `@device(dma = d)` gives
+  the session record a `dma` field, and each `session = device` block
+  `t_in(dma, off)`. `lib/dev/virtio_pci.resid` gained the notification
+  step. Tests: `device_session.c` (53 checks; the host's side with
+  plain memory under self-test 30), `device_dma`, `e0263_dma_pages`,
+  and `tests/device/virtio_vm.sh -m MODULES`: a second machine with an
+  emulated IOMMU where `tests/device/vm/virtio_rng.resid` negotiates
+  features, lays out a split virtqueue, offers a buffer, notifies, polls
+  the used ring and reads back the 32 random bytes the device wrote.
+  Not yet: interrupts; memory shared with the program; more than one
+  buffer in flight (the test's queue has one).
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

@@ -146,3 +146,38 @@ pub Result(List(DevOut), DeviceError) device_session_store(Str name, Int id, Int
     if (r.err != "") { return Err(BadInput(name, r.err)); }
     return dv_session_answer(name, dv_answer(name, r, resid_device_call_w(r.req)));
 }
+
+/// Opens a session with memory for the device (the compiler's target for
+/// `device.dma_open`). Returns the session's number as OutNum.
+/// Compiler-generated calls only; needs the full `device` grant.
+@descriptor(engine_dma_open_w)
+@requires(device)
+pub Result(List(DevOut), DeviceError) device_engine_dma_open_w(DmaDev op, List(PciWindow) ws) {
+    DvReq r = dv_prep_dma(op, ws);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_session_answer(op.name, dv_answer(op.name, r, resid_device_call_w(r.req))));
+}
+
+/// Writes `bytes` at `off` of a DMA session's memory, at most 65536 a
+/// message. Err(BadInput) outside the memory or after the session's end.
+@requires(device)
+pub Result(Bool, DeviceError) dma_write(DmaRegion r, Int off, List(UInt(8)) bytes) {
+    if (off < 0 || off + bytes.len() > r.len) { return Err(BadInput("dma", "the bytes are not inside the memory")); }
+    return dma_write_from(r, off, bytes, 0);
+}
+
+@requires(device)
+Result(Bool, DeviceError) dma_write_from(DmaRegion r, Int off, List(UInt(8)) bytes, Int i) {
+    if (i >= bytes.len()) { return Ok(true); }
+    Int n = if (bytes.len() - i > 65536) { 65536 } else { bytes.len() - i };
+    ListBuf(Int) none = ListBuf();
+    ListBuf(Int) head = dv_u(dv_u(dv_u(dv_u(none.push(82).push(68).push(86).push(1).push(16).push(1), r.id, 8), r.map, 1), off + i, 4), n, 4);
+    List(DevOut) o = dv_session_answer("dma", dv_answer("dma", DvReq {.err = "", .req = [], .outs = []}, resid_device_call_w(dma_bytes(head, bytes, i, i + n).finish())))?;
+    return dma_write_from(r, off, bytes, i + n);
+}
+
+ListBuf(Int) dma_bytes(ListBuf(Int) b, List(UInt(8)) bytes, Int i, Int end) {
+    if (i >= end) { return b; }
+    return dma_bytes(b.push((Int) bytes[i]), bytes, i + 1, end);
+}

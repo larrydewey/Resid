@@ -291,6 +291,38 @@ The windows are all of one PCI function; the host maps each resource
 they name and holds every access to the one it names (`E0298` for a
 member that is not a session block).
 
+#### A device that is given memory
+
+A device that reads and writes memory its driver gives it (a virtio
+queue) is declared with `dma`, naming a `DmaDev` descriptor:
+
+```resid
+@device(dma = virtio_rng_dma)
+type Rng = { Common common; Notify notify; };
+
+@registers(size = 6, session = device)
+type Avail = { @at(0) Half flags; @at(2) Half idx; @at(4) Half ring0; };
+
+rng_session(w, lambda(s) {
+    AvailSession av = avail_in(s.dma, 4096);         // a block placed in the memory
+    Bool ok = avail_write_idx(av, Half {.v = 1})?;
+    List(UInt(8)) bytes = dma_read(s.dma, 12288, 32)?;
+    ...
+})
+```
+
+The session's host reaches the function through the kernel's VFIO
+driver, so the function must be bound to `vfio-pci` and behind an IOMMU
+(`Unsupported` otherwise). It maps the descriptor's `dma` bytes of its
+own memory for the device at the address `iova`; the IOMMU lets the
+device reach those bytes and nothing else. The session record carries
+that memory as `s.dma`, a `DmaRegion`: `s.dma.iova` is the address to
+give the device, `dma_read` and `dma_write` move bytes, and every
+`session = device` block has `t_in(s.dma, off)`, its session at that
+offset, so a queue's parts are packed types like any register. The
+memory is in the host, never in the program, and the host knows nothing
+of queues. Such a session always writes (`device`).
+
 Without a session, each access runs in a device host of its own, like every device call:
 the host maps the device's memory, installs its filter, makes the one
 load or store and exits. It costs about what a device call does (2 ms),

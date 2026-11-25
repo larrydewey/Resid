@@ -282,7 +282,7 @@ Int pq_parse_r(Int d, Int r, Int n) {
     Int path = pq_alloc(d, pl + 1);
     _ = mcopy(path, pp, pl);
     _ = dset(d, 4, path) + dset(d, 5, pl);
-    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else if (kind == 6) { pq_tchain(d, r) } else if (kind == 7) { pq_ctaphid(d, r) } else if (kind == 8) { pq_mmio(d, r) } else if (kind == 9) { pq_mmio_pci(d, r) } else if (kind == 11) { pq_session(d, r) } else if (kind == 10) { pq_attr(d, r) } else { false };
+    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else if (kind == 6) { pq_tchain(d, r) } else if (kind == 7) { pq_ctaphid(d, r) } else if (kind == 8) { pq_mmio(d, r) } else if (kind == 9) { pq_mmio_pci(d, r) } else if (kind == 11) { pq_session(d, r) } else if (kind == 14) { pq_dma(d, r) } else if (kind == 10) { pq_attr(d, r) } else { false };
     if (!ok || rd_bad(r)) { return 3; }
     if ((kind == 1 || kind == 5) && !pq_args(d, r)) { return 4; }
     if (rd_bad(r) || ld64(r + 16) != n) { return 5; }
@@ -577,6 +577,18 @@ Bool pq_session(Int d, Int r) {
     return pq_session_maps(r, ms, 0, n);
 }
 
+// A DMA session's part (kind 14): a session's, then the bytes of memory
+// the device is to reach (4) and the address it reaches them at (8); kept
+// as words 37 and 38.
+Bool pq_dma(Int d, Int r) {
+    if (!pq_session(d, r)) { return false; }
+    Int size = rd_u(r, 4);
+    Int ip = rd_take(r, 8);
+    if (rd_bad(r)) { return false; }
+    _ = dset(d, 37, size) + dset(d, 38, ld64(ip));
+    return true;
+}
+
 Bool pq_session_maps(Int r, Int ms, Int i, Int n) {
     if (i >= n) { return !rd_bad(r); }
     Int res = rd_u(r, 1);
@@ -644,10 +656,18 @@ Int pq_check(Int d) {
     // an address under /sys/bus/pci/devices; resource 0 to 5.
     // A session (kind 11) names its function and resource the same way,
     // and carries a load of one byte at 0 where an access would be.
-    if (kind == 9 || kind == 11) {
+    if (kind == 9 || kind == 11 || kind == 14) {
         if (dget(d, 5) <= 21 || c_strncmp(dget(d, 4), pci_root(), 20) != 0 || ld8(dget(d, 4) + 20) != 47 || !pq_pci_addr(dget(d, 4) + 21, dget(d, 5) - 21)) { return 65; }
         if ((dget(d, 39) & 255) > 5) { return 66; }
-        if (kind == 11 && !pq_session_maps_ok(dget(d, 35), 0, dget(d, 36))) { return 67; }
+        if (kind != 9 && !pq_session_maps_ok(dget(d, 35), 0, dget(d, 36))) { return 67; }
+        // Memory for the device: whole pages, at most dv_buf_max, at a
+        // page address below 2^39; and such a session writes.
+        if (kind == 14) {
+            Int ds = dget(d, 37);
+            Int iv = dget(d, 38);
+            if (wr != 1) { return 19; }
+            if (ds <= 0 || ds > dv_buf_max() || ds % 4096 != 0 || iv < 4096 || iv % 4096 != 0 || iv + ds > 549755813888) { return 68; }
+        }
     }
     // The PCI functions present: that directory, read only.
     if (kind == 10) {
@@ -655,7 +675,7 @@ Int pq_check(Int d) {
         if (wr != 0) { return 13; }
         if (!pq_max_ok(dget(d, 10))) { return 15; }
     }
-    if (kind == 8 || kind == 9 || kind == 11) {
+    if (kind == 8 || kind == 9 || kind == 11 || kind == 14) {
         Int w = dget(d, 12);
         if (!pq_max_ok(dget(d, 10))) { return 60; }
         if (w != 1 && w != 2 && w != 4 && w != 8) { return 61; }
@@ -1103,13 +1123,13 @@ Int dp_call(Int req) {
     // An access to a session, or its end: no descriptor, only the
     // session's number (ds_access, ds_close).
     Int k4 = ld8(buf + 4);
-    if (k4 == 12 || k4 == 13) {
-        Int so = if (k4 == 12) { ds_access(buf, n) } else { ds_close(buf, n) };
+    if (k4 == 12 || k4 == 13 || k4 == 15 || k4 == 16) {
+        Int so = if (k4 == 12) { ds_access(buf, n) } else if (k4 == 13) { ds_close(buf, n) } else { ds_bulk(buf, n, k4 == 16) };
         return resid_raw_fill(buf, 0, n) * 0 + c_free(buf) * 0 + so;
     }
     Int d = pq_parse(buf, n);
     Int why = dget(d, 28);
-    Int out = if (why != 0) { dev_err_reply(de_refused(), why) } else if (dget(d, 0) == 11) { ds_open(d, buf, n) } else { dp_run(d, buf, n) };
+    Int out = if (why != 0) { dev_err_reply(de_refused(), why) } else if (dget(d, 0) == 11 || dget(d, 0) == 14) { ds_open(d, buf, n) } else { dp_run(d, buf, n) };
     _ = pq_free(d);
     // The request carries the program's inputs: wiped before it is freed.
     _ = resid_raw_fill(buf, 0, n);
@@ -1304,6 +1324,46 @@ Int ds_access(Int buf, Int n) {
     _ = resid_raw_fill(m, 0, 32) + c_free(m);
     if (status != 0) { return dev_err_reply(de_refused(), 72); }   // the host refused the access
     return if (store == 0) { ds_num_reply(v) } else { ds_done_reply() };
+}
+
+// A request of kind 15 or 16: bytes of a DMA session's memory read or
+// written whole. After the six bytes: the session's number (8), which
+// resource (1), the offset (4), the length (4, at most 65536) and, for a
+// write, that many bytes. The host does the same checks against the
+// memory it holds, and ends the session on a write it refuses.
+Int ds_bulk(Int buf, Int n, Bool write) {
+    if (n < 23) { return dev_err_reply(de_refused(), 1); }
+    Int len = le_get(buf + 19, 4);
+    if (len < 1 || len > 65536 || n != (if (write) { 23 + len } else { 23 }) || ld8(buf + 5) != (if (write) { 1 } else { 0 })) { return dev_err_reply(de_refused(), 73); }
+    Int id = le_get(buf + 6, 8);
+    Int e = if (id > 0) { ds_find(id, 0) } else { 0 };
+    if (e == 0) { return dev_err_reply(de_refused(), 71); }
+    Int m = xmalloc(32);
+    _ = resid_raw_fill(m, 0, 32);
+    _ = st8(m, if (write) { 4 } else { 3 }) + st8(m + 2, ld8(buf + 14)) + le_put(m + 4, le_get(buf + 15, 4), 4) + le_put(m + 8, len, 8);
+    Int a = ld64(e + 8);
+    Int dl = ds_deadline();
+    _ = st64(hs_timeout_w(), 0) + st64(hs_peer_w(), ld64(e + 16));
+    Bool sent = hs_send_until(a, m, 0, 16, dl) && (!write || hs_send_until(a, buf + 23, 0, len, dl));
+    Bool ok = sent && hs_recv_until(a, m + 16, 0, 9, dl) == 9;
+    Int status = if (ok) { ld8(m + 16) } else { 1 };
+    Int rb = if (ok && status == 0 && !write) { xmalloc(len + 16) } else { 0 };
+    Bool got = rb == 0 || hs_recv_until(a, rb + 10, 0, len, dl) == len;
+    _ = c_free(m);
+    if (!ok || !got) {
+        Bool late = ld64(hs_timeout_w()) != 0;
+        Int st = ds_drop(e);
+        Int sig = if (st >= 0) { st & 127 } else { 0 };
+        _ = if (rb != 0) { c_free(rb) } else { 0 };
+        if (late) { return dev_err_reply(de_timeout(), 0); }
+        return dev_err_reply(de_host(), if (sig != 0) { 256 + sig } else { 4 * 256 });
+    }
+    if (status != 0) { return dev_err_reply(de_refused(), 72); }
+    if (write) { return ds_done_reply(); }
+    // [0, one output, bytes, their length, the bytes]
+    _ = st8(rb, 0) + le_put(rb + 1, 1, 4) + st8(rb + 5, 1) + le_put(rb + 6, len, 4);
+    Int out = dp_list(rb, 10 + len);
+    return resid_raw_fill(rb, 0, len + 16) * 0 + c_free(rb) * 0 + out;
 }
 
 // A request of kind 13: the session's number after the first six bytes.
@@ -1522,6 +1582,9 @@ Int dh_main(Int argv, Int envp, Int mode, Int root) {
     if (kind == 9) { return dh_mmio_pci(h, d); }
     if (kind == 10) { return dh_pci_list(h, d); }
     if (kind == 11) { return dh_session(h, d); }
+    // Memory for the device needs an IOMMU, so VFIO; self-test 30 gives it
+    // files for resources and plain memory, to test what follows.
+    if (kind == 14) { return if (dh_pci_fake(h)) { dh_session(h, d) } else { dh_vfio(h, d) }; }
     if (kind == 4) {
         // The entry's name: 16 random bytes from the parent, which removes
         // the entry itself if this host dies before it does.
@@ -2578,10 +2641,15 @@ Int dh_session(Int h, Int d) {
     if (map < 0 && map > 0 - 4096) { return dh_fail_errno(h, map, false); }
     // The resources mapped, two words each: where, and how many bytes.
     Int more = dget(d, 36);
-    Int tab = xmalloc((more + 1) * 16);
+    Int tab = xmalloc((more + 2) * 16);
     _ = st64(tab, map) + st64(tab + 8, size);
     Int mo = ds_map_more(h, dir, rn, wr, fake, dget(d, 35), tab, 0, more);
     if (mo != 0) { return if (mo > 0) { dh_fail(h, mo, 0) } else { dh_fail_errno(h, mo, false) }; }
+    // Self-test of a DMA session: plain memory where the device's would be.
+    Bool dma = dget(d, 0) == 14;
+    Int dmem = if (dma) { dv_map(dget(d, 37)) } else { 0 };
+    if (dma && dmem == 0) { return native_child_exit(125); }
+    _ = if (dma) { st64(tab + (more + 1) * 16, dmem) + st64(tab + (more + 1) * 16 + 8, dget(d, 37)) } else { 0 };
     if (!dh_regions(h, 4)) { return native_child_exit(125); }
     Int vb = dh_region(h, 32, 0);
     Int db = dh_region(h, 32, 0);
@@ -2599,7 +2667,120 @@ Int dh_session(Int h, Int d) {
     if (mm_hex_id(vb, vr) != ((want >> 8) & 65535) || mm_hex_id(db, dr) != ((want >> 24) & 65535)) { return dh_fail(h, 6, 0); }
     _ = resid_raw_fill(msg, 0, 32);
     if (!native_write(msg, 0, 10)) { return native_child_exit(125); }
-    return ds_serve(tab, more + 1, wr, dget(h, 22), msg);
+    return ds_serve(tab, if (dma) { more + 2 } else { more + 1 }, wr, dget(h, 22), msg, if (dma) { more + 1 } else { 0 - 1 });
+}
+
+// ─── A session with memory for the device (kind 14) ─────────────────
+// The device is to read and write memory the driver gives it, so it is
+// reached through VFIO and an IOMMU (PLAN-hardware-access.md §11): the
+// function, bound to vfio-pci, is opened through its IOMMU group; its
+// ids are read from its own configuration space; its resources are
+// mapped through the device's descriptor; and one block of this host's
+// memory is mapped for the device at the address the request names. The
+// IOMMU lets the device reach that block and nothing else. All of it
+// happens before the filter, which is the plain session's.
+Int vf_ioctl(Int fd, Int nr, Int arg) { return resid_raw_syscall(16, fd, 15104 + nr, arg, 0, 0, 0); }   // _IO(';', nr)
+
+// The number at the end of the function's iommu_group link, as
+// "/dev/vfio/<number>" (NUL-terminated), or 0.
+Int vf_group_path(Int dir) {
+    Int lb = xmalloc(256);
+    Int n = sc4(267, dir, resid_raw_addr("iommu_group"), lb, 255);   // readlinkat
+    if (n <= 0 || n > 255) { return 0; }
+    Int from = vf_last_slash(lb, n - 1) + 1;
+    if (from >= n || n - from > 10 || !vf_digits(lb, from, n)) { return 0; }
+    Int out = xmalloc(32);
+    _ = mcopy(out, resid_raw_addr("/dev/vfio/"), 10) + mcopy(out + 10, lb + from, n - from) + st8(out + 10 + n - from, 0);
+    return out;
+}
+
+Int vf_last_slash(Int p, Int i) { return if (i < 0 || ld8(p + i) == 47) { i } else { vf_last_slash(p, i - 1) }; }
+Bool vf_digits(Int p, Int i, Int n) { return i >= n || (ld8(p + i) >= 48 && ld8(p + i) <= 57 && vf_digits(p, i + 1, n)); }
+
+// Region `index` of the device: its size at ri + 16, its offset in the
+// device's descriptor at ri + 24, its flags at ri + 4. 0, or an errno.
+Int vf_region(Int dev, Int ri, Int index) {
+    _ = resid_raw_fill(ri, 0, 32) + st32(ri, 32) + st32(ri + 8, index);
+    return vf_ioctl(dev, 108, ri);   // VFIO_DEVICE_GET_REGION_INFO
+}
+
+// Map resource `res` for `size` bytes into tab entry i: 0, 6 when the
+// device has no such memory to map, or a negative errno.
+Int vf_map(Int dev, Int ri, Int tab, Int i, Int res, Int size) {
+    Int r = vf_region(dev, ri, res);
+    if (r < 0) { return r; }
+    // Readable, writable and mappable (flags 1, 2 and 4), and large enough.
+    if ((ld32(ri + 4) & 7) != 7 || ld64(ri + 16) < size) { return 6; }
+    Int map = resid_raw_syscall(9, 0, (size + 4095) & (0 - 4096), 3, 1, dev, ld64(ri + 24));   // MAP_SHARED
+    if (map < 0 && map > 0 - 4096) { return map; }
+    _ = st64(tab + i * 16, map) + st64(tab + i * 16 + 8, size);
+    return 0;
+}
+
+Int vf_map_more(Int dev, Int ri, Int ms, Int tab, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int r = vf_map(dev, ri, tab, i + 1, ld64(ms + i * 16), ld64(ms + i * 16 + 8));
+    return if (r != 0) { r } else { vf_map_more(dev, ri, ms, tab, i + 1, n) };
+}
+
+Int dh_vfio(Int h, Int d) {
+    Int root = dh_pci_root(h);
+    if (root < 0) { return dh_fail_errno(h, root, false); }
+    Int an = dget(d, 5) - 21;
+    Int name = xmalloc(an + 3);
+    _ = mcopy(name, dget(d, 4) + 21, an) + st8(name + an, 47) + st8(name + an + 1, 46) + st8(name + an + 2, 0);
+    Int dir = dh_open2(root, name, o_path() | o_directory(), 2);
+    if (dir < 0) { return dh_fail_errno(h, dir, false); }
+    // No IOMMU group: this function cannot be confined to the memory it is given.
+    Int gp = vf_group_path(dir);
+    if (gp == 0) { return dh_fail(h, 6, 0); }
+    Int cont = dh_open_dev(resid_raw_addr("/dev/vfio/vfio"), 2);
+    if (cont < 0) { return dh_fail_errno(h, cont, false); }
+    Int grp = dh_open_dev(gp, 2);
+    if (grp < 0) { return dh_fail_errno(h, grp, false); }
+    Int w = xmalloc(32);
+    _ = st32(w, cont);
+    Int r1 = vf_ioctl(grp, 104, w);                       // VFIO_GROUP_SET_CONTAINER
+    Int r2 = if (r1 < 0) { r1 } else { vf_ioctl(cont, 102, 3) };   // VFIO_SET_IOMMU, VFIO_TYPE1v2_IOMMU
+    if (r2 < 0) { return dh_fail_errno(h, r2, true); }
+    _ = st8(name + an, 0);
+    Int dev = vf_ioctl(grp, 106, name);                   // VFIO_GROUP_GET_DEVICE_FD
+    if (dev < 0) { return dh_fail_errno(h, dev, true); }
+    _ = dset(h, 7, dev);
+    // The ids, from the device's own configuration space (region 7), and
+    // its memory decoding and bus mastering turned on there.
+    Int ri = xmalloc(32);
+    Int rc = vf_region(dev, ri, 7);
+    if (rc < 0) { return dh_fail_errno(h, rc, true); }
+    Int cfg = ld64(ri + 24);
+    _ = st64(w, 0);
+    if (resid_raw_syscall(17, dev, w, 4, cfg, 0, 0) != 4) { return dh_fail(h, 6, 0); }   // pread64
+    Int want = dget(d, 39);
+    if (le_get(w, 2) != ((want >> 8) & 65535) || le_get(w + 2, 2) != ((want >> 24) & 65535)) { return dh_fail(h, 6, 0); }
+    if (resid_raw_syscall(17, dev, w, 2, cfg + 4, 0, 0) != 2) { return dh_fail(h, 6, 0); }
+    _ = le_put(w, le_get(w, 2) | 6, 2);
+    if (resid_raw_syscall(18, dev, w, 2, cfg + 4, 0, 0) != 2) { return dh_fail(h, 6, 0); }   // pwrite64
+    Int more = dget(d, 36);
+    Int tab = xmalloc((more + 2) * 16);
+    Int m0 = vf_map(dev, ri, tab, 0, want & 255, dget(d, 10));
+    Int m1 = if (m0 != 0) { m0 } else { vf_map_more(dev, ri, dget(d, 35), tab, 0, more) };
+    if (m1 != 0) { return if (m1 > 0) { dh_fail(h, m1, 0) } else { dh_fail_errno(h, m1, false) }; }
+    // The memory the device may reach, and only that.
+    Int ds = dget(d, 37);
+    Int dmem = dv_map(ds);
+    if (dmem == 0) { return native_child_exit(125); }
+    _ = st32(w, 32) + st32(w + 4, 3) + st64(w + 8, dmem) + st64(w + 16, dget(d, 38)) + st64(w + 24, ds);
+    Int rm = vf_ioctl(cont, 113, w);                      // VFIO_IOMMU_MAP_DMA, read and write
+    if (rm < 0) { return dh_fail_errno(h, rm, true); }
+    _ = st64(tab + (more + 1) * 16, dmem) + st64(tab + (more + 1) * 16 + 8, ds);
+    if (!dh_regions(h, 2)) { return native_child_exit(125); }
+    Int msg = dh_region(h, 32, 0);
+    if (msg == 0 || !dh_bufs(h, d)) { return native_child_exit(125); }
+    _ = dh_rule(h, resid_raw_nr(47), 1, 3, 0) + dh_rule(h, resid_raw_nr(102), 0, 0, 0) + dh_rule(h, resid_raw_nr(104), 0, 0, 0);   // recvmsg(3), getuid, getgid
+    if (!dh_lock(h)) { return native_child_exit(126); }
+    _ = resid_raw_fill(msg, 0, 32);
+    if (!native_write(msg, 0, 10)) { return native_child_exit(125); }
+    return ds_serve(tab, more + 2, 1, dget(h, 22), msg, more + 1);
 }
 
 // Map the session's other resources into tab (entry i + 1 for the i-th):
@@ -2621,7 +2802,7 @@ Int ds_map_more(Int h, Int dir, Int rn, Int wr, Bool fake, Int ms, Int tab, Int 
 
 // One access after another, until the program's end of the socket closes
 // (exit 0) or something else than a whole message arrives (exit 125).
-Int ds_serve(Int tab, Int maps, Int wr, Int ppid, Int m) {
+Int ds_serve(Int tab, Int maps, Int wr, Int ppid, Int m, Int dmai) {
     Int r = hs_recv_cred(3, m, 0, 16, ppid);
     if (r != 16) { return native_child_exit(if (r == 0) { 0 } else { 125 }); }
     Int op = ld8(m);
@@ -2630,12 +2811,26 @@ Int ds_serve(Int tab, Int maps, Int wr, Int ppid, Int m) {
     Int off = le_get(m + 4, 4);
     Bool known = mi < maps;
     Int size = if (known) { ld64(tab + mi * 16 + 8) } else { 0 };
+    // Bytes of the device's memory, whole (3 out, 4 in): only that
+    // memory, never a register. A write the host refuses ends the
+    // session, since its bytes are already on their way.
+    if (op == 3 || op == 4) {
+        Int len = le_get(m + 8, 4);
+        Bool fits = known && mi == dmai && off >= 0 && len >= 1 && len <= 65536 && off + len <= size;
+        if (!fits && op == 4) { return native_child_exit(125); }
+        Int at = ld64(tab + (if (fits) { mi } else { 0 }) * 16) + off;
+        if (fits && op == 4 && hs_recv_cred(3, at, 0, len, ppid) != len) { return native_child_exit(125); }
+        _ = st8(m + 16, if (fits) { 0 } else { 1 }) + st64(m + 17, 0);
+        if (!native_write(m + 16, 0, 9)) { return native_child_exit(125); }
+        if (fits && op == 3 && !native_write(at, 0, len)) { return native_child_exit(125); }
+        return ds_serve(tab, maps, wr, ppid, m, dmai);
+    }
     Bool ok = known && (op == 1 || (op == 2 && wr == 1)) && (w == 1 || w == 2 || w == 4 || w == 8) && off >= 0 && off % w == 0 && off + w <= size;
     Int at = if (ok) { ld64(tab + mi * 16) + off } else { 0 };
     Int v = if (!ok) { 0 } else if (op == 2) { mm_store(at, w, ld64(m + 8)) * 0 } else { mm_load(at, w) };
     _ = st8(m + 16, if (ok) { 0 } else { 1 }) + st64(m + 17, v);
     if (!native_write(m + 16, 0, 9)) { return native_child_exit(125); }
-    return ds_serve(tab, maps, wr, ppid, m);
+    return ds_serve(tab, maps, wr, ppid, m, dmai);
 }
 
 // The names in the directory of PCI functions, a line each: addresses, as
