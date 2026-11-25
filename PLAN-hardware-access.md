@@ -505,6 +505,28 @@ which stays as generic as before. A disk read is then one crossing.
 Rejected for now: the driver's code in the host process (the end
 state; nothing is faster until all of it exists).
 
+**The driver's code in the host** (decided 2026-11-25). With batches a
+request is a crossing; the end state has none for the driver's own
+work: a Resid function runs inside the device host, after its filter,
+and touches the registers and the device's memory directly.
+
+- **A driver is a function with its own loop**: `Int t_driver(TSession
+  s)`. It sets the device up and runs a tail loop that takes a request
+  from the program, does it, and replies; its state is what the loop
+  carries, reclaimed a step at a time like any tail loop's. It can act
+  between requests (on the device's interrupt). Rejected: a handler the
+  host calls for each request (nothing between requests, and the state
+  would be the runtime's to keep).
+- **Messages are bytes**, at most 64 KiB each way, given structure by
+  layout types. The boundary is a wire format that can be checked and
+  fuzzed. Typed messages can come later over the same transport.
+- **A driver may do nothing else**: its device session and the message
+  calls, no other capability (the compiler refuses one; the host's
+  filter would kill it anyway). What else it needs, the program sends.
+- Inside the host the generated accessors, `dma_read`, batches and the
+  rest run in place, with no message: driver code reads as the tests'
+  code does today.
+
 Built as stage I, and a virtio entropy device read through it in a
 virtual machine with an emulated IOMMU. Every privileged call the host
 makes (the VFIO descriptors, the mappings) comes before its filter, so
