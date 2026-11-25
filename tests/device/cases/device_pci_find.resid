@@ -1,0 +1,49 @@
+// A PCI device by its address (PLAN-hardware-access.md §11): the
+// functions present are listed and found by their ids, and a register
+// block declared `@registers(pci = ...)` is read and written at an address
+// given at run time. The descriptor names the ids; the device host reads
+// the function's own and makes the access only when they are those.
+import "dev/pci.resid";
+import "dev/fx_device_pci_find.resid";
+
+@word(32) type CardId = { DeviceOwned(UInt(32)) value; };
+@word(32) type CardCtl = { Bool on; @reserved(31); };
+
+@registers(size = 0x100, pci = fx_card, pci_write = fx_card_w)
+type CardRegs = {
+    @at(0x00) CardId  id;
+    @at(0x10) CardCtl ctl;
+};
+
+Bool has(List(PciAddr) fs, PciAddr a, Int i) {
+    if (i >= fs.len()) { return false; }
+    return pci_addr_text(fs[i]) == pci_addr_text(a) || has(fs, a, i + 1);
+}
+
+// The first function, found again by the ids it reports.
+@requires(device(readonly))
+Result(Bool, DeviceError) refind(List(PciAddr) fs) {
+    if (fs.len() == 0) { return Ok(false); }
+    Int v = pci_vendor(fs[0])?;
+    Int d = pci_device_id(fs[0])?;
+    List(PciAddr) again = pci_find(v, d)?;
+    return Ok(has(again, fs[0], 0));
+}
+
+@requires(device(readonly))
+Str probe() {
+    Str listed = match (pci_functions()) { Ok(fs) => f"functions listed ({fs.len() > 0})", Err(e) => device_error_text(e) };
+    Str found = match (pci_functions()) { Ok(fs) => match (refind(fs)) { Ok(b) => f"first function found by its ids ({b})", Err(e) => device_error_text(e) }, Err(e) => device_error_text(e) };
+    Str none = match (pci_find(0xffff, 0xfffe)) { Ok(fs) => f"functions with the card's ids: {fs.len()}", Err(e) => device_error_text(e) };
+    // No function is at this address, and this one is not an address.
+    Str gone = match (card_regs_read_id(PciAddr {.domain = 0xffff, .bus = 255, .device = 31, .function = 7})) { Ok(x) => "read", Err(e) => device_error_text(e) };
+    Str bad = match (card_regs_read_id(PciAddr {.domain = 0, .bus = 256, .device = 0, .function = 0})) { Ok(x) => "read", Err(e) => device_error_text(e) };
+    return listed + "\n" + found + "\n" + none + "\n" + gone + "\n" + bad;
+}
+
+@requires(device)
+Int main() {
+    println(probe());
+    println(match (card_regs_write_ctl(PciAddr {.domain = 0xffff, .bus = 255, .device = 31, .function = 7}, CardCtl {.on = true})) { Ok(b) => "wrote", Err(e) => device_error_text(e) });
+    return 0;
+}

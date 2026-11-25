@@ -202,6 +202,24 @@ one that writes; both come from `lib/dev/`, as every descriptor does
 written out, so the compiler knows which descriptor every call uses, and
 a read never needs more than the read-only grant.
 
+A device at an address known only when the program runs is declared
+with `pci` and `pci_write` in place of `device` and `write`. They name
+`MmioPci` descriptors, which state the vendor and device ids the block
+is for, and every function takes the function's address first:
+
+```resid
+@registers(size = 0x100, pci = virtio_net, pci_write = virtio_net_w)
+type VirtioRegs = { @at(0x70) VirtioStatus status; };
+
+List(PciAddr) found = pci_find(0x1af4, 0x1041)?;      // lib/dev/pci.resid
+VirtioStatus s = virtio_regs_read_status(found[0])?;
+```
+
+The device host compares the ids of the function at that address with
+the descriptor's before it touches its memory, and answers `Unsupported`
+when they differ, so an address chosen at run time reaches no other kind
+of device.
+
 Each access runs in a device host of its own, like every device call:
 the host maps the device's memory, installs its filter, makes the one
 load or store and exits. It costs about what a device call does (2 ms),

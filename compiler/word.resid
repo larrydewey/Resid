@@ -511,9 +511,16 @@ WdS wd_rdecl(Str s, Int k, WdS st) {
     Str szt = wd_arg(args, "size", 0);
     Int size = if (szt == "") { -1 } else { wd_num(szt) };
     if (size <= 0 || !wd_args_known(args, 0)) { return wd_rbad(st, "@registers takes the block's size in bytes and, to read and write it, its descriptors: `@registers(size = 0x100, device = dev, write = dev_w)`, got `" + arg + "`", k); }
-    Str dev = wd_arg(args, "device", 0);
-    Str devw = wd_arg(args, "write", 0);
-    if (devw != "" && dev == "") { return wd_rbad(st, "@registers with `write = f` also names the descriptor loads go through: `device = g`", k); }
+    // `pci = d, pci_write = dw` in place of `device = d, write = dw`: the
+    // block is in a PCI function found at run time, and each access takes
+    // its address.
+    Str pdev = wd_arg(args, "pci", 0);
+    Str pdevw = wd_arg(args, "pci_write", 0);
+    Bool pci = pdev != "" || pdevw != "";
+    if (pci && (wd_arg(args, "device", 0) != "" || wd_arg(args, "write", 0) != "")) { return wd_rbad(st, "@registers names one kind of descriptor: `device = g, write = f` for a block at a fixed path, or `pci = g, pci_write = f` for one in a PCI function found at run time", k); }
+    Str dev = if (pci) { pdev } else { wd_arg(args, "device", 0) };
+    Str devw = if (pci) { pdevw } else { wd_arg(args, "write", 0) };
+    if (devw != "" && dev == "") { return wd_rbad(st, if (pci) { "@registers with `pci_write = f` also names the descriptor loads go through: `pci = g`" } else { "@registers with `write = f` also names the descriptor loads go through: `device = g`" }, k); }
     Int t0 = wd_ws(s, e, n);
     Int t1 = if (t0 + 4 <= n && str_slice(s, t0, t0 + 4) == "pub ") { wd_ws(s, t0 + 4, n) } else { t0 };
     Bool isty = t1 + 5 <= n && str_slice(s, t1, t1 + 5) == "type ";
@@ -529,7 +536,7 @@ WdS wd_rdecl(Str s, Int k, WdS st) {
     Str clash = wd_overlap(b.rs, 0);
     if (clash != "") { return wd_rbad(st, "register block " + name + ": " + clash, k); }
     List(Str) o = wd_copy(wd_blank(st.out, s, k, e), s, e, ob + 1).concat(b.out).concat(["}"]);
-    return WdS {.out = o, .i = cb, .gen = st.gen + wd_rgen(name, size, b.rs) + wd_racc(name, b.rs, st.ts, dev, devw), .ts = st.ts, .code = "", .err = "", .at = -1};
+    return WdS {.out = o, .i = cb, .gen = st.gen + wd_rgen(name, size, b.rs) + wd_racc(name, b.rs, st.ts, dev, devw, pci), .ts = st.ts, .code = "", .err = "", .at = -1};
 }
 
 // The value of `key = value` among an annotation's arguments, or "".
@@ -540,12 +547,13 @@ Str wd_arg(List(Str) args, Str key, Int i) {
     return wd_arg(args, key, i + 1);
 }
 
-// Every argument is `size`, `device` or `write`, with a value.
+// Every argument is `size`, `device`, `write`, `pci` or `pci_write`, with
+// a value.
 Bool wd_args_known(List(Str) args, Int i) {
     if (i >= args.len()) { return true; }
     Int eq = wd_char(args[i], 61, 0, str_len(args[i]));
     Str key = if (eq > 0) { str_trim(str_slice(args[i], 0, eq)) } else { "" };
-    Bool ok = (key == "size" || key == "device" || key == "write") && str_trim(str_slice(args[i], eq + 1, str_len(args[i]))) != "";
+    Bool ok = (key == "size" || key == "device" || key == "write" || key == "pci" || key == "pci_write") && str_trim(str_slice(args[i], eq + 1, str_len(args[i]))) != "";
     return ok && wd_args_known(args, i + 1);
 }
 
@@ -626,6 +634,11 @@ Str wd_rgen_regs(Str sn, List(WdR) rs, Int i, StrBuf acc) {
 // register with nothing to read gets no read, one with nothing to write no
 // write, and a `@clears_on_read` one is read with `take_`, through the
 // writing descriptor: reading it changes the device.
+//
+// A block declared `@registers(size = N, pci = d, pci_write = dw)` is in
+// a PCI function found at run time: `d()` and `dw()` are MmioPci
+// descriptors, each function takes the function's address first
+// (`virtio_regs_read_status(addr)`) and is one `device.mmio_pci`.
 
 Bool wd_readable(List(WdF) fs, Int i) {
     if (i >= fs.len()) { return false; }
@@ -637,12 +650,12 @@ Bool wd_writable(List(WdF) fs, Int i) {
     return (fs[i].name != "" && fs[i].mode != "r") || wd_writable(fs, i + 1);
 }
 
-Str wd_racc(Str name, List(WdR) rs, List(WdT) ts, Str dev, Str devw) {
+Str wd_racc(Str name, List(WdR) rs, List(WdT) ts, Str dev, Str devw, Bool pci) {
     if (dev == "") { return ""; }
-    return "\n// generated from @registers " + name + ": its accesses\n" + wd_racc_regs(name, wd_snake(name), rs, ts, dev, devw, 0, StrBuf());
+    return "\n// generated from @registers " + name + ": its accesses\n" + wd_racc_regs(name, wd_snake(name), rs, ts, dev, devw, pci, 0, StrBuf());
 }
 
-Str wd_racc_regs(Str name, Str sn, List(WdR) rs, List(WdT) ts, Str dev, Str devw, Int i, StrBuf acc) {
+Str wd_racc_regs(Str name, Str sn, List(WdR) rs, List(WdT) ts, Str dev, Str devw, Bool pci, Int i, StrBuf acc) {
     if (i >= rs.len()) { return acc.finish(); }
     WdR r = rs[i];
     WdT t = ts[wd_type_idx(ts, r.ty, 0)];
@@ -651,13 +664,20 @@ Str wd_racc_regs(Str name, Str sn, List(WdR) rs, List(WdT) ts, Str dev, Str devw
     // The word as the register's width: the reply's number, cut to it.
     Str word = if (t.width == 64) { "wrapping_u64(__wd_v)" } else { "(UInt(" + f"{t.width}" + "))(wrapping_u64(__wd_v) & " + wd_mask(t.width) + ")" };
     Str got = "    return match (dv_out_num(__wd_o, 0)) {\n        Some(__wd_v) => Ok(" + tsn + "_from_word(" + word + ")),\n        None => Err(BadReply(\"" + sn + "." + r.name + "\", \"no word\")),\n    };\n}\n";
+    // The verb and what follows its descriptor, and the parameter each
+    // function starts with: nothing for a block at a fixed path, the
+    // function's address for one in a PCI function.
+    Str verb = if (pci) { "device.mmio_pci(" } else { "device.mmio(" };
+    Str to = if (pci) { "(), __wd_a, " } else { "(), " };
+    Str p1 = if (pci) { "PciAddr __wd_a" } else { "" };
+    Str p2 = if (pci) { "PciAddr __wd_a, " } else { "" };
     Str rd = if (!wd_readable(t.fs, 0) || t.clears) { "" } else {
-        "@requires(device(readonly))\npub Result(" + r.ty + ", DeviceError) " + sn + "_read_" + r.name + "() {\n    List(DevOut) __wd_o = device.mmio(" + dev + "(), MmioAccess {.store = false, " + at + ", .value = 0})?;\n" + got };
+        "@requires(device(readonly))\npub Result(" + r.ty + ", DeviceError) " + sn + "_read_" + r.name + "(" + p1 + ") {\n    List(DevOut) __wd_o = " + verb + dev + to + "MmioAccess {.store = false, " + at + ", .value = 0})?;\n" + got };
     Str tk = if (!wd_readable(t.fs, 0) || !t.clears || devw == "") { "" } else {
-        "@requires(device)\npub Result(" + r.ty + ", DeviceError) " + sn + "_take_" + r.name + "() {\n    List(DevOut) __wd_o = device.mmio(" + devw + "(), MmioAccess {.store = false, " + at + ", .value = 0})?;\n" + got };
+        "@requires(device)\npub Result(" + r.ty + ", DeviceError) " + sn + "_take_" + r.name + "(" + p1 + ") {\n    List(DevOut) __wd_o = " + verb + devw + to + "MmioAccess {.store = false, " + at + ", .value = 0})?;\n" + got };
     Str wr = if (!wd_writable(t.fs, 0) || devw == "") { "" } else {
-        "@requires(device)\npub Result(Bool, DeviceError) " + sn + "_write_" + r.name + "(" + r.ty + " __wd_x) {\n    UInt(64) __wd_w = " + tsn + "_word(__wd_x);\n    List(DevOut) __wd_o = device.mmio(" + devw + "(), MmioAccess {.store = true, " + at + ", .value = __wd_w})?;\n    return Ok(__wd_o.len() == 0);\n}\n" };
-    return wd_racc_regs(name, sn, rs, ts, dev, devw, i + 1, acc.push(rd).push(tk).push(wr));
+        "@requires(device)\npub Result(Bool, DeviceError) " + sn + "_write_" + r.name + "(" + p2 + r.ty + " __wd_x) {\n    UInt(64) __wd_w = " + tsn + "_word(__wd_x);\n    List(DevOut) __wd_o = " + verb + devw + to + "MmioAccess {.store = true, " + at + ", .value = __wd_w})?;\n    return Ok(__wd_o.len() == 0);\n}\n" };
+    return wd_racc_regs(name, sn, rs, ts, dev, devw, pci, i + 1, acc.push(rd).push(tk).push(wr));
 }
 
 // The handle type, declared once when a block is present.

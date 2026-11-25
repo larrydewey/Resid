@@ -96,3 +96,17 @@ pub Result(List(DevOut), DeviceError) device_engine_mmio_w(Mmio op, MmioAccess a
     Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
     return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
 }
+
+/// Makes one load or store in the memory of the PCI function at `a`
+/// through a writing MmioPci descriptor `op`. Returns a load's word as
+/// OutNum and nothing for a store, or Err (Unsupported when the function
+/// there does not have `op`'s ids). Compiler-generated calls only; needs
+/// the full `device` grant.
+@descriptor(engine_mmio_pci_w)
+@requires(device)
+pub Result(List(DevOut), DeviceError) device_engine_mmio_pci_w(MmioPci op, PciAddr a, MmioAccess x) {
+    DvReq r = dv_prep_mmio_pci(op, a, x);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
+}

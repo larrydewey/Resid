@@ -1,0 +1,80 @@
+// --- lib/dev/pci.resid - the PCI functions present, and finding one by its ids
+// A driver's device is at an address the machine chose: the driver names
+// the vendor and device ids it drives (an MmioPci descriptor, checked at
+// compile time), and finds the address at run time here. The listing is a
+// read of /sys/bus/pci/devices (Documentation/ABI/testing/sysfs-bus-pci;
+// the directory itself is stable ABI) made in a device host that can read
+// that one directory and nothing else; the ids are the `vendor` and
+// `device` attributes lib/dev/pci_tsm.resid reads.
+//
+// Finding a function grants nothing: a program passes the address to the
+// accessors of a register block declared `@registers(pci = ...)`, and the
+// device host makes an access only when the function at that address has
+// the descriptor's ids (PLAN-hardware-access.md §11).
+
+import "device.resid";
+import "pci_tsm.resid";
+
+/// The descriptor for the listing of PCI functions, at most 64 KiB of
+/// names (about five thousand functions).
+pub PciList pci_functions_op() { return PciList {.name = "pci.functions", .max = 65536, .stability = Uapi}; }
+
+/// The addresses of the PCI functions present, in the kernel's order
+/// (which is not sorted). Err(Absent) on a machine without PCI.
+@requires(device(readonly))
+pub Result(List(PciAddr), DeviceError) pci_functions() {
+    List(DevOut) outs = device.pci_list(pci_functions_op())?;
+    if (outs.len() != 1) { return Err(BadReply("pci.functions", "not one output")); }
+    return match (outs[0]) {
+        OutBytes(b) => Ok(pc_addrs(b, 0, 0, ListBuf())),
+        OutNum(v) => Err(BadReply("pci.functions", "not bytes")),
+        OutSecret(z) => Err(BadReply("pci.functions", "a secret")),
+    };
+}
+
+// The addresses in the lines of b from byte i on; `from` is where the
+// current line starts. A name that is not an address is left out.
+List(PciAddr) pc_addrs(List(UInt(8)) b, Int from, Int i, ListBuf(PciAddr) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    if (b[i] != 10) { return pc_addrs(b, from, i + 1, acc); }
+    return match (pci_addr_parse(pc_text(b, from, i, ""))) {
+        Some(a) => pc_addrs(b, i + 1, i + 1, acc.push(a)),
+        None => pc_addrs(b, i + 1, i + 1, acc),
+    };
+}
+
+Str pc_text(List(UInt(8)) b, Int i, Int end, Str acc) {
+    if (i >= end) { return acc; }
+    return pc_text(b, i + 1, end, acc + str_from_code((Int) b[i]));
+}
+
+/// The functions whose vendor id is `vendor` and device id `device`, in
+/// the kernel's order; empty when there is none. A function that goes away
+/// between the listing and the read of its ids is left out.
+@requires(device(readonly))
+pub Result(List(PciAddr), DeviceError) pci_find(Int vendor, Int device_id) {
+    List(PciAddr) fs = pci_functions()?;
+    List(PciAddr) none = [];
+    return pc_match(fs, vendor, device_id, 0, none);
+}
+
+// The matches are few, so a plain list carries them.
+@requires(device(readonly))
+Result(List(PciAddr), DeviceError) pc_match(List(PciAddr) fs, Int vendor, Int device_id, Int i, List(PciAddr) acc) {
+    if (i >= fs.len()) { return Ok(acc); }
+    Result(Bool, DeviceError) is = pc_is(fs[i], vendor, device_id);
+    return match (is) {
+        Ok(hit) => pc_match(fs, vendor, device_id, i + 1, if (hit) { acc.concat([fs[i]]) } else { acc }),
+        Err(e) => match (e) { Absent(n) => pc_match(fs, vendor, device_id, i + 1, acc), _ => Err(e) },
+    };
+}
+
+// Whether the function at `a` has those ids; the device id is read only
+// when the vendor matches.
+@requires(device(readonly))
+Result(Bool, DeviceError) pc_is(PciAddr a, Int vendor, Int device_id) {
+    Int v = pci_vendor(a)?;
+    if (v != vendor) { return Ok(false); }
+    Int d = pci_device_id(a)?;
+    return Ok(d == device_id);
+}

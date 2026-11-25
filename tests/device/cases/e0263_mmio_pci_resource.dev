@@ -1,0 +1,9 @@
+// Fixture for e0263_mmio_pci_resource: a PCI function has resource0 to resource5 (installed as lib/dev/fx_e0263_mmio_pci_resource.resid).
+import "device.resid";
+
+pub MmioPci fx_card() { return MmioPci {.name = "fx.card", .vendor = 0x1af4, .device = 0x1041, .resource = 6, .size = 256, .write = false, .stability = OutOfTree}; }
+
+@requires(device(readonly))
+pub Str fx_call(PciAddr a) {
+    return match (device.mmio_pci(fx_card(), a, MmioAccess {.store = false, .off = 0, .bytes = 4, .value = 0})) { Ok(o) => "ok", Err(e) => device_error_text(e), };
+}

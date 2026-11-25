@@ -1,0 +1,14 @@
+// A register write in a PCI function is a write: device(readonly) covers
+// the block's reads and not its writes (E0219).
+import "dev/fx_mmio_pci_write_needs_grant.resid";
+
+@word(32) type Ctl = { Bool on; @reserved(31); };
+
+@registers(size = 0x100, pci = fx_card, pci_write = fx_card_w)
+type CardRegs = { @at(0x10) Ctl ctl; };
+
+@requires(device(readonly))
+Int main() {
+    println(match (card_regs_write_ctl(PciAddr {.domain = 0, .bus = 0, .device = 4, .function = 0}, Ctl {.on = true})) { Ok(b) => "wrote", Err(e) => device_error_text(e) });
+    return 0;
+}

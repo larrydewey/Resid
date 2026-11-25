@@ -428,6 +428,16 @@ known only when the program runs.
   pci_write = dw)`, gets the same functions with the address first:
   `t_read_r(addr)`, `t_write_r(addr, v)`, `t_take_r(addr)`.
 
+Built (PROGRESS.md, stage E): `device.mmio_pci`, `device.pci_list`,
+`lib/dev/pci.resid`. What the check does and does not give: the ids
+are read after the host's filter is in and the resource is mapped but
+untouched, all through one directory handle, so the function checked is
+the function mapped. It says which model of device is there, not that
+the device is honest; binding a driver to a device that proves its
+identity is the TSM work (`lib/dev/pci_tsm.resid`). The kernel's own
+rule still applies first: mapping a resource needs the privilege the
+kernel asks for and a function no kernel driver holds exclusively.
+
 First slice to build, before `Region(T)` exists: `@word(N)` types alone,
 with the packing the compiler generates exposed as two functions (a
 record to its word, a word to a record or an error value), the way a

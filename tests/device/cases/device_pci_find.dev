@@ -1,0 +1,7 @@
+// Fixture for device_pci_find: a block in a PCI function with ids no function has (installed as lib/dev/fx_device_pci_find.resid).
+import "device.resid";
+import "device_write.resid";
+
+// Vendor 0xffff is what a slot with nothing in it reads as: no function has it.
+pub MmioPci fx_card() { return MmioPci {.name = "fx.card", .vendor = 0xffff, .device = 0xfffe, .resource = 0, .size = 256, .write = false, .stability = OutOfTree}; }
+pub MmioPci fx_card_w() { return MmioPci {.name = "fx.card", .vendor = 0xffff, .device = 0xfffe, .resource = 0, .size = 256, .write = true, .stability = OutOfTree}; }

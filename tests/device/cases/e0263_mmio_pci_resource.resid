@@ -1,0 +1,5 @@
+// An MmioPci names one of a function's six resources (E0263).
+import "dev/fx_e0263_mmio_pci_resource.resid";
+
+@requires(device(readonly))
+Int main() { println(fx_call(PciAddr {.domain = 0, .bus = 0, .device = 0, .function = 0})); return 0; }

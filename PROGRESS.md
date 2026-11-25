@@ -183,7 +183,26 @@ region, with no diagnostic.
   as a parameter turned out to count as a write). Tests:
   `tests/runtime/device_mmio.c` (20 checks of the host),
   `tests/device/cases/device_mmio` and four error cases. Not yet:
-  sum-typed fields; a PCI address as run-time data; the driver process.
+  sum-typed fields; the driver process.
+- **Stage E: a PCI device by its address.** Two more verbs.
+  `device.mmio_pci(MmioPci, PciAddr, MmioAccess)`: the descriptor names
+  the vendor and device ids, the resource (0 to 5) and its size; the
+  address is run-time data. The host (kind 9, `dh_mmio_pci`) opens the
+  function's directory once, opens `vendor`, `device` and `resourceN`
+  from it, maps the resource, installs its filter, reads the two ids and
+  makes the access only when they are the descriptor's (`Unsupported`
+  otherwise); an address that is not `dddd:bb:dd.f` is refused before
+  anything is opened (65), a resource past 5 too (66).
+  `device.pci_list(PciList)` (kind 10, `dh_pci_list`): the names under
+  `/sys/bus/pci/devices`, read-only. `lib/dev/pci.resid` has
+  `pci_functions()` and `pci_find(vendor, device_id)`. A block declared
+  `@registers(size = N, pci = d, pci_write = dw)` gets the same
+  functions with the address first. E0263 for a resource or an id out of
+  range; the provenance record's request number is the two ids. Tests:
+  `tests/runtime/device_pci.c` (22 checks, most against a tree of files
+  under self-test mode 30, the listing against the real directory too),
+  `tests/device/cases/device_pci_find` and three error cases,
+  conformance `err_regs_two_kinds`.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

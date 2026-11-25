@@ -21,6 +21,8 @@
 //     device.read_pci_attr(PciAttr, PciAddr)           -> Result(List(DevOut), DeviceError)
 //     device.sequence(Sequence, List(DevIn))           -> Result(List(DevOut), DeviceError)
 //     device.mmio(Mmio, MmioAccess)                    -> Result(List(DevOut), DeviceError)
+//     device.mmio_pci(MmioPci, PciAddr, MmioAccess)    -> Result(List(DevOut), DeviceError)
+//     device.pci_list(PciList)                         -> Result(List(DevOut), DeviceError)
 //
 // Each verb is a provider call of the `device` family: @requires(device) or,
 // when the descriptor's `write` is false, @requires(device(readonly)). After
@@ -157,6 +159,23 @@ type Mmio = { Str name; Str path; Int size; Bool write; Stability stability; };
 /// the block. Run-time data, like a PciAddr.
 @descriptor(mmio_access)
 type MmioAccess = { Bool store; Int off; Int bytes; UInt(64) value; };
+
+/// The memory of a PCI function found at run time: the first `size` bytes
+/// of `resource<resource>` (0 to 5) of whichever function has the ids
+/// `vendor` and `device` (each 0 to 0xffff; E0263). `device.mmio_pci` takes
+/// the function's address as run-time data, a PciAddr. The device host
+/// reads the function's ids through the directory it opened and makes the
+/// access only when they are the descriptor's, so an address chosen at
+/// run time reaches no other kind of device (PLAN-hardware-access.md §11).
+/// `write` is as for an Mmio.
+@descriptor(mmio_pci)
+type MmioPci = { Str name; Int vendor; Int device; Int resource; Int size; Bool write; Stability stability; };
+
+/// The PCI functions present: the names under /sys/bus/pci/devices, at
+/// most `max` bytes of them. `device.pci_list` returns them as OutBytes, a
+/// line each; it only reads.
+@descriptor(pci_list)
+type PciList = { Str name; Int max; Stability stability; };
 
 /// A read-only attribute of a PCI device.
 /// `rel` is under the device's sysfs directory, one or two components of
@@ -646,6 +665,44 @@ pub Result(List(DevOut), DeviceError) device_engine_mmio(Mmio op, MmioAccess a) 
     return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call(r.req)));
 }
 
+/// The serialized request for the access `x` to the memory of the
+/// function at `a`, which must have `op`'s ids.
+/// `err` is set as dv_prep_mmio sets it, and for an address out of range.
+pub DvReq dv_prep_mmio_pci(MmioPci op, PciAddr a, MmioAccess x) {
+    if (!pci_addr_ok(a)) { return dv_bad("the PCI address is out of range"); }
+    if (x.bytes != 1 && x.bytes != 2 && x.bytes != 4 && x.bytes != 8) { return dv_bad("an access is 1, 2, 4 or 8 bytes wide"); }
+    if (x.off < 0 || x.off % x.bytes != 0 || x.off + x.bytes > op.size) { return dv_bad("the access is not at a multiple of its width inside the block"); }
+    if (x.store && !op.write) { return dv_bad("a store needs a descriptor that writes (`write = true`)"); }
+    ListBuf(Int) b = dv_u(dv_u(dv_u(dv_u(dv_head(ListBuf(), 9, op.write, op.name, "/sys/bus/pci/devices/" + pci_addr_text(a)), op.size, 4), dv_bool(x.store), 1), x.off, 4), x.bytes, 1);
+    List(DvSlot) outs = if (x.store) { [] } else { [DvSlot {.num = true, .max = 8, .secret = false}] };
+    return DvReq {.err = "", .req = dv_u(dv_u(dv_u(dv_u64(b, x.value, 8), op.resource, 1), op.vendor, 2), op.device, 2).finish(), .outs = outs};
+}
+
+/// Makes one load in the memory of the PCI function at `a` (the
+/// compiler's target for `device.mmio_pci` on a descriptor that does not
+/// write). Returns the word as OutNum, or Err: Unsupported when the
+/// function there does not have `op`'s ids, BadInput for an address out of
+/// range, an access the block does not hold, or a store.
+@descriptor(engine_mmio_pci)
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_engine_mmio_pci(MmioPci op, PciAddr a, MmioAccess x) {
+    DvReq r = dv_prep_mmio_pci(op, a, x);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call(r.req)));
+}
+
+/// Lists the PCI functions present (the compiler's target for
+/// `device.pci_list`): their names as OutBytes, a line each.
+/// Err(TooLong) when they are more than `op.max` bytes.
+@descriptor(engine_pci_list)
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_engine_pci_list(PciList op) {
+    List(Int) req = dv_u(dv_head(ListBuf(), 10, false, op.name, "/sys/bus/pci/devices"), op.max, 4).finish();
+    Int _tr = dv_tr_req(op.name, 0 - 1, req);
+    return dv_tr_out(op.name, 0 - 1, dv_reply(op.name, [DvSlot {.num = false, .max = op.max, .secret = false}], resid_device_call(req)));
+}
+
 /// Reads an attribute file in the isolated device host (the compiler's
 /// target for `device.read_attr`).
 @descriptor(engine_read_attr)
@@ -801,7 +858,9 @@ Bool dv_fits(Int v, Int width) {
 //   5 sequence, 6 transact chain, 7 ctaphid: u32 max_message, u32
 //   timeout_ms, u8 command, u32 length + payload, 8 mmio: u32 size, u8
 //   access (0 a load, 1 a store), u32 offset, u8 width in bytes, the 8
-//   bytes to store), write, name, path (u16 length, bytes), then the kind's own
+//   bytes to store, 9 mmio of a PCI function: as 8, then u8 resource,
+//   u16 vendor id, u16 device id, its path the function's directory, 10
+//   the PCI functions present: u32 max), write, name, path (u16 length, bytes), then the kind's own
 //   part and the inputs (u8 count; tag 0 + 8-byte integer, or tag 1 + u32
 //   length + bytes). An ioctl's part: u8 request count, each u8 arch + u32
 //   number; u32 size; u8 field count, each field a tag and its words --

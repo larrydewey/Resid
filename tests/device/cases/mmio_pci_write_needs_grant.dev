@@ -1,0 +1,6 @@
+// Fixture for mmio_pci_write_needs_grant: the descriptors of a block in a PCI function (installed as lib/dev/fx_mmio_pci_write_needs_grant.resid).
+import "device.resid";
+import "device_write.resid";
+
+pub MmioPci fx_card() { return MmioPci {.name = "fx.card", .vendor = 0x1af4, .device = 0x1041, .resource = 0, .size = 256, .write = false, .stability = OutOfTree}; }
+pub MmioPci fx_card_w() { return MmioPci {.name = "fx.card", .vendor = 0x1af4, .device = 0x1041, .resource = 0, .size = 256, .write = true, .stability = OutOfTree}; }
