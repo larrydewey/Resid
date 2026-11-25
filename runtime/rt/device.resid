@@ -282,7 +282,7 @@ Int pq_parse_r(Int d, Int r, Int n) {
     Int path = pq_alloc(d, pl + 1);
     _ = mcopy(path, pp, pl);
     _ = dset(d, 4, path) + dset(d, 5, pl);
-    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else if (kind == 6) { pq_tchain(d, r) } else if (kind == 7) { pq_ctaphid(d, r) } else if (kind == 8) { pq_mmio(d, r) } else if (kind == 9 || kind == 11) { pq_mmio_pci(d, r) } else if (kind == 10) { pq_attr(d, r) } else { false };
+    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else if (kind == 6) { pq_tchain(d, r) } else if (kind == 7) { pq_ctaphid(d, r) } else if (kind == 8) { pq_mmio(d, r) } else if (kind == 9) { pq_mmio_pci(d, r) } else if (kind == 11) { pq_session(d, r) } else if (kind == 10) { pq_attr(d, r) } else { false };
     if (!ok || rd_bad(r)) { return 3; }
     if ((kind == 1 || kind == 5) && !pq_args(d, r)) { return 4; }
     if (rd_bad(r) || ld64(r + 16) != n) { return 5; }
@@ -565,6 +565,32 @@ Bool pq_mmio_pci(Int d, Int r) {
     return true;
 }
 
+// A session's part: kind 9's, then the resources it maps besides the
+// first -- a count (at most 5), and for each its number and how many bytes
+// from its start. Kept as words 35 (two words each) and 36 (the count).
+Bool pq_session(Int d, Int r) {
+    if (!pq_mmio_pci(d, r)) { return false; }
+    Int n = rd_u(r, 1);
+    if (rd_bad(r) || n > 5) { return false; }
+    Int ms = pq_alloc(d, n * 16 + 8);
+    _ = dset(d, 35, ms) + dset(d, 36, n);
+    return pq_session_maps(r, ms, 0, n);
+}
+
+Bool pq_session_maps(Int r, Int ms, Int i, Int n) {
+    if (i >= n) { return !rd_bad(r); }
+    Int res = rd_u(r, 1);
+    Int size = rd_u(r, 4);
+    if (rd_bad(r)) { return false; }
+    _ = st64(ms + i * 16, res) + st64(ms + i * 16 + 8, size);
+    return pq_session_maps(r, ms, i + 1, n);
+}
+
+Bool pq_session_maps_ok(Int ms, Int i, Int n) {
+    if (i >= n) { return true; }
+    return ld64(ms + i * 16) <= 5 && pq_max_ok(ld64(ms + i * 16 + 8)) && pq_session_maps_ok(ms, i + 1, n);
+}
+
 // "/sys/bus/pci/devices", where a PCI function's directory is its address.
 Int pci_root() { return resid_raw_addr("/sys/bus/pci/devices"); }
 
@@ -621,6 +647,7 @@ Int pq_check(Int d) {
     if (kind == 9 || kind == 11) {
         if (dget(d, 5) <= 21 || c_strncmp(dget(d, 4), pci_root(), 20) != 0 || ld8(dget(d, 4) + 20) != 47 || !pq_pci_addr(dget(d, 4) + 21, dget(d, 5) - 21)) { return 65; }
         if ((dget(d, 39) & 255) > 5) { return 66; }
+        if (kind == 11 && !pq_session_maps_ok(dget(d, 35), 0, dget(d, 36))) { return 67; }
     }
     // The PCI functions present: that directory, read only.
     if (kind == 10) {
@@ -1247,17 +1274,18 @@ Int ds_drop(Int e) {
 
 // A request of kind 12: after the six bytes every request starts with,
 // the session's number (8 bytes), the offset (4), the width (1) and the 8
-// bytes to store. Its write byte says whether it is a store, so the read
-// entry has already refused one.
+// bytes to store, and which of the session's resources (1). Its write
+// byte says whether it is a store, so the read entry has already refused
+// one.
 Int ds_access(Int buf, Int n) {
-    if (n != 27) { return dev_err_reply(de_refused(), 1); }
+    if (n != 28) { return dev_err_reply(de_refused(), 1); }
     Int id = le_get(buf + 6, 8);
     Int e = if (id > 0) { ds_find(id, 0) } else { 0 };
     if (e == 0) { return dev_err_reply(de_refused(), 71); }   // no such session: ended, or another thread's
     Int store = ld8(buf + 5);
     Int m = xmalloc(32);
     _ = resid_raw_fill(m, 0, 32);
-    _ = st8(m, if (store == 0) { 1 } else { 2 }) + st8(m + 1, ld8(buf + 18)) + le_put(m + 4, le_get(buf + 14, 4), 4) + mcopy(m + 8, buf + 19, 8);
+    _ = st8(m, if (store == 0) { 1 } else { 2 }) + st8(m + 1, ld8(buf + 18)) + st8(m + 2, ld8(buf + 27)) + le_put(m + 4, le_get(buf + 14, 4), 4) + mcopy(m + 8, buf + 19, 8);
     Int a = ld64(e + 8);
     Int dl = ds_deadline();
     _ = st64(hs_timeout_w(), 0) + st64(hs_peer_w(), ld64(e + 16));
@@ -2518,7 +2546,8 @@ Int dh_mmio_pci(Int h, Int d) {
 // also lets it read its socket (recvmsg on fd 3, and the two calls that
 // check each message's sender); it tells the program the session is open
 // and serves accesses until the socket closes. Each is 16 bytes -- 1 a
-// load or 2 a store, the width, the offset at 4, the value at 8 -- checked
+// load or 2 a store, the width, which resource, the offset at 4, the
+// value at 8 -- checked
 // against the block mapped and the session's write flag, and answered
 // with 9: 0 or why not, and the word loaded. Nothing is allocated after
 // the filter: the messages are in one region made before it.
@@ -2547,6 +2576,12 @@ Int dh_session(Int h, Int d) {
     Int len = (size + 4095) & (0 - 4096);
     Int map = resid_raw_syscall(9, 0, len, if (wr == 1) { 3 } else { 1 }, 1, fd, 0);   // MAP_SHARED
     if (map < 0 && map > 0 - 4096) { return dh_fail_errno(h, map, false); }
+    // The resources mapped, two words each: where, and how many bytes.
+    Int more = dget(d, 36);
+    Int tab = xmalloc((more + 1) * 16);
+    _ = st64(tab, map) + st64(tab + 8, size);
+    Int mo = ds_map_more(h, dir, rn, wr, fake, dget(d, 35), tab, 0, more);
+    if (mo != 0) { return if (mo > 0) { dh_fail(h, mo, 0) } else { dh_fail_errno(h, mo, false) }; }
     if (!dh_regions(h, 4)) { return native_child_exit(125); }
     Int vb = dh_region(h, 32, 0);
     Int db = dh_region(h, 32, 0);
@@ -2564,22 +2599,43 @@ Int dh_session(Int h, Int d) {
     if (mm_hex_id(vb, vr) != ((want >> 8) & 65535) || mm_hex_id(db, dr) != ((want >> 24) & 65535)) { return dh_fail(h, 6, 0); }
     _ = resid_raw_fill(msg, 0, 32);
     if (!native_write(msg, 0, 10)) { return native_child_exit(125); }
-    return ds_serve(map, size, wr, dget(h, 22), msg);
+    return ds_serve(tab, more + 1, wr, dget(h, 22), msg);
+}
+
+// Map the session's other resources into tab (entry i + 1 for the i-th):
+// 0, or why not -- an error code (6: not a resource, or too small), or a
+// negative errno.
+Int ds_map_more(Int h, Int dir, Int rn, Int wr, Bool fake, Int ms, Int tab, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int size = ld64(ms + i * 16 + 8);
+    _ = st8(rn + 8, 48 + ld64(ms + i * 16));
+    Int fd = dh_open2(dir, rn, if (wr == 1) { 2 } else { 0 }, 14);
+    if (fd < 0) { return fd; }
+    Bool kind = if (fake) { dh_ftype(fd) == 32768 } else { dh_is_mappable(fd) };
+    if (!kind || dh_fsize(fd) < size) { return 6; }
+    Int map = resid_raw_syscall(9, 0, (size + 4095) & (0 - 4096), if (wr == 1) { 3 } else { 1 }, 1, fd, 0);   // MAP_SHARED
+    if (map < 0 && map > 0 - 4096) { return map; }
+    _ = st64(tab + (i + 1) * 16, map) + st64(tab + (i + 1) * 16 + 8, size);
+    return ds_map_more(h, dir, rn, wr, fake, ms, tab, i + 1, n);
 }
 
 // One access after another, until the program's end of the socket closes
 // (exit 0) or something else than a whole message arrives (exit 125).
-Int ds_serve(Int map, Int size, Int wr, Int ppid, Int m) {
+Int ds_serve(Int tab, Int maps, Int wr, Int ppid, Int m) {
     Int r = hs_recv_cred(3, m, 0, 16, ppid);
     if (r != 16) { return native_child_exit(if (r == 0) { 0 } else { 125 }); }
     Int op = ld8(m);
     Int w = ld8(m + 1);
+    Int mi = ld8(m + 2);
     Int off = le_get(m + 4, 4);
-    Bool ok = (op == 1 || (op == 2 && wr == 1)) && (w == 1 || w == 2 || w == 4 || w == 8) && off >= 0 && off % w == 0 && off + w <= size;
-    Int v = if (!ok) { 0 } else if (op == 2) { mm_store(map + off, w, ld64(m + 8)) * 0 } else { mm_load(map + off, w) };
+    Bool known = mi < maps;
+    Int size = if (known) { ld64(tab + mi * 16 + 8) } else { 0 };
+    Bool ok = known && (op == 1 || (op == 2 && wr == 1)) && (w == 1 || w == 2 || w == 4 || w == 8) && off >= 0 && off % w == 0 && off + w <= size;
+    Int at = if (ok) { ld64(tab + mi * 16) + off } else { 0 };
+    Int v = if (!ok) { 0 } else if (op == 2) { mm_store(at, w, ld64(m + 8)) * 0 } else { mm_load(at, w) };
     _ = st8(m + 16, if (ok) { 0 } else { 1 }) + st64(m + 17, v);
     if (!native_write(m + 16, 0, 9)) { return native_child_exit(125); }
-    return ds_serve(map, size, wr, ppid, m);
+    return ds_serve(tab, maps, wr, ppid, m);
 }
 
 // The names in the directory of PCI functions, a line each: addresses, as

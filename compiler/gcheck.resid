@@ -6192,7 +6192,7 @@ GKT dv_gk_verb(GK k, Int id, Str m) {
     Int want = if (m == "read_attr" || m == "pci_list") { 1 } else if (m == "transact_chain" || m == "mmio_pci" || m == "mmio_win") { 3 } else { 2 };
     Int na = k.g.ns[id].nk - 1;
     if (na != want) { return gterr(k, f"device.{m} takes {want} argument(s), got {na}", id); }
-    Str second = if (m == "ioctl" || m == "sequence") { "List(" + dv_role_ty(k.g, "in") + ")" } else if (m == "transact" || m == "ctaphid") { "List(UInt(8))" } else if (m == "transact_chain") { "List(List(UInt(8)))" } else if (m == "configfs_report") { dv_role_ty(k.g, "report_req") } else if (m == "read_pci_attr" || m == "mmio_pci") { dv_role_ty(k.g, "pci_addr") } else if (m == "mmio_win" || m == "session_open") { dv_role_ty(k.g, "pci_window") } else if (m == "mmio") { dv_role_ty(k.g, "mmio_access") } else { "" };
+    Str second = if (m == "ioctl" || m == "sequence") { "List(" + dv_role_ty(k.g, "in") + ")" } else if (m == "transact" || m == "ctaphid") { "List(UInt(8))" } else if (m == "transact_chain") { "List(List(UInt(8)))" } else if (m == "configfs_report") { dv_role_ty(k.g, "report_req") } else if (m == "read_pci_attr" || m == "mmio_pci") { dv_role_ty(k.g, "pci_addr") } else if (m == "mmio_win") { dv_role_ty(k.g, "pci_window") } else if (m == "session_open") { "List(" + dv_role_ty(k.g, "pci_window") + ")" } else if (m == "mmio") { dv_role_ty(k.g, "mmio_access") } else { "" };
     GKT d = gk_expr(k, gk_kid(k, id, 1), dt);
     if (d.err != "") { return d; }
     if (!ty_same(d.ty, dt)) { return gterr(d.k, "E0260: device." + m + " takes a descriptor of type " + dt + " from lib/dev/, got " + d.ty, id); }

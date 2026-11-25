@@ -128,8 +128,8 @@ pub Result(List(DevOut), DeviceError) device_engine_mmio_win_w(MmioWin op, PciWi
 /// `device` grant.
 @descriptor(engine_session_open_w)
 @requires(device)
-pub Result(List(DevOut), DeviceError) device_engine_session_open_w(MmioWin op, PciWindow w) {
-    DvReq r = dv_prep_session(op, w);
+pub Result(List(DevOut), DeviceError) device_engine_session_open_w(MmioWin op, List(PciWindow) ws) {
+    DvReq r = dv_prep_session(op, ws);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
     Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
     return dv_tr_out(op.name, 0 - 1, dv_session_answer(op.name, dv_answer(op.name, r, resid_device_call_w(r.req))));
@@ -140,9 +140,9 @@ pub Result(List(DevOut), DeviceError) device_engine_session_open_w(MmioWin op, P
 /// write. Err(BadInput) for an access outside the window, a session that
 /// has ended, or one that only loads.
 @requires(device)
-pub Result(List(DevOut), DeviceError) device_session_store(Str name, Int id, Int base, Int len, Int off, Int bytes, UInt(64) value) {
+pub Result(List(DevOut), DeviceError) device_session_store(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes, UInt(64) value) {
     if (off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
-    DvReq r = dv_prep_session_access(id, true, base + off, bytes, value);
+    DvReq r = dv_prep_session_access(id, map, true, base + off, bytes, value);
     if (r.err != "") { return Err(BadInput(name, r.err)); }
     return dv_session_answer(name, dv_answer(name, r, resid_device_call_w(r.req)));
 }

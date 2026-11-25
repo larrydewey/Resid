@@ -6,5 +6,5 @@ pub MmioWin fx_card() { return MmioWin {.name = "fx.card", .vendor = 0x1af4, .de
 // No scope around it: nothing would end this session.
 @requires(device(readonly))
 pub Str fx_open(PciWindow w) {
-    return match (device.session_open(fx_card(), w)) { Ok(o) => "open", Err(e) => device_error_text(e), };
+    return match (device.session_open(fx_card(), [w])) { Ok(o) => "open", Err(e) => device_error_text(e), };
 }

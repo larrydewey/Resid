@@ -1,5 +1,5 @@
 // The first steps of a virtio driver through a session: one device host
-// kept alive for the device's common configuration, where
+// kept alive for two of the device's register blocks (`@device`), where
 // virtio_bring_up.resid starts a host for every access. Run only by
 // tests/device/virtio_vm.sh, in a virtual machine: it RESETS the device.
 import "dev/pci.resid";
@@ -21,7 +21,7 @@ type Status = {
     Bool failed;
 };
 
-@registers(size = 0x38, session = fx_rng, session_write = fx_rng_w)
+@registers(size = 0x38, session = device)
 type Common = {
     @at(0x00) Select     device_feature_select;
     @at(0x04) Features   device_feature;
@@ -33,6 +33,17 @@ Status status(Bool ack, Bool drv) { return Status {.acknowledge = ack, .driver =
 
 Str status_text(Status s) { return f"ack={s.acknowledge} driver={s.driver} ok={s.driver_ok} needs_reset={s.needs_reset} failed={s.failed}"; }
 
+// The interrupt status: one byte, cleared by reading it.
+@word(8) @clears_on_read
+type IsrStatus = { DeviceOwned(Bool) queue; DeviceOwned(Bool) config; @reserved(6); };
+
+@registers(size = 1, session = device)
+type Isr = { @at(0) IsrStatus status; };
+
+// The device: its blocks, served by one host.
+@device(session = fx_rng, session_write = fx_rng_w)
+type Rng = { Common common; Isr isr; };
+
 // A thousand reads of the status register through the one host.
 @requires(device(readonly))
 Result(Int, DeviceError) poll(CommonSession s, Int i, Int acks) {
@@ -42,7 +53,9 @@ Result(Int, DeviceError) poll(CommonSession s, Int i, Int acks) {
 }
 
 @requires(device)
-Result(Str, DeviceError) steps(CommonSession s) {
+Result(Str, DeviceError) steps(RngSession dev) {
+    CommonSession s = dev.common;
+    IsrStatus irq = isr_take_status(dev.isr)?;
     QueueCount q = common_read_num_queues(s)?;
     Bool r0 = common_write_device_status(s, status(false, false))?;
     Status s0 = common_read_device_status(s)?;
@@ -53,15 +66,17 @@ Result(Str, DeviceError) steps(CommonSession s) {
     Features f = common_read_device_feature(s)?;
     Int acks = poll(s, 0, 0)?;
     Bool r4 = common_write_device_status(s, status(false, false))?;
-    return Ok(f"queues {q.n}\nafter reset: " + status_text(s0) + "\nafter driver: " + status_text(s1) + f"\nversion 1: {(f.bits & 1) == 1}\nacknowledged in {acks} of 1000 reads");
+    return Ok(f"queues {q.n}\nafter reset: " + status_text(s0) + "\nafter driver: " + status_text(s1) + f"\nversion 1: {(f.bits & 1) == 1}\nacknowledged in {acks} of 1000 reads\ninterrupts pending: queue={irq.queue} config={irq.config}");
 }
 
 @requires(device)
 Result(Str, DeviceError) bring_up(PciAddr a) {
-    PciWindow w = virtio_pci_window(a, virtio_cfg_common())?;
-    Result(Str, DeviceError) done = common_session(w, lambda(s) { steps(s) })?;
+    PciWindow wc = virtio_pci_window(a, virtio_cfg_common())?;
+    PciWindow wi = virtio_pci_window(a, virtio_cfg_isr())?;
+    RngWindows w = RngWindows {.common = wc, .isr = wi};
+    Result(Str, DeviceError) done = rng_session(w, lambda(s) { steps(s) })?;
     // The session ended with the block: a read-only one opens after it.
-    Result(Status, DeviceError) after = common_session_ro(w, lambda(s) { common_read_device_status(s) })?;
+    Result(Status, DeviceError) after = rng_session_ro(w, lambda(s) { common_read_device_status(s.common) })?;
     Status last = after?;
     Str t = done?;
     return Ok(t + "\nafter the session: " + status_text(last));

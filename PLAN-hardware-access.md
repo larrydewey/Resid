@@ -467,6 +467,16 @@ verb. `device.session_open` written out by hand is refused (E0260),
 in lib/dev/ too: only the generated scope, which carries a mark no
 program text may contain, opens a session, so every session has an end.
 
+**A device of several blocks** (decided 2026-11-25): a declaration
+that lists the device's register blocks, `@device(session = d,
+session_write = dw) type T = { Block b; ... };`, one host for all of
+them, the closure given a record with a session per block. The blocks
+stay ordinary `@registers` declarations, reusable across devices.
+Rejected: sub-blocks nested in one register declaration (a shared block
+is repeated per device); views handed out by an open session (the host
+would map after its filter, or the whole resource before). Built as
+stage H. Next, by the same decision: the virtio queue.
+
 Built (PROGRESS.md, stage E): `device.mmio_pci`, `device.pci_list`,
 `lib/dev/pci.resid`. What the check does and does not give: the ids
 are read after the host's filter is in and the resource is mapped but

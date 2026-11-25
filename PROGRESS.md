@@ -243,6 +243,19 @@ region, with no diagnostic.
   `wd_expand` refuses in a program's text, and `dv_raw_sessions`
   (gcheck) refuses any other `device.session_open` (E0260; cases
   `e0260_session_open_raw`, `err_session_scope_mark`).
+- **Stage H: a device of several blocks.** A session maps up to six
+  resources of its function (kind 11 lists the others after the first;
+  an access names which, and the host holds it to that one's size).
+  `device.session_open` takes the windows as a list;
+  `dv_session_map` numbers their resources as the host does.
+  `@registers(size = N, session = device)` is a block whose sessions
+  come from devices (type and accessors, no scope), and
+  `@device(session = d, session_write = dw) type T = { Block b; ... };`
+  generates `TWindows`, `TSession`, `t_session` and `t_session_ro`: one
+  host for all the blocks. Tests: `device_session.c` (38 checks),
+  `device_session`, conformance `err_device_member`, and the virtual
+  machine's virtio device through two blocks (common and interrupt
+  status) of one session.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

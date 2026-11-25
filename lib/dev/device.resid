@@ -23,7 +23,7 @@
 //     device.mmio(Mmio, MmioAccess)                    -> Result(List(DevOut), DeviceError)
 //     device.mmio_pci(MmioPci, PciAddr, MmioAccess)    -> Result(List(DevOut), DeviceError)
 //     device.mmio_win(MmioWin, PciWindow, MmioAccess)  -> Result(List(DevOut), DeviceError)
-//     device.session_open(MmioWin, PciWindow)          -> Result(List(DevOut), DeviceError)
+//     device.session_open(MmioWin, List(PciWindow))    -> Result(List(DevOut), DeviceError)
 //     device.pci_list(PciList)                         -> Result(List(DevOut), DeviceError)
 //
 // Each verb is a provider call of the `device` family: @requires(device) or,
@@ -744,46 +744,89 @@ pub Result(List(DevOut), DeviceError) device_engine_mmio_win(MmioWin op, PciWind
 // `@registers(session = ...)` writes the scoped function that opens one,
 // runs a closure with it and ends it; programs use that, not these.
 
-/// The request that opens a session on the window `w`: the host maps the
-/// resource up to the window's end.
-pub DvReq dv_prep_session(MmioWin op, PciWindow w) {
-    if (!pci_addr_ok(w.addr)) { return dv_bad("the PCI address is out of range"); }
-    if (w.resource < 0 || w.resource > 5) { return dv_bad("a window is in resource 0 to 5"); }
-    if (w.base < 0 || w.len <= 0 || w.base + w.len > op.size) { return dv_bad("the window is not inside the descriptor's size"); }
-    ListBuf(Int) b = dv_u(dv_u(dv_u(dv_u(dv_head(ListBuf(), 11, op.write, op.name, "/sys/bus/pci/devices/" + pci_addr_text(w.addr)), w.base + w.len, 4), 0, 1), 0, 4), 1, 1);
-    return DvReq {.err = "", .req = dv_u(dv_u(dv_u(dv_u(b, 0, 8), w.resource, 1), op.vendor, 2), op.device, 2).finish(), .outs = [DvSlot {.num = true, .max = 8, .secret = false}]};
+/// The request that opens a session on the windows `ws`, which are all
+/// of one function: the host maps each resource they name, up to the end
+/// of the last window in it. `err` is set for no window or more than 16,
+/// windows of different functions, or one that dv_prep_mmio_win refuses.
+pub DvReq dv_prep_session(MmioWin op, List(PciWindow) ws) {
+    if (ws.len() == 0 || ws.len() > 16) { return dv_bad("a session has 1 to 16 windows"); }
+    Str bad = dv_session_bad(op, ws, 0);
+    if (bad != "") { return dv_bad(bad); }
+    List(Int) none = [];
+    List(Int) rs = dv_session_res(ws, 0, none);
+    ListBuf(Int) b = dv_u(dv_u(dv_u(dv_u(dv_head(ListBuf(), 11, op.write, op.name, "/sys/bus/pci/devices/" + pci_addr_text(ws[0].addr)), dv_session_size(ws, rs[0], 0, 0), 4), 0, 1), 0, 4), 1, 1);
+    ListBuf(Int) b1 = dv_u(dv_u(dv_u(dv_u(dv_u(b, 0, 8), rs[0], 1), op.vendor, 2), op.device, 2), rs.len() - 1, 1);
+    return DvReq {.err = "", .req = dv_session_more(b1, ws, rs, 1).finish(), .outs = [DvSlot {.num = true, .max = 8, .secret = false}]};
 }
+
+Str dv_session_bad(MmioWin op, List(PciWindow) ws, Int i) {
+    if (i >= ws.len()) { return ""; }
+    PciWindow w = ws[i];
+    if (!pci_addr_ok(w.addr)) { return "the PCI address is out of range"; }
+    if (pci_addr_text(w.addr) != pci_addr_text(ws[0].addr)) { return "a session's windows are all of one PCI function"; }
+    if (w.resource < 0 || w.resource > 5) { return "a window is in resource 0 to 5"; }
+    if (w.base < 0 || w.len <= 0 || w.base + w.len > op.size) { return "the window is not inside the descriptor's size"; }
+    return dv_session_bad(op, ws, i + 1);
+}
+
+// The resources the windows name, each once, in the order first named.
+List(Int) dv_session_res(List(PciWindow) ws, Int i, List(Int) acc) {
+    if (i >= ws.len()) { return acc; }
+    return dv_session_res(ws, i + 1, if (acc.contains(ws[i].resource)) { acc } else { acc.concat([ws[i].resource]) });
+}
+
+// The end of the last window in resource `res`.
+Int dv_session_size(List(PciWindow) ws, Int res, Int i, Int acc) {
+    if (i >= ws.len()) { return acc; }
+    Int end = if (ws[i].resource == res) { ws[i].base + ws[i].len } else { 0 };
+    return dv_session_size(ws, res, i + 1, if (end > acc) { end } else { acc });
+}
+
+ListBuf(Int) dv_session_more(ListBuf(Int) b, List(PciWindow) ws, List(Int) rs, Int i) {
+    if (i >= rs.len()) { return b; }
+    return dv_session_more(dv_u(dv_u(b, rs[i], 1), dv_session_size(ws, rs[i], 0, 0), 4), ws, rs, i + 1);
+}
+
+/// Which of a session's resources window `i` of `ws` is in: its number
+/// among the resources the windows name, in the order first named, which
+/// is how the host numbers them.
+pub Int dv_session_map(List(PciWindow) ws, Int i) {
+    List(Int) none = [];
+    return dv_session_at(dv_session_res(ws, 0, none), ws[i].resource, 0);
+}
+
+Int dv_session_at(List(Int) rs, Int res, Int i) { return if (i >= rs.len() || rs[i] == res) { i } else { dv_session_at(rs, res, i + 1) }; }
 
 /// Opens a session that only loads (the compiler's target for
 /// `device.session_open` on a descriptor that does not write). Returns
 /// the session's number as OutNum, or Err as device_engine_mmio_pci.
 @descriptor(engine_session_open)
 @requires(device(readonly))
-pub Result(List(DevOut), DeviceError) device_engine_session_open(MmioWin op, PciWindow w) {
-    DvReq r = dv_prep_session(op, w);
+pub Result(List(DevOut), DeviceError) device_engine_session_open(MmioWin op, List(PciWindow) ws) {
+    DvReq r = dv_prep_session(op, ws);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
     Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
     return dv_tr_out(op.name, 0 - 1, dv_session_answer(op.name, dv_answer(op.name, r, resid_device_call(r.req))));
 }
 
 /// The request for one access to session `id`: `off` from the start of
-/// the resource. `err` is set for an access that is not a word.
-pub DvReq dv_prep_session_access(Int id, Bool store, Int off, Int bytes, UInt(64) value) {
+/// its resource number `map`. `err` is set for an access that is not a word.
+pub DvReq dv_prep_session_access(Int id, Int map, Bool store, Int off, Int bytes, UInt(64) value) {
     if (bytes != 1 && bytes != 2 && bytes != 4 && bytes != 8) { return dv_bad("an access is 1, 2, 4 or 8 bytes wide"); }
     if (off < 0 || off % bytes != 0) { return dv_bad("the access is not at a multiple of its width"); }
     ListBuf(Int) none = ListBuf();
     ListBuf(Int) b = dv_u(dv_u(dv_u(none.push(82).push(68).push(86).push(1).push(12).push(dv_bool(store)), id, 8), off, 4), bytes, 1);
     List(DvSlot) outs = if (store) { [] } else { [DvSlot {.num = true, .max = 8, .secret = false}] };
-    return DvReq {.err = "", .req = dv_u64(b, value, 8).finish(), .outs = outs};
+    return DvReq {.err = "", .req = dv_u(dv_u64(b, value, 8), map, 1).finish(), .outs = outs};
 }
 
 /// Loads `bytes` bytes at `off` of the window of `len` bytes at `base`
-/// in session `id`: the word as OutNum. Err(BadInput) for an access
+/// in resource number `map` of session `id`: the word as OutNum. Err(BadInput) for an access
 /// outside the window or a session that has ended. `name` labels errors.
 @requires(device(readonly))
-pub Result(List(DevOut), DeviceError) device_session_load(Str name, Int id, Int base, Int len, Int off, Int bytes) {
+pub Result(List(DevOut), DeviceError) device_session_load(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes) {
     if (off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
-    DvReq r = dv_prep_session_access(id, false, base + off, bytes, 0);
+    DvReq r = dv_prep_session_access(id, map, false, base + off, bytes, 0);
     if (r.err != "") { return Err(BadInput(name, r.err)); }
     return dv_session_answer(name, dv_answer(name, r, resid_device_call(r.req)));
 }

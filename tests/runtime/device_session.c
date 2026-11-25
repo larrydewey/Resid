@@ -59,11 +59,19 @@ static void req_open(Req* r, int write, const char* addr, uint32_t size, int res
     head(r, 11, write, "fx.sess", path);
     u(r, size, 4); u(r, 0, 1); u(r, 0, 4); u(r, 1, 1); u(r, 0, 8);
     u(r, res, 1); u(r, ven, 2); u(r, dev, 2);
+    u(r, 0, 1);   /* no other resource */
 }
+/* The same with a second resource, `res2`, mapped for `size2` bytes. */
+static void req_open2(Req* r, int write, const char* addr, uint32_t size, int res, int ven, int dev, int res2, uint32_t size2) {
+    req_open(r, write, addr, size, res, ven, dev);
+    r->n--;
+    u(r, 1, 1); u(r, res2, 1); u(r, size2, 4);
+}
+static int map_index = 0;   /* which of the session's resources the next accesses name */
 static void req_access(Req* r, uint64_t id, int store, uint32_t off, int width, uint64_t v) {
     r->n = 0;
     u(r, 'R', 1); u(r, 'D', 1); u(r, 'V', 1); u(r, 1, 1); u(r, 12, 1); u(r, store, 1);
-    u(r, id, 8); u(r, off, 4); u(r, width, 1); u(r, v, 8);
+    u(r, id, 8); u(r, off, 4); u(r, width, 1); u(r, v, 8); u(r, map_index, 1);
 }
 static void req_close(Req* r, uint64_t id) {
     r->n = 0;
@@ -274,6 +282,42 @@ int main(int argc, char** argv, char** envp) {
     req_open(&q, 1, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041);
     r = call(&q, 0);
     check("session_write_needs_grant", code(&r) == 2);
+
+    /* One session over two of the function's resources: each access names
+     * its resource and is held to that one's size. */
+    req_open2(&q, 0, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041, 4, 8092);
+    r = call(&q, 0);
+    uint64_t two = number(&r);
+    check("session_two_resources", two > 0);
+    req_access(&q, two, 0, 16, 4, 0);
+    r = call(&q, 0);
+    memcpy(&w32, blk + 16, 4);
+    check("session_first_resource", loaded(&r, w32));
+    map_index = 1;
+    req_access(&q, two, 0, 8080, 8, 0);
+    r = call(&q, 0);
+    memcpy(&w64, blk + 100 + 8080, 8);
+    check("session_second_resource", loaded(&r, w64));
+    req_access(&q, two, 0, 8092, 4, 0);
+    r = call(&q, 0);
+    check("session_second_resource_bound", code(&r) == 10 && value(&r) == 72);
+    map_index = 2;
+    req_access(&q, two, 0, 0, 4, 0);
+    r = call(&q, 0);
+    check("session_unknown_resource", code(&r) == 10 && value(&r) == 72);
+    map_index = 0;
+    req_access(&q, two, 0, 8080, 8, 0);
+    r = call(&q, 0);
+    check("session_first_resource_bound", code(&r) == 10 && value(&r) == 72);
+    req_close(&q, two);
+    r = call(&q, 0);
+    check("session_two_closed", stored(&r));
+    req_open2(&q, 0, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041, 5, 4096);
+    r = call(&q, 0);
+    check("session_second_resource_absent", code(&r) == 1);
+    req_open2(&q, 0, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041, 6, 4096);
+    r = call(&q, 0);
+    check("session_refuses_resource_6", code(&r) == 10 && value(&r) == 67);
 
     /* Eight at once on a thread, and no ninth; all end. */
     uint64_t ids[9];

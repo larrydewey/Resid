@@ -266,8 +266,30 @@ session value kept past that names nothing, and an accessor called with
 it gives `BadInput`. The host checks the device's ids once, when the
 session opens, and every access against the window it mapped and
 whether the session may store. A thread holds at most eight sessions,
-and uses only the ones it opened. A host is still one per block: a
-device with several blocks has a session for each.
+and uses only the ones it opened.
+
+A device with several blocks names them in a `@device` declaration, and
+one host serves them all:
+
+```resid
+@registers(size = 0x38, session = device) type Common = { @at(0x14) Status device_status; };
+@registers(size = 1, session = device)    type Isr = { @at(0) IsrStatus status; };
+
+@device(session = virtio_rng, session_write = virtio_rng_w)
+type Rng = { Common common; Isr isr; };
+
+RngWindows w = RngWindows {.common = wc, .isr = wi};
+Result(Status, DeviceError) r = rng_session(w, lambda(s) { common_read_device_status(s.common) })?;
+```
+
+`session = device` on a block says its sessions come from devices: it
+gets its session type and accessors and no scope of its own, so one
+block (virtio's common configuration) is declared once for every device
+that has it. The device gets `RngWindows` (a `PciWindow` per block),
+`RngSession` (a session per block), `rng_session` and `rng_session_ro`.
+The windows are all of one PCI function; the host maps each resource
+they name and holds every access to the one it names (`E0298` for a
+member that is not a session block).
 
 Without a session, each access runs in a device host of its own, like every device call:
 the host maps the device's memory, installs its filter, makes the one

@@ -1,0 +1,11 @@
+// A device's members are register blocks declared with sessions; a
+// block read a host at a time is not one.
+@word(32) type Ctl = { Bool on; @reserved(31); };
+
+@registers(size = 0x10)
+type Plain = { @at(0) Ctl ctl; };
+
+@device(session = card)
+type Card = { Plain plain; };
+
+Int main() { return 0; }
