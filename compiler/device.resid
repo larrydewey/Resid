@@ -320,8 +320,9 @@ DvD dv_parse(Kg g, Int a, Str verb) {
     Str rel = if (verb == "read_pci_attr") { dv_strv(g, dv_fld(g, st, "rel", 0)) } else { "" };
     // An MmioPci names a resource of whichever function has its ids, and
     // a PciList the directory of functions: neither has a path of its own.
+    // An MmioWin's resource is run-time data (0 here; its path says any).
     Int pres = if (verb == "mmio_pci") { dv_ifld(g, st, "resource") } else { 0 };
-    Str path = if (verb == "read_pci_attr") { if (rel == "\x01") { rel } else { "/sys/bus/pci/devices/*/" + rel } } else if (verb == "mmio_pci") { "/sys/bus/pci/devices/*/resource" + f"{pres}" } else if (verb == "pci_list") { "/sys/bus/pci/devices" } else { dv_strv(g, dv_fld(g, st, "path", 0)) };
+    Str path = if (verb == "read_pci_attr") { if (rel == "\x01") { rel } else { "/sys/bus/pci/devices/*/" + rel } } else if (verb == "mmio_pci") { "/sys/bus/pci/devices/*/resource" + f"{pres}" } else if (verb == "mmio_win") { "/sys/bus/pci/devices/*/resource*" } else if (verb == "pci_list") { "/sys/bus/pci/devices" } else { dv_strv(g, dv_fld(g, st, "path", 0)) };
     Str write = if (verb == "read_attr" || verb == "read_pci_attr" || verb == "pci_list") { "false" } else { dv_boolv(g, dv_fld(g, st, "write", 0)) };
     Str stab = dv_stab_of(g, st);
     DvD base = DvD {.kind = verb, .name = if (name == "\x01") { "" } else { name }, .path = if (path == "\x01") { "" } else { path }, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = write, .vo = 0, .vw = 0, .vv = 0, .stab = stab, .maxs = [], .provs = [], .steps = [], .links = [], .err = ""};
@@ -332,13 +333,13 @@ DvD dv_parse(Kg g, Int a, Str verb) {
         // A CTAPHID exchange: its maximum message and its timeout (kept in size).
         return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [], .rn = [], .size = dv_ifld(g, st, "timeout_ms"), .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = b1.write, .vo = 0, .vw = 0, .vv = 0, .stab = b1.stab, .maxs = [dv_ifld(g, st, "max_message")], .provs = [], .steps = [], .links = [], .err = b1.err};
     }
-    if (verb == "mmio_pci") {
+    if (verb == "mmio_pci" || verb == "mmio_win") {
         // The resource in `size`, the ids in vo and vv, and both as the
         // record's request number (vendor in the high half).
         Int ven = dv_ifld(g, st, "vendor");
         Int dev = dv_ifld(g, st, "device");
         Int rq = if (ven >= 0 && ven <= 65535 && dev >= 0 && dev <= 65535) { ven * 65536 + dev } else { 0 };
-        return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [0, 1], .rn = [rq, rq], .size = dv_ifld(g, st, "resource"), .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = b1.write, .vo = ven, .vw = 0, .vv = dev, .stab = b1.stab, .maxs = [dv_ifld(g, st, "size")], .provs = [], .steps = [], .links = [], .err = b1.err};
+        return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [0, 1], .rn = [rq, rq], .size = pres, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = b1.write, .vo = ven, .vw = 0, .vv = dev, .stab = b1.stab, .maxs = [dv_ifld(g, st, "size")], .provs = [], .steps = [], .links = [], .err = b1.err};
     }
     List(Int) mx = if (verb == "transact" || verb == "transact_chain") { [dv_ifld(g, st, "max_command"), dv_ifld(g, st, "max_response")] } else if (verb == "read_attr" || verb == "read_pci_attr" || verb == "pci_list") { [dv_ifld(g, st, "max")] } else if (verb == "mmio") { [dv_ifld(g, st, "size")] } else { [dv_ifld(g, st, "max_inblob"), dv_ifld(g, st, "max_outblob"), dv_ifld(g, st, "max_auxblob"), dv_ifld(g, st, "max_manifestblob")] };
     List(Str) provs = if (verb == "configfs_report") { dv_strs(g, dv_items(g, dv_fld(g, st, "providers", 0)), 0, ListBuf()) } else { [] };
@@ -502,9 +503,9 @@ Str dv_check(DvD d, Bool a64) {
     }
     // A PCI function's memory by its address: which resource, and the ids
     // the helper compares with the function's before it touches it.
-    if (d.kind == "mmio_pci") {
+    if (d.kind == "mmio_pci" || d.kind == "mmio_win") {
         if (d.size < 0 || d.size > 5) { return "E0263: an MmioPci's `resource` is a literal from 0 to 5 (a function's resource0 to resource5)"; }
-        if (d.vo < 0 || d.vo > 65535 || d.vv < 0 || d.vv > 65535) { return "E0263: an MmioPci's `vendor` and `device` are literal ids from 0 to 65535 (0xffff)"; }
+        if (d.vo < 0 || d.vo > 65535 || d.vv < 0 || d.vv > 65535) { return "E0263: an " + (if (d.kind == "mmio_win") { "MmioWin" } else { "MmioPci" }) + "'s `vendor` and `device` are literal ids from 0 to 65535 (0xffff)"; }
     }
     // A Transact writes its command to the device, whatever it reads back.
     if ((d.kind == "transact" || d.kind == "transact_chain") && d.write != "true") { return "E0263: a Transact writes its command to the device, so it is a write: `write = true` (device(readonly) never covers one)"; }

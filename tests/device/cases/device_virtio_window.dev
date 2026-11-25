@@ -1,0 +1,7 @@
+// Fixture for device_virtio_window: a virtio entropy device's registers, wherever it keeps them (installed as lib/dev/fx_device_virtio_window.resid).
+import "device.resid";
+import "device_write.resid";
+
+// The entropy device (type 4): 1af4:1044. At most 64 KiB into a resource.
+pub MmioWin fx_rng() { return MmioWin {.name = "fx.virtio_rng", .vendor = 0x1af4, .device = 0x1044, .size = 65536, .write = false, .stability = OutOfTree}; }
+pub MmioWin fx_rng_w() { return MmioWin {.name = "fx.virtio_rng", .vendor = 0x1af4, .device = 0x1044, .size = 65536, .write = true, .stability = OutOfTree}; }

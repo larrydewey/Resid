@@ -1,0 +1,77 @@
+// --- lib/dev/virtio_pci.resid - where a virtio PCI device keeps its register blocks
+// A virtio device over PCI (Virtual I/O Device specification 1.2, §4.1)
+// says where its register blocks are in vendor capabilities (id 0x09) in
+// its configuration space: for each block a type, the BAR it is in, its
+// offset there and its length. Hypervisors differ (QEMU puts them in BAR
+// 4, others in BAR 0), so a driver reads the list and does not assume.
+//
+// This module reads that list, through the function's `config` attribute
+// (stable ABI, Documentation/ABI/testing/sysfs-bus-pci), and gives the
+// block as a PciWindow (lib/dev/device.resid). A driver passes the window
+// to the accessors of a register block declared `@registers(window = ...)`
+// over an MmioWin descriptor that names the device's ids. The window is
+// run-time data and grants nothing: the device host checks the ids of the
+// function it is given before it touches its memory, and refuses an
+// access outside the resource.
+//
+// Without privilege the kernel gives only the first 64 bytes of `config`,
+// where the list does not fit: virtio_pci_window is then Unsupported.
+
+import "device.resid";
+
+/// The descriptor for a PCI function's `config` attribute, the 256 bytes
+/// of its configuration space the capability list is in.
+pub PciAttr virtio_pci_config_op() { return PciAttr {.name = "virtio_pci.config", .rel = "config", .max = 256, .stability = Uapi}; }
+
+/// The block types (the capability's cfg_type): the common
+/// configuration, the notification area, the interrupt status and the
+/// device-specific configuration.
+pub Int virtio_cfg_common() { return 1; }
+pub Int virtio_cfg_notify() { return 2; }
+pub Int virtio_cfg_isr() { return 3; }
+pub Int virtio_cfg_device() { return 4; }
+
+/// The PCI device id of the virtio device of type `ty` (1 network, 2
+/// block, 4 entropy, 5 balloon, 16 GPU, ...) with the vendor id 0x1af4:
+/// 0x1040 + ty for a device that is not transitional (§4.1.2.1).
+pub Int virtio_pci_vendor() { return 0x1af4; }
+pub Int virtio_pci_device_id(Int ty) { return 0x1040 + ty; }
+
+/// Where the function at `a` keeps its block of type `cfg_type`.
+/// Err(Unsupported) when its configuration space has no such capability
+/// (not a virtio device of version 1, or read without privilege), any
+/// failure of the read as itself.
+@requires(device(readonly))
+pub Result(PciWindow, DeviceError) virtio_pci_window(PciAddr a, Int cfg_type) {
+    List(DevOut) outs = device.read_pci_attr(virtio_pci_config_op(), a)?;
+    if (outs.len() != 1) { return Err(BadReply("virtio_pci.config", "not one output")); }
+    List(UInt(8)) none = [];
+    List(UInt(8)) c = match (outs[0]) { OutBytes(b) => b, OutNum(v) => none, OutSecret(z) => none };
+    return match (virtio_pci_cap(c, cfg_type)) {
+        Some(w) => Ok(PciWindow {.addr = a, .resource = w.resource, .base = w.base, .len = w.len}),
+        None => Err(Unsupported("virtio_pci.config")),
+    };
+}
+
+/// The block of type `cfg_type` in the configuration space `c`, its
+/// address left as 0000:00:00.0; None when there is none. Pure: the
+/// first capability of that type counts (§4.1.4), and a list that loops
+/// or leaves the space ends the search.
+pub Option(PciWindow) virtio_pci_cap(List(UInt(8)) c, Int cfg_type) {
+    // Status bit 4: the function has a capability list, which starts at
+    // the byte 0x34 names.
+    if (c.len() < 64 || ((Int) c[6] & 16) == 0) { return None; }
+    return vp_walk(c, (Int) c[52] & 252, cfg_type, 0);
+}
+
+Option(PciWindow) vp_walk(List(UInt(8)) c, Int p, Int cfg_type, Int steps) {
+    if (p < 64 || p + 16 > c.len() || steps >= 48) { return None; }
+    Int next = (Int) c[p + 1] & 252;
+    Bool hit = (Int) c[p] == 9 && (Int) c[p + 2] >= 16 && (Int) c[p + 3] == cfg_type && (Int) c[p + 4] <= 5;
+    if (!hit) { return vp_walk(c, next, cfg_type, steps + 1); }
+    Int len = vp_u32(c, p + 12);
+    if (len <= 0) { return vp_walk(c, next, cfg_type, steps + 1); }
+    return Some(PciWindow {.addr = PciAddr {.domain = 0, .bus = 0, .device = 0, .function = 0}, .resource = (Int) c[p + 4], .base = vp_u32(c, p + 8), .len = len});
+}
+
+Int vp_u32(List(UInt(8)) c, Int i) { return (Int) c[i] | ((Int) c[i + 1] << 8) | ((Int) c[i + 2] << 16) | ((Int) c[i + 3] << 24); }

@@ -203,6 +203,22 @@ region, with no diagnostic.
   under self-test mode 30, the listing against the real directory too),
   `tests/device/cases/device_pci_find` and three error cases,
   conformance `err_regs_two_kinds`.
+- **Stage F: a real virtio device.** A virtio device lists its register
+  blocks in its PCI capabilities (BAR 4 on QEMU, BAR 0 elsewhere), so a
+  block's place is run-time data. `device.mmio_win(MmioWin, PciWindow,
+  MmioAccess)`: the descriptor names the ids and a maximum size, the
+  window the address, resource, base and length. It is request kind 9
+  again with the resource and offset from the window: the host did not
+  change. `@registers(size = N, window = d, window_write = dw)` gives
+  accessors that take the window. `lib/dev/virtio_pci.resid` reads the
+  capability list (`virtio_pci_window`, pure `virtio_pci_cap`).
+  `tests/device/virtio_vm.sh` (opt-in: QEMU, a kernel image, a static
+  busybox) boots a machine with a virtio entropy device, unbinds the
+  kernel's driver and runs `tests/device/vm/virtio_bring_up.resid`
+  (it resets the device, so it is no case of `run.sh`): found by its ids,
+  common block from the capabilities, reset, acknowledge and driver
+  written and read back, feature word 1 read (VIRTIO_F_VERSION_1 set).
+  The first loads and stores on a device's own registers.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

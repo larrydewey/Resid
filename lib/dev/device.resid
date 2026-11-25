@@ -22,6 +22,7 @@
 //     device.sequence(Sequence, List(DevIn))           -> Result(List(DevOut), DeviceError)
 //     device.mmio(Mmio, MmioAccess)                    -> Result(List(DevOut), DeviceError)
 //     device.mmio_pci(MmioPci, PciAddr, MmioAccess)    -> Result(List(DevOut), DeviceError)
+//     device.mmio_win(MmioWin, PciWindow, MmioAccess)  -> Result(List(DevOut), DeviceError)
 //     device.pci_list(PciList)                         -> Result(List(DevOut), DeviceError)
 //
 // Each verb is a provider call of the `device` family: @requires(device) or,
@@ -170,6 +171,22 @@ type MmioAccess = { Bool store; Int off; Int bytes; UInt(64) value; };
 /// `write` is as for an Mmio.
 @descriptor(mmio_pci)
 type MmioPci = { Str name; Int vendor; Int device; Int resource; Int size; Bool write; Stability stability; };
+
+/// The memory of a PCI function whose register blocks are where the
+/// function says they are: any resource of a function with the ids
+/// `vendor` and `device`, at most `size` bytes from its start.
+/// `device.mmio_win` takes a PciWindow, which is run-time data: the
+/// address, the resource and where in it the block is, as the device's
+/// capability list gives them (lib/dev/virtio_pci.resid). The device host
+/// checks the ids as for an MmioPci; which resource of that device is
+/// touched is not known until the program runs.
+@descriptor(mmio_win)
+type MmioWin = { Str name; Int vendor; Int device; Int size; Bool write; Stability stability; };
+
+/// A block of `len` bytes at `base` in resource `resource` (0 to 5) of
+/// the function at `addr`.
+@descriptor(pci_window)
+pub type PciWindow = { PciAddr addr; Int resource; Int base; Int len; };
 
 /// The PCI functions present: the names under /sys/bus/pci/devices, at
 /// most `max` bytes of them. `device.pci_list` returns them as OutBytes, a
@@ -687,6 +704,33 @@ pub DvReq dv_prep_mmio_pci(MmioPci op, PciAddr a, MmioAccess x) {
 @requires(device(readonly))
 pub Result(List(DevOut), DeviceError) device_engine_mmio_pci(MmioPci op, PciAddr a, MmioAccess x) {
     DvReq r = dv_prep_mmio_pci(op, a, x);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call(r.req)));
+}
+
+/// The serialized request for the access `x` inside the window `w`.
+/// `err` is set for a window outside `op`'s size or with a resource past
+/// 5, and for an access that is not a word of the window.
+pub DvReq dv_prep_mmio_win(MmioWin op, PciWindow w, MmioAccess x) {
+    if (!pci_addr_ok(w.addr)) { return dv_bad("the PCI address is out of range"); }
+    if (w.resource < 0 || w.resource > 5) { return dv_bad("a window is in resource 0 to 5"); }
+    if (w.base < 0 || w.len <= 0 || w.base + w.len > op.size) { return dv_bad("the window is not inside the descriptor's size"); }
+    if (x.bytes != 1 && x.bytes != 2 && x.bytes != 4 && x.bytes != 8) { return dv_bad("an access is 1, 2, 4 or 8 bytes wide"); }
+    if (x.off < 0 || (w.base + x.off) % x.bytes != 0 || x.off + x.bytes > w.len) { return dv_bad("the access is not at a multiple of its width inside the window"); }
+    if (x.store && !op.write) { return dv_bad("a store needs a descriptor that writes (`write = true`)"); }
+    ListBuf(Int) b = dv_u(dv_u(dv_u(dv_u(dv_head(ListBuf(), 9, op.write, op.name, "/sys/bus/pci/devices/" + pci_addr_text(w.addr)), w.base + w.len, 4), dv_bool(x.store), 1), w.base + x.off, 4), x.bytes, 1);
+    List(DvSlot) outs = if (x.store) { [] } else { [DvSlot {.num = true, .max = 8, .secret = false}] };
+    return DvReq {.err = "", .req = dv_u(dv_u(dv_u(dv_u64(b, x.value, 8), w.resource, 1), op.vendor, 2), op.device, 2).finish(), .outs = outs};
+}
+
+/// Makes one load inside the window `w` (the compiler's target for
+/// `device.mmio_win` on a descriptor that does not write). Returns the
+/// word as OutNum, or Err as device_engine_mmio_pci gives it.
+@descriptor(engine_mmio_win)
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_engine_mmio_win(MmioWin op, PciWindow w, MmioAccess x) {
+    DvReq r = dv_prep_mmio_win(op, w, x);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
     Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
     return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call(r.req)));
