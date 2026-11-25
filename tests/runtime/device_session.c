@@ -383,9 +383,33 @@ int main(int argc, char** argv, char** envp) {
     r = call(&q, 0);
     uint8_t zero[8] = {0};
     check("dma_untouched_is_zero", bytes_are(&r, zero, 8));
+    /* Waiting for an interrupt: none comes here, so the time passes; a
+     * plain session has none to wait for. */
+    q.n = 0;
+    u(&q, 'R', 1); u(&q, 'D', 1); u(&q, 'V', 1); u(&q, 1, 1); u(&q, 17, 1); u(&q, 0, 1); u(&q, dm, 8); u(&q, 150, 4);
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    r = call(&q, 0);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double waited = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
+    check("dma_wait_times_out", r.n == 14 && r.b[0] == 0 && number(&r) == 0 && waited >= 140 && waited < 2000);
+    q.b[q.n - 4] = 0x61; q.b[q.n - 3] = 0xea;   /* 60001 ms */
+    r = call(&q, 0);
+    check("dma_wait_refuses_long", code(&r) == 10 && value(&r) == 74);
+    req_access(&q, dm, 0, 16, 4, 0);
+    r = call(&q, 0);
+    check("dma_alive_after_wait", loaded(&r, w32));
     req_close(&q, dm);
     r = call(&q, 0);
     check("dma_close", stored(&r));
+    req_open(&q, 0, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041);
+    r = call(&q, 0);
+    uint64_t plain = number(&r);
+    q.n = 0;
+    u(&q, 'R', 1); u(&q, 'D', 1); u(&q, 'V', 1); u(&q, 1, 1); u(&q, 17, 1); u(&q, 0, 1); u(&q, plain, 8); u(&q, 10, 4);
+    r = call(&q, 0);
+    check("session_has_no_interrupt", code(&r) == 10 && value(&r) == 75);
+    req_close(&q, plain);
+    r = call(&q, 0);
     req_dma(&q, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041, 5000, 0x100000);
     r = call(&q, 1);
     check("dma_refuses_part_page", code(&r) == 10 && value(&r) == 68);

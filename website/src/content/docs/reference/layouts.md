@@ -323,6 +323,13 @@ offset, so a queue's parts are packed types like any register. The
 memory is in the host, never in the program, and the host knows nothing
 of queues. Such a session always writes (`device`).
 
+`dma_wait(s.dma, timeout_ms)` sleeps until the device interrupts, at
+most 60 seconds: it gives how many interrupts came since the last wait,
+0 when the time passed with none. The interrupt is the device's MSI-X
+vector 0, which the host turns into an event before its filter is
+installed; the driver points its queues at that vector. A device
+without MSI-X has none to wait for (`BadInput`), and its driver polls.
+
 Without a session, each access runs in a device host of its own, like every device call:
 the host maps the device's memory, installs its filter, makes the one
 load or store and exits. It costs about what a device call does (2 ms),

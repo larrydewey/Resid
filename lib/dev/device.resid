@@ -862,6 +862,21 @@ Result(List(UInt(8)), DeviceError) dma_read_from(DmaRegion r, Int off, Int left,
     return dma_read_from(r, off + n, left - n, acc.concat(part));
 }
 
+/// Waits for the interrupt of the device a DMA session drives, at most
+/// `timeout_ms` milliseconds (0 to 60000): how many came since the last
+/// wait, 0 when the time passed with none. The session's host sleeps
+/// meanwhile, and so does this call. The interrupt is the device's MSI-X
+/// vector 0, which the driver points its queues at; Err(BadInput) for a
+/// device without MSI-X, a session that has ended, or a longer wait.
+@requires(device(readonly))
+pub Result(Int, DeviceError) dma_wait(DmaRegion r, Int timeout_ms) {
+    if (timeout_ms < 0 || timeout_ms > 60000) { return Err(BadInput("dma", "a wait is at most 60000 milliseconds")); }
+    ListBuf(Int) none = ListBuf();
+    List(Int) req = dv_u(dv_u(none.push(82).push(68).push(86).push(1).push(17).push(0), r.id, 8), timeout_ms, 4).finish();
+    List(DevOut) o = dv_session_answer("dma", dv_reply("dma", [DvSlot {.num = true, .max = 8, .secret = false}], resid_device_call(req)))?;
+    return match (dv_out_num(o, 0)) { Some(n) => Ok(n), None => Err(BadReply("dma", "no count")) };
+}
+
 /// The request for one access to session `id`: `off` from the start of
 /// its resource number `map`. `err` is set for an access that is not a word.
 pub DvReq dv_prep_session_access(Int id, Int map, Bool store, Int off, Int bytes, UInt(64) value) {
@@ -910,6 +925,8 @@ Str dv_session_why(Str why) {
     if (str_ends_with(why, "request (71)")) { return "the session has ended"; }
     if (str_ends_with(why, "request (70)")) { return "eight sessions are open on this thread already"; }
     if (str_ends_with(why, "request (72)")) { return "the session's host refused the access"; }
+    if (str_ends_with(why, "request (74)")) { return "a wait is at most 60000 milliseconds"; }
+    if (str_ends_with(why, "request (75)")) { return "the session has no interrupt to wait for"; }
     return why;
 }
 

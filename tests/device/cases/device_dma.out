@@ -5,3 +5,5 @@ avail.idx: bad input: the access is not inside the window
 dma: bad input: the session has ended
 dma: bad input: the bytes are not inside the memory
 dma: bad input: the bytes are not inside the memory
+dma: bad input: the session has ended
+dma: bad input: a wait is at most 60000 milliseconds

@@ -1,4 +1,6 @@
 queue of 8
+interrupt vector 0
+interrupted: true
 used index 1
 the device wrote 32 bytes
 more than 8 distinct values in them: true

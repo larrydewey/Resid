@@ -273,8 +273,18 @@ region, with no diagnostic.
   emulated IOMMU where `tests/device/vm/virtio_rng.resid` negotiates
   features, lays out a split virtqueue, offers a buffer, notifies, polls
   the used ring and reads back the 32 random bytes the device wrote.
-  Not yet: interrupts; memory shared with the program; more than one
-  buffer in flight (the test's queue has one).
+  Not yet: memory shared with the program; more than one buffer in
+  flight (the test's queue has one).
+- **Stage J: interrupts as events.** The host of a DMA session makes an
+  eventfd and has VFIO signal it for MSI-X vector 0 (`vf_irq`), before
+  its filter, which then also allows ppoll and a read of that
+  descriptor. Request kind 17 waits for it, at most 60 s, and answers
+  how many interrupts came (0: the time passed). `dma_wait(region,
+  timeout_ms)`. `virtio_rng.resid` points its queue at vector 0 and
+  sleeps for the interrupt where it polled the used ring.
+  `device_session.c` has 57 checks (a wait that times out, one refused,
+  a plain session with none). Not yet: more than one vector; INTx for a
+  device without MSI-X.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

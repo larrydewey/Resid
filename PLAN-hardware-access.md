@@ -494,6 +494,10 @@ memory the driver gives it.
   regions first).
 - **Completion by polling** the used index. Interrupts as events later.
 
+Interrupts followed as stage J: one event for MSI-X vector 0, waited
+for by a message with a timeout (`dma_wait`), so a driver that has
+nothing to do sleeps in its host's ppoll.
+
 Built as stage I, and a virtio entropy device read through it in a
 virtual machine with an emulated IOMMU. Every privileged call the host
 makes (the VFIO descriptors, the mappings) comes before its filter, so

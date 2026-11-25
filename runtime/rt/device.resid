@@ -1123,8 +1123,8 @@ Int dp_call(Int req) {
     // An access to a session, or its end: no descriptor, only the
     // session's number (ds_access, ds_close).
     Int k4 = ld8(buf + 4);
-    if (k4 == 12 || k4 == 13 || k4 == 15 || k4 == 16) {
-        Int so = if (k4 == 12) { ds_access(buf, n) } else if (k4 == 13) { ds_close(buf, n) } else { ds_bulk(buf, n, k4 == 16) };
+    if (k4 == 12 || k4 == 13 || k4 == 15 || k4 == 16 || k4 == 17) {
+        Int so = if (k4 == 12) { ds_access(buf, n) } else if (k4 == 13) { ds_close(buf, n) } else if (k4 == 17) { ds_wait_req(buf, n) } else { ds_bulk(buf, n, k4 == 16) };
         return resid_raw_fill(buf, 0, n) * 0 + c_free(buf) * 0 + so;
     }
     Int d = pq_parse(buf, n);
@@ -1364,6 +1364,39 @@ Int ds_bulk(Int buf, Int n, Bool write) {
     _ = st8(rb, 0) + le_put(rb + 1, 1, 4) + st8(rb + 5, 1) + le_put(rb + 6, len, 4);
     Int out = dp_list(rb, 10 + len);
     return resid_raw_fill(rb, 0, len + 16) * 0 + c_free(rb) * 0 + out;
+}
+
+// A request of kind 17: wait for the device's interrupt. After the six
+// bytes: the session's number (8) and how long to wait at most, in
+// milliseconds (4, at most 60000). The answer is how many interrupts came
+// since the last wait, 0 when the time passed with none.
+Int ds_wait_req(Int buf, Int n) {
+    if (n != 18) { return dev_err_reply(de_refused(), 1); }
+    Int ms = le_get(buf + 14, 4);
+    if (ms < 0 || ms > 60000) { return dev_err_reply(de_refused(), 74); }
+    Int id = le_get(buf + 6, 8);
+    Int e = if (id > 0) { ds_find(id, 0) } else { 0 };
+    if (e == 0) { return dev_err_reply(de_refused(), 71); }
+    Int m = xmalloc(32);
+    _ = resid_raw_fill(m, 0, 32);
+    _ = st8(m, 5) + le_put(m + 8, ms, 8);
+    Int a = ld64(e + 8);
+    Int dl = hs_deadline(ms + 5000);
+    _ = st64(hs_timeout_w(), 0) + st64(hs_peer_w(), ld64(e + 16));
+    Bool ok = hs_send_until(a, m, 0, 16, dl) && hs_recv_until(a, m + 16, 0, 9, dl) == 9;
+    if (!ok) {
+        Bool late = ld64(hs_timeout_w()) != 0;
+        Int st = ds_drop(e);
+        Int sig = if (st >= 0) { st & 127 } else { 0 };
+        _ = c_free(m);
+        if (late) { return dev_err_reply(de_timeout(), 0); }
+        return dev_err_reply(de_host(), if (sig != 0) { 256 + sig } else { 4 * 256 });
+    }
+    Int status = ld8(m + 16);
+    Int v = ld64(m + 17);
+    _ = c_free(m);
+    if (status != 0) { return dev_err_reply(de_refused(), 75); }   // the session has no interrupt
+    return ds_num_reply(v);
 }
 
 // A request of kind 13: the session's number after the first six bytes.
@@ -2650,13 +2683,16 @@ Int dh_session(Int h, Int d) {
     Int dmem = if (dma) { dv_map(dget(d, 37)) } else { 0 };
     if (dma && dmem == 0) { return native_child_exit(125); }
     _ = if (dma) { st64(tab + (more + 1) * 16, dmem) + st64(tab + (more + 1) * 16 + 8, dget(d, 37)) } else { 0 };
+    // Its interrupt: an event nothing here ever signals.
+    Int efd = if (dma) { resid_raw_syscall(290, 0, 0, 0, 0, 0, 0) } else { 0 - 1 };   // eventfd2
     if (!dh_regions(h, 4)) { return native_child_exit(125); }
     Int vb = dh_region(h, 32, 0);
     Int db = dh_region(h, 32, 0);
-    Int msg = dh_region(h, 32, 0);
+    Int msg = dh_region(h, 96, 0);
     if (vb == 0 || db == 0 || msg == 0 || !dh_bufs(h, d)) { return native_child_exit(125); }
     _ = dh_rule(h, resid_raw_nr(0), 1, vfd, 0) + dh_rule(h, resid_raw_nr(0), 1, dfd, 0);
     _ = dh_rule(h, resid_raw_nr(47), 1, 3, 0) + dh_rule(h, resid_raw_nr(102), 0, 0, 0) + dh_rule(h, resid_raw_nr(104), 0, 0, 0);   // recvmsg(3), getuid, getgid
+    _ = ds_wait_rules(h, efd);
     if (!dh_lock(h)) { return native_child_exit(126); }
     Int vr = dh_read_all(vfd, vb, 0, 31);
     Int dr = dh_read_all(dfd, db, 0, 31);
@@ -2667,7 +2703,7 @@ Int dh_session(Int h, Int d) {
     if (mm_hex_id(vb, vr) != ((want >> 8) & 65535) || mm_hex_id(db, dr) != ((want >> 24) & 65535)) { return dh_fail(h, 6, 0); }
     _ = resid_raw_fill(msg, 0, 32);
     if (!native_write(msg, 0, 10)) { return native_child_exit(125); }
-    return ds_serve(tab, if (dma) { more + 2 } else { more + 1 }, wr, dget(h, 22), msg, if (dma) { more + 1 } else { 0 - 1 });
+    return ds_serve(tab, if (dma) { more + 2 } else { more + 1 }, wr, dget(h, 22), msg, if (dma) { more + 1 } else { 0 - 1 }, efd);
 }
 
 // ─── A session with memory for the device (kind 14) ─────────────────
@@ -2715,6 +2751,26 @@ Int vf_map(Int dev, Int ri, Int tab, Int i, Int res, Int size) {
     if (map < 0 && map > 0 - 4096) { return map; }
     _ = st64(tab + i * 16, map) + st64(tab + i * 16 + 8, size);
     return 0;
+}
+
+// The device's interrupt as an event: MSI-X vector 0 signals a new
+// eventfd, which is returned; -1 when the device has no MSI-X or the
+// kernel refuses (waits are then refused, and a driver polls).
+Int vf_irq(Int dev, Int w) {
+    _ = resid_raw_fill(w, 0, 32) + st32(w, 16) + st32(w + 8, 2);   // VFIO_PCI_MSIX_IRQ_INDEX
+    if (vf_ioctl(dev, 109, w) < 0 || ld32(w + 12) < 1) { return 0 - 1; }   // VFIO_DEVICE_GET_IRQ_INFO: its count
+    Int efd = resid_raw_syscall(290, 0, 0, 0, 0, 0, 0);   // eventfd2
+    if (efd < 0) { return 0 - 1; }
+    // DATA_EVENTFD | ACTION_TRIGGER, index 2, from vector 0, one, the descriptor.
+    _ = resid_raw_fill(w, 0, 32) + st32(w, 24) + st32(w + 4, 36) + st32(w + 8, 2) + st32(w + 12, 0) + st32(w + 16, 1) + st32(w + 20, efd);
+    return if (vf_ioctl(dev, 110, w) < 0) { 0 - 1 } else { efd };   // VFIO_DEVICE_SET_IRQS
+}
+
+// What a host that waits for an interrupt may also do: sleep on the
+// event until a time, and read it.
+Int ds_wait_rules(Int h, Int efd) {
+    if (efd < 0) { return 0; }
+    return dh_rule(h, resid_raw_nr(271), 0, 0, 0) + dh_rule(h, resid_raw_nr(0), 1, efd, 0);   // ppoll; read(efd)
 }
 
 Int vf_map_more(Int dev, Int ri, Int ms, Int tab, Int i, Int n) {
@@ -2773,14 +2829,16 @@ Int dh_vfio(Int h, Int d) {
     Int rm = vf_ioctl(cont, 113, w);                      // VFIO_IOMMU_MAP_DMA, read and write
     if (rm < 0) { return dh_fail_errno(h, rm, true); }
     _ = st64(tab + (more + 1) * 16, dmem) + st64(tab + (more + 1) * 16 + 8, ds);
+    Int efd = vf_irq(dev, w);
     if (!dh_regions(h, 2)) { return native_child_exit(125); }
-    Int msg = dh_region(h, 32, 0);
+    Int msg = dh_region(h, 96, 0);
     if (msg == 0 || !dh_bufs(h, d)) { return native_child_exit(125); }
     _ = dh_rule(h, resid_raw_nr(47), 1, 3, 0) + dh_rule(h, resid_raw_nr(102), 0, 0, 0) + dh_rule(h, resid_raw_nr(104), 0, 0, 0);   // recvmsg(3), getuid, getgid
+    _ = ds_wait_rules(h, efd);
     if (!dh_lock(h)) { return native_child_exit(126); }
-    _ = resid_raw_fill(msg, 0, 32);
+    _ = resid_raw_fill(msg, 0, 96);
     if (!native_write(msg, 0, 10)) { return native_child_exit(125); }
-    return ds_serve(tab, more + 2, 1, dget(h, 22), msg, more + 1);
+    return ds_serve(tab, more + 2, 1, dget(h, 22), msg, more + 1, efd);
 }
 
 // Map the session's other resources into tab (entry i + 1 for the i-th):
@@ -2802,7 +2860,18 @@ Int ds_map_more(Int h, Int dir, Int rn, Int wr, Bool fake, Int ms, Int tab, Int 
 
 // One access after another, until the program's end of the socket closes
 // (exit 0) or something else than a whole message arrives (exit 125).
-Int ds_serve(Int tab, Int maps, Int wr, Int ppid, Int m, Int dmai) {
+// Sleep until the event is signalled or `ms` milliseconds pass: how many
+// times it was signalled since it was last read, 0 for none. The poll
+// record, the time and the count are at m + 32, m + 40 and m + 56.
+Int ds_wait(Int efd, Int ms, Int m) {
+    _ = st32(m + 32, efd) + st32(m + 36, 1);   // POLLIN
+    _ = st64(m + 40, ms / 1000) + st64(m + 48, (ms % 1000) * 1000000) + st64(m + 56, 0);
+    Int r = resid_raw_syscall(271, m + 32, 1, m + 40, 0, 8, 0);   // ppoll
+    if (r != 1) { return 0; }
+    return if (resid_raw_syscall(0, efd, m + 56, 8, 0, 0, 0) == 8) { ld64(m + 56) } else { 0 };
+}
+
+Int ds_serve(Int tab, Int maps, Int wr, Int ppid, Int m, Int dmai, Int efd) {
     Int r = hs_recv_cred(3, m, 0, 16, ppid);
     if (r != 16) { return native_child_exit(if (r == 0) { 0 } else { 125 }); }
     Int op = ld8(m);
@@ -2823,14 +2892,23 @@ Int ds_serve(Int tab, Int maps, Int wr, Int ppid, Int m, Int dmai) {
         _ = st8(m + 16, if (fits) { 0 } else { 1 }) + st64(m + 17, 0);
         if (!native_write(m + 16, 0, 9)) { return native_child_exit(125); }
         if (fits && op == 3 && !native_write(at, 0, len)) { return native_child_exit(125); }
-        return ds_serve(tab, maps, wr, ppid, m, dmai);
+        return ds_serve(tab, maps, wr, ppid, m, dmai, efd);
+    }
+    // Wait for the device's interrupt (5): the time at m + 8.
+    if (op == 5) {
+        Int ms = le_get(m + 8, 4);
+        Bool can = efd >= 0 && ms >= 0 && ms <= 60000;
+        Int n = if (can) { ds_wait(efd, ms, m) } else { 0 };
+        _ = st8(m + 16, if (can) { 0 } else { 1 }) + st64(m + 17, n);
+        if (!native_write(m + 16, 0, 9)) { return native_child_exit(125); }
+        return ds_serve(tab, maps, wr, ppid, m, dmai, efd);
     }
     Bool ok = known && (op == 1 || (op == 2 && wr == 1)) && (w == 1 || w == 2 || w == 4 || w == 8) && off >= 0 && off % w == 0 && off + w <= size;
     Int at = if (ok) { ld64(tab + mi * 16) + off } else { 0 };
     Int v = if (!ok) { 0 } else if (op == 2) { mm_store(at, w, ld64(m + 8)) * 0 } else { mm_load(at, w) };
     _ = st8(m + 16, if (ok) { 0 } else { 1 }) + st64(m + 17, v);
     if (!native_write(m + 16, 0, 9)) { return native_child_exit(125); }
-    return ds_serve(tab, maps, wr, ppid, m, dmai);
+    return ds_serve(tab, maps, wr, ppid, m, dmai, efd);
 }
 
 // The names in the directory of PCI functions, a line each: addresses, as

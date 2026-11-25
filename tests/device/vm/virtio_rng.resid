@@ -7,8 +7,8 @@
 // host reaches the function through VFIO and maps 16 KiB of its own
 // memory for it through the IOMMU. This program lays a split virtqueue
 // (Virtual I/O Device 1.2, §2.7) out in that memory with register blocks
-// placed in it, offers the device one buffer to write, notifies it, polls
-// the used ring, and reads the bytes back. Nothing here is shared with
+// placed in it, offers the device one buffer to write, notifies it,
+// sleeps until the device's interrupt, and reads the bytes back. Nothing here is shared with
 // the device host but messages, and the host knows nothing of queues.
 import "dev/pci.resid";
 import "dev/virtio_pci.resid";
@@ -36,9 +36,11 @@ type Common = {
     @at(0x04) Word   device_feature;
     @at(0x08) Word   driver_feature_select;
     @at(0x0c) Word   driver_feature;
+    @at(0x10) Half   config_msix_vector;
     @at(0x14) Status device_status;
     @at(0x16) Half   queue_select;
     @at(0x18) Half   queue_size;
+    @at(0x1a) Half   queue_msix_vector;
     @at(0x1c) Half   queue_enable;
     @at(0x1e) Half   queue_notify_off;
     @at(0x20) Wide   queue_desc;
@@ -106,6 +108,11 @@ Result(Str, DeviceError) drive(RngSession s, Int step) {
     Bool q2 = common_write_queue_desc(c, Wide {.v = (UInt(64)) io})?;
     Bool q3 = common_write_queue_driver(c, Wide {.v = (UInt(64)) (io + 4096)})?;
     Bool q4 = common_write_queue_device(c, Wide {.v = (UInt(64)) (io + 8192)})?;
+    // The queue interrupts on MSI-X vector 0, the one the session waits
+    // for; configuration changes on none.
+    Bool m0 = common_write_config_msix_vector(c, Half {.v = 65535})?;
+    Bool m1 = common_write_queue_msix_vector(c, Half {.v = 0})?;
+    Half vec = common_read_queue_msix_vector(c)?;
     Half noff = common_read_queue_notify_off(c)?;
     Bool q5 = common_write_queue_enable(c, Half {.v = 1})?;
     Bool q6 = common_write_device_status(c, status(true, true, true, true))?;
@@ -122,12 +129,14 @@ Result(Str, DeviceError) drive(RngSession s, Int step) {
     // Tell the device, at the queue's place in the notification block.
     NotifySession n = NotifySession {.id = s.notify.id, .map = s.notify.map, .base = s.notify.base + (Int) noff.v * step, .len = 2};
     Bool n1 = notify_write_queue(n, Half {.v = 0})?;
-    Int used = wait_used(us, 1, 100000)?;
+    // Asleep until the device interrupts, not polling.
+    Int irqs = dma_wait(s.dma, 5000)?;
+    Int used = wait_used(us, 1, 0)?;
     Word wrote = used_read_len0(us)?;
     List(UInt(8)) bytes = dma_read(s.dma, 12288, 32)?;
     List(Int) none = [];
     Bool r0 = common_write_device_status(c, status(false, false, false, false))?;
-    return Ok(f"queue of {size.v}\nused index {used}\nthe device wrote {wrote.v} bytes\nmore than 8 distinct values in them: {distinct(bytes, 0, none) > 8}");
+    return Ok(f"queue of {size.v}\ninterrupt vector {vec.v}\ninterrupted: {irqs > 0}\nused index {used}\nthe device wrote {wrote.v} bytes\nmore than 8 distinct values in them: {distinct(bytes, 0, none) > 8}");
 }
 
 @requires(device)

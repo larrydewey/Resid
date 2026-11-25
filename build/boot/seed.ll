@@ -464879,7 +464879,7 @@ entry:
 @.s211332 = private unnamed_addr constant [79 x i8] c"cosesig.resid=965b0656df16640e83eec2a692ae8b3473b792ab91624c64377b0e78ecf672bd\00"
 @.s211333 = private unnamed_addr constant [78 x i8] c"crypto.resid=7605b9a725d6509b172c2ce884fa755a4e6d0ceaca89aa2d48dbb8f6ab587954\00"
 @.s211334 = private unnamed_addr constant [75 x i8] c"der.resid=1f9c52245ced499a287e6fa954fc3003cbe7af2018e61097dd4a662cc54b2be6\00"
-@.s211335 = private unnamed_addr constant [82 x i8] c"dev/device.resid=ee671ee6640d478d998f7cf6ad92a5c1fef1157704434501db06418eccdce1bb\00"
+@.s211335 = private unnamed_addr constant [82 x i8] c"dev/device.resid=a69163b6336ca7806e5bb46f4a81bf74ec02c8f94b4afc974c18816814f137b8\00"
 @.s211336 = private unnamed_addr constant [88 x i8] c"dev/device_write.resid=05a335adaf24bbcca1464417ef55632f300739eb6be6ec03f1a9d391a8f86bf5\00"
 @.s211337 = private unnamed_addr constant [85 x i8] c"dev/sev_guest.resid=3e6353b34826a5a9e5d7e5074e62ad16bc0fce1ad09e81fa5f52d1180cd3f546\00"
 @.s211338 = private unnamed_addr constant [89 x i8] c"dev/sev_guest_key.resid=127d5b0fbe9351d2d7f51f24e2ebfa54193875f6f9d2404a655f0ba6a7243848\00"
@@ -464942,8 +464942,8 @@ entry:
 @.s211395 = private unnamed_addr constant [78 x i8] c"x25519.resid=4ae393aa47d5ed7ff504188b888a4c1effa47922798f37042da2a35c12971897\00"
 @.s211396 = private unnamed_addr constant [79 x i8] c"x25519g.resid=37b2a1330996e77a452ab7df621b24a25ccff7227b3502719b9737d35e315fea\00"
 @.s211397 = private unnamed_addr constant [76 x i8] c"x509.resid=177eb4693b09157251d43cc7af6ce83eba8448cd41cec362b27726f1711e4fb7\00"
-@.s211398 = private unnamed_addr constant [71 x i8] c"rt.ll=d777e2c38d7449a0c641c4ecf184228dd0b85a147febbf0aafee7105385fbfef\00"
-@.s211399 = private unnamed_addr constant [79 x i8] c"rt-aarch64.ll=93a0c7398306a159665753f06c4d177eb0d781da51b5e9862e14759362a36b6a\00"
+@.s211398 = private unnamed_addr constant [71 x i8] c"rt.ll=4cb27943b5d7c0db9339035bf58a727c745d7c14cecc75b7ae515070d966bbc3\00"
+@.s211399 = private unnamed_addr constant [79 x i8] c"rt-aarch64.ll=bdf9a35941670ca87f776d4289abe565eded5922a34f6d4a462128dbc6a6f417\00"
 @.lty211400 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
 @.lc211400 = private global ptr null
 @.lcd211400 = private unnamed_addr constant [84 x ptr] [ptr @.s211316, ptr @.s211317, ptr @.s211318, ptr @.s211319, ptr @.s211320, ptr @.s211321, ptr @.s211322, ptr @.s211323, ptr @.s211324, ptr @.s211325, ptr @.s211326, ptr @.s211327, ptr @.s211328, ptr @.s211329, ptr @.s211330, ptr @.s211331, ptr @.s211332, ptr @.s211333, ptr @.s211334, ptr @.s211335, ptr @.s211336, ptr @.s211337, ptr @.s211338, ptr @.s211339, ptr @.s211340, ptr @.s211341, ptr @.s211342, ptr @.s211343, ptr @.s211344, ptr @.s211345, ptr @.s211346, ptr @.s211347, ptr @.s211348, ptr @.s211349, ptr @.s211350, ptr @.s211351, ptr @.s211352, ptr @.s211353, ptr @.s211354, ptr @.s211355, ptr @.s211356, ptr @.s211357, ptr @.s211358, ptr @.s211359, ptr @.s211360, ptr @.s211361, ptr @.s211362, ptr @.s211363, ptr @.s211364, ptr @.s211365, ptr @.s211366, ptr @.s211367, ptr @.s211368, ptr @.s211369, ptr @.s211370, ptr @.s211371, ptr @.s211372, ptr @.s211373, ptr @.s211374, ptr @.s211375, ptr @.s211376, ptr @.s211377, ptr @.s211378, ptr @.s211379, ptr @.s211380, ptr @.s211381, ptr @.s211382, ptr @.s211383, ptr @.s211384, ptr @.s211385, ptr @.s211386, ptr @.s211387, ptr @.s211388, ptr @.s211389, ptr @.s211390, ptr @.s211391, ptr @.s211392, ptr @.s211393, ptr @.s211394, ptr @.s211395, ptr @.s211396, ptr @.s211397, ptr @.s211398, ptr @.s211399]

@@ -35,5 +35,7 @@ Int main() {
     println(match (dma_read(none, 0, 16)) { Ok(b) => "read", Err(e) => device_error_text(e) });
     println(match (dma_read(none, 16380, 16)) { Ok(b) => "read", Err(e) => device_error_text(e) });
     println(match (dma_write(none, 16380, [1, 2, 3, 4, 5])) { Ok(b) => "wrote", Err(e) => device_error_text(e) });
+    println(match (dma_wait(none, 10)) { Ok(n) => "waited", Err(e) => device_error_text(e) });
+    println(match (dma_wait(none, 60001)) { Ok(n) => "waited", Err(e) => device_error_text(e) });
     return 0;
 }
