@@ -15,8 +15,9 @@
 #   tests/device/virtio_vm.sh [-c COMPILER] [-k KERNEL_IMAGE] [-m MODULES]
 #
 # With MODULES (or $RESID_VM_MODULES), a directory holding that kernel's
-# VFIO modules (irqbypass, iommufd, vfio, vfio_iommu_type1, vfio-pci-core,
-# vfio-pci, as .ko files; a module built into the kernel may be missing),
+# VFIO modules as .ko files whose names sort in the order they are loaded
+# (tests/device/vm_modules.sh makes one; a part built into the kernel has
+# no file),
 # a second machine is booted with an emulated IOMMU, the device is bound
 # to vfio-pci, and tests/device/vm/virtio_rng.resid drives it: a
 # virtqueue laid out in memory the device host maps for the device, one
@@ -49,7 +50,9 @@ while getopts "c:k:m:" opt; do
     esac
 done
 if [ -z "$KERNEL" ]; then
-    for k in $(ls -t /boot/vmlinuz-* 2>/dev/null); do [ -r "$k" ] && { KERNEL="$k"; break; }; done
+    # The running kernel's image first: where distributions keep a copy
+    # anyone may read, then /boot.
+    for k in "/usr/lib/modules/$(uname -r)/vmlinuz" "/lib/modules/$(uname -r)/vmlinuz" "/boot/vmlinuz-$(uname -r)" $(ls -t /boot/vmlinuz-* 2>/dev/null); do [ -r "$k" ] && { KERNEL="$k"; break; }; done
 fi
 BB="$(command -v busybox || true)"
 for t in qemu-system-x86_64 cpio gzip; do
@@ -111,6 +114,7 @@ chmod +x "$R/init"
 
 ACCEL=""
 [ -w /dev/kvm ] && ACCEL="-enable-kvm -cpu host"
+if [ -n "$ACCEL" ]; then echo "  (hardware virtualisation: the times are this machine's)"; else echo "  (no /dev/kvm: the machine is emulated, about 75 times slower)"; fi
 timeout 600 qemu-system-x86_64 -M q35 $ACCEL -m 512 -nographic -no-reboot \
     -kernel "$KERNEL" -initrd "$WORK/initrd.gz" -append "console=ttyS0 quiet panic=-1" \
     -device virtio-rng-pci,disable-legacy=on > "$WORK/console.log" 2>&1
@@ -139,8 +143,10 @@ cat > "$R/init" <<'INIT'
 /bin/busybox --install -s /bin
 mount -t proc proc /proc; mount -t sysfs sys /sys; mount -t devtmpfs dev /dev
 mkdir -p /dev/shm; mount -t tmpfs shm /dev/shm
-for m in irqbypass iommufd vfio vfio_iommu_type1 vfio-pci-core vfio-pci; do
-    [ -f /ko/$m.ko ] && insmod /ko/$m.ko
+# The modules, in the order of their names (tests/device/vm_modules.sh
+# numbers them as they are to be loaded).
+for m in /ko/*.ko; do
+    [ -f "$m" ] && insmod "$m"
 done
 # Give the entropy device (1af4:1044) and the disk (1af4:1042) to vfio-pci.
 for d in /sys/bus/pci/devices/*; do
