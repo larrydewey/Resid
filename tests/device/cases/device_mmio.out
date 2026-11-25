@@ -1,7 +1,7 @@
 magic 1953655158
 status ack=true driver=false needs_reset=true
 wide 18364758544493064720
-fx.gone: absent
+fx.gone: device absent
 wrote true
 status ack=true driver=true needs_reset=false
 cause rx=true tx=false
