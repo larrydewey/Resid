@@ -24,8 +24,8 @@ pub List(Str) vp_pins() {
         "cosesig.resid=965b0656df16640e83eec2a692ae8b3473b792ab91624c64377b0e78ecf672bd",
         "crypto.resid=7605b9a725d6509b172c2ce884fa755a4e6d0ceaca89aa2d48dbb8f6ab587954",
         "der.resid=1f9c52245ced499a287e6fa954fc3003cbe7af2018e61097dd4a662cc54b2be6",
-        "dev/device.resid=4da824f7ed2d5f45d487a0517cbb84ee27587b2a5c165cb7c73bb4d9aa9202cf",
-        "dev/device_write.resid=b86962da473940a0faab7931fc8ce8fe31ec4cebee0c65a4a204c7e5983169a7",
+        "dev/device.resid=be41575d5bc65431ce5b4210adbaf5805b3160bb1430d7436c74a75dddf068d8",
+        "dev/device_write.resid=7bc812c575f27cc0181811f6e3fbf973f7251ed77bfe78930f816c2ffe4c5306",
         "dev/sev_guest.resid=3e6353b34826a5a9e5d7e5074e62ad16bc0fce1ad09e81fa5f52d1180cd3f546",
         "dev/sev_guest_key.resid=127d5b0fbe9351d2d7f51f24e2ebfa54193875f6f9d2404a655f0ba6a7243848",
         "dev/tpm_wire.resid=9f5069f689150b4a6fe465541a3ff1d18d3d5b7622e94b0d663cad9915435f84",
@@ -87,7 +87,7 @@ pub List(Str) vp_pins() {
         "x25519.resid=4ae393aa47d5ed7ff504188b888a4c1effa47922798f37042da2a35c12971897",
         "x25519g.resid=37b2a1330996e77a452ab7df621b24a25ccff7227b3502719b9737d35e315fea",
         "x509.resid=177eb4693b09157251d43cc7af6ce83eba8448cd41cec362b27726f1711e4fb7",
-        "rt.ll=749c140a520a5f72d7c1c28523d78a74a6152e79dcce664631dccad6843c445a",
-        "rt-aarch64.ll=5f1ad57fd9ad53611915c44c25f439003b7b967f0985d2028b707b1751476273"
+        "rt.ll=49b3542de6afefe8834b78cd8dfdeb42c79e17030bc58ba4569313c3d130941d",
+        "rt-aarch64.ll=1f647c119cffeb8d4189d302a24001b80257489ddfb3ecc7071c464b3ec9c3c0"
     ];
 }

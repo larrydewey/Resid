@@ -350,8 +350,24 @@ region, with no diagnostic.
   `driver_holds_only_device` (E0219 for a driver that wants a file).
   `tests/device/vm/virtio_rng_driver.resid`: the entropy device's driver
   in its host, 53 requests answered. Not yet: typed messages; a driver
-  for the disk or the network; accesses as direct loads and stores
-  (they still build and read a request, in process).
+  for the disk or the network.
+- **Stage P: direct loads and stores.** Three runtime builtins for
+  lib/dev/ only (E0260): `resid_device_drv_can(map, off, bytes, kind)`,
+  `resid_device_drv_load(map, off, bytes)` and
+  `resid_device_drv_store(map, off, bytes, value)`. In a driver's host
+  they reach the word by the session's own rule (`ds_word_at`) with no
+  request built or read; anywhere else they answer 0.
+  `device_session_load` and `device_session_store` use them when the
+  process is a driver's host, so every generated accessor is direct
+  there and a message elsewhere, with nothing to change in a driver.
+  Wired as other builtins are (typecheck, codegen's types, guard and
+  no-allocation list, lower's, gcheck's capability and lib-only check,
+  the driver's declarations). Measured: `device_session.c` (80 checks)
+  3.1 ns a direct load in this container against 28 µs as a message;
+  in the emulated machine a register read through the generated
+  accessor in the Resid driver 1.8 µs against about 280 µs as a message
+  from the program. Not yet: the accessor's own overhead measured on
+  hardware (it still makes a one-element list for its answer).
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

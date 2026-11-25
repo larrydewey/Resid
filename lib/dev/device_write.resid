@@ -142,6 +142,11 @@ pub Result(List(DevOut), DeviceError) device_engine_session_open_w(MmioWin op, L
 @requires(device)
 pub Result(List(DevOut), DeviceError) device_session_store(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes, UInt(64) value) {
     if (off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
+    // In a driver's host the store is made here, with no request.
+    if (resid_device_drv_can(0, 0, 0, 0) == 1) {
+        if (resid_device_drv_store(map, base + off, bytes, value) != 1) { return Err(BadInput(name, "the session's host refused the access")); }
+        return Ok([]);
+    }
     DvReq r = dv_prep_session_access(id, map, true, base + off, bytes, value);
     if (r.err != "") { return Err(BadInput(name, r.err)); }
     return dv_session_answer(name, dv_answer(name, r, resid_device_call_w(r.req)));

@@ -1105,6 +1105,12 @@ pub DvReq dv_prep_session_access(Int id, Int map, Bool store, Int off, Int bytes
 @requires(device(readonly))
 pub Result(List(DevOut), DeviceError) device_session_load(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes) {
     if (off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
+    // In a driver's host the device is this process's own: the load is
+    // made here, with no request.
+    if (resid_device_drv_can(0, 0, 0, 0) == 1) {
+        if (resid_device_drv_can(map, base + off, bytes, 1) != 1) { return Err(BadInput(name, "the session's host refused the access")); }
+        return Ok([OutNum(resid_device_drv_load(map, base + off, bytes))]);
+    }
     DvReq r = dv_prep_session_access(id, map, false, base + off, bytes, 0);
     if (r.err != "") { return Err(BadInput(name, r.err)); }
     return dv_session_answer(name, dv_answer(name, r, resid_device_call(r.req)));

@@ -4398,14 +4398,14 @@ Str gk_builtin_family(Str n) {
     if (str_starts_with(n, "resid_dbg_") || str_starts_with(n, "resid_pty_")) { return "process"; }
     if (str_starts_with(n, "resid_term_")) { return "terminal"; }
     if (str_starts_with(n, "resid_clock_")) { return "clock"; }
-    if (n == "resid_device_call" || n == "resid_device_call_w" || n == "resid_device_secret") { return "device"; }
+    if (n == "resid_device_call" || n == "resid_device_call_w" || n == "resid_device_secret" || str_starts_with(n, "resid_device_drv_")) { return "device"; }
     return "";
 }
 
 // Builtins that change state a read-only grant does not cover.
 // Writes under a moded family: raw mode, sleeping, and binding a listener
 // to an address other than loopback (exposing a port is a write).
-Bool gk_builtin_write(Str n) { return n == "resid_udp_bind_at" || n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns" || n == "resid_tcp_listen_at" || n == "resid_unix_listen" || n == "resid_device_call_w"; }
+Bool gk_builtin_write(Str n) { return n == "resid_device_drv_store" || n == "resid_udp_bind_at" || n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns" || n == "resid_tcp_listen_at" || n == "resid_unix_listen" || n == "resid_device_call_w"; }
 
 // Runtime internals that free or move memory the program may still see
 // (spec §5: storage is never exposed). Only the compiler's own source may
@@ -6290,7 +6290,7 @@ Str dv_misplaced(GK k, Int id, Bool inlib) {
         Int d = k.sd.get(n.text) else { 0 - 1 };
         if (d >= 0 && dv_kind_tag(k.g.ns[d].aux)) { return "a `" + n.text + "` literal outside lib/dev/: a device descriptor comes only from the standard library's lib/dev/ (call its wrappers, or pass one of its descriptors)"; }
     }
-    if ((kd == "call" || kd == "ref") && (n.text == "resid_device_call" || n.text == "resid_device_call_w" || n.text == "resid_device_secret") && kg_def(k.rs, id) < 0 && !inlib) {
+    if ((kd == "call" || kd == "ref") && (n.text == "resid_device_call" || n.text == "resid_device_call_w" || n.text == "resid_device_secret" || str_starts_with(n.text, "resid_device_drv_")) && kg_def(k.rs, id) < 0 && !inlib) {
         return "`" + n.text + "` is the device engine's runtime entry; a program reaches a device through the `device` verbs with a descriptor from lib/dev/";
     }
     if (kd == "call" || kd == "ref") {

@@ -24,6 +24,9 @@ void* resid_device_call(void* req);
 void* resid_device_call_w(void* req);
 void resid_device_host_test(int64_t argc, char** argv, char** envp, int64_t mode, const char* root);
 void resid_driver_register(void* f);
+int64_t resid_device_drv_can(int64_t map, int64_t off, int64_t bytes, int64_t kind);
+int64_t resid_device_drv_load(int64_t map, int64_t off, int64_t bytes);
+int64_t resid_device_drv_store(int64_t map, int64_t off, int64_t bytes, int64_t value);
 
 static char exe[4096];
 
@@ -170,7 +173,9 @@ static void req_msg(Req* r, uint64_t id, const uint8_t* data, int len) {
  *   'D' bytes    the bytes written to the device's memory at 100, read back
  *   'A'          what it was started with, and which driver it is
  *   'X'          the error a call for some other device gets
- *   'B'          a batch: a store and a load of the device's memory */
+ *   'B'          a batch: a store and a load of the device's memory
+ *   'T'          a million direct loads of a register; 'U' none (for the time)
+ *   'S'          direct accesses: what may be made, a store, loads */
 static int64_t driver(int64_t which, int64_t unused) {
     static Req q;
     static Rep r;
@@ -207,6 +212,25 @@ static int64_t driver(int64_t which, int64_t unused) {
             u(&q, 64, 4);
             r = call(&q, 0);
             out[0] = code(&r); out[1] = (uint8_t)value(&r); on = 2;
+        } else if (len >= 1 && (msg[0] == 'T' || msg[0] == 'U')) {
+            uint32_t sum = 0;
+            for (int i = 0; i < (msg[0] == 'T' ? 1000000 : 0); i++) sum += (uint32_t)resid_device_drv_load(0, 16, 4);
+            memcpy(out, &sum, 4); on = 4;
+        } else if (len >= 1 && msg[0] == 'S') {
+            /* here; a register load; a store to the device's memory; past
+             * the end; an unknown resource; unaligned; then the values */
+            out[0] = (uint8_t)resid_device_drv_can(0, 0, 0, 0);
+            out[1] = (uint8_t)resid_device_drv_can(0, 16, 4, 1);
+            out[2] = (uint8_t)resid_device_drv_can(1, 3000, 8, 2);
+            out[3] = (uint8_t)resid_device_drv_can(0, 4096, 4, 1);
+            out[4] = (uint8_t)resid_device_drv_can(7, 0, 4, 1);
+            out[5] = (uint8_t)resid_device_drv_can(0, 18, 4, 1);
+            out[6] = (uint8_t)resid_device_drv_store(1, 3000, 8, 0x0102030405060708ll);
+            out[7] = (uint8_t)resid_device_drv_store(1, 8192, 8, 1);
+            uint64_t back = (uint64_t)resid_device_drv_load(1, 3000, 8);
+            uint32_t reg = (uint32_t)resid_device_drv_load(0, 16, 4);
+            uint32_t none = (uint32_t)resid_device_drv_load(0, 4096, 4);
+            memcpy(out + 8, &back, 8); memcpy(out + 16, &reg, 4); memcpy(out + 20, &none, 4); on = 24;
         } else if (len >= 1 && msg[0] == 'B') {
             batch_begin(&q, 1, 1);
             batch_op(&q, 2, 4, 1, 2000, 0x0badcafe, NULL);
@@ -599,6 +623,37 @@ int main(int argc, char** argv, char** envp) {
     r = call(&q, 1);
     uint32_t cafe = 0x0badcafe;
     check("driver_batch", bytes_are(&r, (const uint8_t*)&cafe, 4));
+    /* Direct accesses, which build no request: what may be made, and that
+     * a refused one loads 0 and stores nothing. */
+    mm[0] = 'S';
+    req_msg(&q, dv, mm, 1);
+    r = call(&q, 1);
+    uint8_t want_s[24] = {1, 1, 1, 0, 0, 0, 1, 0, 8, 7, 6, 5, 4, 3, 2, 1};
+    memcpy(want_s + 16, blk + 16, 4);
+    check("driver_direct_accesses", bytes_are(&r, want_s, 24));
+    /* In the program's own process there is no device to reach so. */
+    check("direct_only_in_a_driver", resid_device_drv_can(0, 0, 0, 0) == 0 && resid_device_drv_can(0, 16, 4, 1) == 0 && resid_device_drv_load(0, 16, 4) == 0 && resid_device_drv_store(0, 16, 4, 9) == 0);
+    /* A million of them, timed against a message that does none. */
+    double tmil = 1e18, tnone = 1e18;
+    for (int pass = 0; pass < 3; pass++) {
+        mm[0] = 'U';
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        req_msg(&q, dv, mm, 1); r = call(&q, 1);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        double a = (t1.tv_sec - t0.tv_sec) * 1e9 + (t1.tv_nsec - t0.tv_nsec);
+        mm[0] = 'T';
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        req_msg(&q, dv, mm, 1); r = call(&q, 1);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        double b = (t1.tv_sec - t0.tv_sec) * 1e9 + (t1.tv_nsec - t0.tv_nsec);
+        if (a < tnone) tnone = a;
+        if (b < tmil) tmil = b;
+    }
+    uint32_t one; memcpy(&one, blk + 16, 4);
+    uint32_t sum = one * 1000000u;
+    check("driver_million_direct_loads", bytes_are(&r, (const uint8_t*)&sum, 4));
+    fprintf(stderr, "note: %.1f nanoseconds a direct load in a driver (best of three)\n", (tmil - tnone) / 1e6);
+
     /* A driver reaches its own device only: any other device call is
      * refused in its host (78). */
     mm[0] = 'X';

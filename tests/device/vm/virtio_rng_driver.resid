@@ -148,7 +148,7 @@ Int serve(RngSession s, NotifySession bell, Int n) {
     return match (driver_next(60000)) {
         Err(e) => 1,
         Ok(ev) => match (ev) {
-            DrvRequest(msg) => serve_one(s, bell, n, if (msg.len() == 1) { (Int) msg[0] } else { 0 }),
+            DrvRequest(msg) => if (msg.len() == 2 && (Int) msg[0] == 255) { serve_reads(s, bell, n, (Int) msg[1] * 1000) } else { serve_one(s, bell, n, if (msg.len() == 1) { (Int) msg[0] } else { 0 }) },
             DrvInterrupt(k) => serve(s, bell, n),
             DrvIdle => serve(s, bell, n),
         },
@@ -160,6 +160,21 @@ Int serve_one(RngSession s, NotifySession bell, Int n, Int count) {
     List(UInt(8)) none = [];
     List(UInt(8)) bytes = if (count < 1) { none } else { match (fetch(s, bell, n, count)) { Ok(b) => b, Err(e) => none } };
     return match (driver_reply(bytes)) { Ok(b) => serve(s, bell, if (count < 1) { n } else { n + 1 }), Err(e) => 2 };
+}
+
+// `left` reads of the status register, for the time they take: how many
+// found the driver's own bits set.
+@requires(device)
+Int reads(CommonSession c, Int left, Int good) {
+    if (left <= 0) { return good; }
+    Bool ok = match (common_read_device_status(c)) { Ok(st) => st.driver_ok, Err(e) => false };
+    return reads(c, left - 1, if (ok) { good + 1 } else { good });
+}
+
+@requires(device)
+Int serve_reads(RngSession s, NotifySession bell, Int n, Int count) {
+    Int good = reads(s.common, count, 0);
+    return match (driver_reply([if (good == count) { 1 } else { 0 }])) { Ok(b) => serve(s, bell, n), Err(e) => 7 };
 }
 
 // The driver: what the host runs. `step` is not known here, so the
@@ -205,7 +220,21 @@ Result(Int, DeviceError) ask(DriverLink d, Int left, Int good) {
     return ask(d, left - 1, if (b.len() == 64) { good + 1 } else { good });
 }
 
-@requires(device)
+// The time of a request that makes the driver read a register 20000
+// times, less the time of one that makes it read none: on a line that
+// starts "note:", which the test's script shows and does not compare.
+@requires(device, clock(readonly))
+Result(Bool, DeviceError) timed(DriverLink d) {
+    Int t0 = clock.monotonic_ns();
+    List(UInt(8)) none = driver_call(d, [255, 0])?;
+    Int t1 = clock.monotonic_ns();
+    List(UInt(8)) many = driver_call(d, [255, 20])?;
+    Int t2 = clock.monotonic_ns();
+    println(f"note: {((t2 - t1) - (t1 - t0)) / 20000} nanoseconds a register read in the driver");
+    return Ok(many.len() == 1 && (Int) many[0] == 1 && none.len() == 1);
+}
+
+@requires(device, clock(readonly))
 Result(Str, DeviceError) talk(DriverLink d, Int step) {
     List(UInt(8)) none = [];
     List(UInt(8)) ready = driver_call(d, le(step, 4, none))?;
@@ -213,11 +242,12 @@ Result(Str, DeviceError) talk(DriverLink d, Int step) {
     List(UInt(8)) b = driver_call(d, [32])?;
     List(UInt(8)) odd = driver_call(d, [1, 2, 3])?;
     Int good = ask(d, 50, 0)?;
+    Bool read_all = timed(d)?;
     List(Int) seen = [];
-    return Ok(f"the driver is ready: {ready.len() == 1}\nasked for 32 bytes: got {a.len()}, more than 8 distinct values: {distinct(a, 0, seen) > 8}\nasked again: got {b.len()}, the same bytes: {same(a, b, 0)}\na message that is no request: {odd.len()} bytes back\n{good} of 50 more requests brought 64 bytes");
+    return Ok(f"the driver is ready: {ready.len() == 1}\nasked for 32 bytes: got {a.len()}, more than 8 distinct values: {distinct(a, 0, seen) > 8}\nasked again: got {b.len()}, the same bytes: {same(a, b, 0)}\na message that is no request: {odd.len()} bytes back\n{good} of 50 more requests brought 64 bytes\n20000 register reads in the driver, all as expected: {read_all}");
 }
 
-@requires(device)
+@requires(device, clock(readonly))
 Result(Str, DeviceError) run(PciAddr a) {
     PciWindow wc = virtio_pci_window(a, virtio_cfg_common())?;
     PciWindow wn = virtio_pci_window(a, virtio_cfg_notify())?;
@@ -226,7 +256,7 @@ Result(Str, DeviceError) run(PciAddr a) {
     return done;
 }
 
-@requires(device)
+@requires(device, clock(readonly))
 Int main() {
     List(PciAddr) none = [];
     List(PciAddr) found = match (pci_find(virtio_pci_vendor(), virtio_pci_device_id(4))) { Ok(fs) => fs, Err(e) => none };

@@ -334,9 +334,11 @@ without MSI-X has none to wait for (`BadInput`), and its driver polls.
 
 With `driver = f`, the device's driver is a function of yours that runs
 inside the session's host, after its filter. There the register
-accessors, `dma_read`, `dma_write`, `dma_wait` and batches are made in
-place, in the driver's own process, with no message; the program holds
-no session, only a link to send the driver messages on.
+accessors are direct loads and stores of the device's mapped memory,
+checked against the session's bounds, and `dma_read`, `dma_write`,
+`dma_wait` and batches are made in place: all in the driver's own
+process, with no message. The program holds no session, only a link to
+send the driver messages on.
 
 ```resid
 @device(dma = virtio_rng_dma, driver = entropy_driver)

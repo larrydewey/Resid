@@ -1573,6 +1573,36 @@ Int drv_w() { return resid_raw_global("dv_drv", 96); }
 @export("resid_driver_register", "void(ptr)")
 pub Int rt_driver_register(Int f) { return st64(drv_w(), f); }
 
+// A driver's accesses to its device, made directly: no request is built
+// and none read. Only lib/dev/ calls these (E0260). `kind` 0 asks only
+// whether this process is a driver's host; 1 a load and 2 a store ask
+// whether that word of resource `map` may be reached, by ds_word_at's
+// rules. A load that may not be made gives 0, a store that may not 0.
+@export("resid_device_drv_can", "i64(i64,i64,i64,i64)")
+pub Int rt_device_drv_can(Int map, Int off, Int bytes, Int kind) {
+    Int g = drv_w();
+    if (ld64(g + 8) != 1) { return 0; }
+    if (kind == 0) { return 1; }
+    if (kind != 1 && kind != 2) { return 0; }
+    return if (ds_word_at(ld64(g + 16), ld64(g + 24), 1, kind, bytes, map, off) != 0) { 1 } else { 0 };
+}
+
+@export("resid_device_drv_load", "i64(i64,i64,i64)")
+pub Int rt_device_drv_load(Int map, Int off, Int bytes) {
+    Int g = drv_w();
+    if (ld64(g + 8) != 1) { return 0; }
+    Int at = ds_word_at(ld64(g + 16), ld64(g + 24), 1, 1, bytes, map, off);
+    return if (at == 0) { 0 } else { mm_load(at, bytes) };
+}
+
+@export("resid_device_drv_store", "i64(i64,i64,i64,i64)")
+pub Int rt_device_drv_store(Int map, Int off, Int bytes, Int value) {
+    Int g = drv_w();
+    if (ld64(g + 8) != 1) { return 0; }
+    Int at = ds_word_at(ld64(g + 16), ld64(g + 24), 1, 2, bytes, map, off);
+    return if (at == 0) { 0 } else { mm_store(at, bytes, value) * 0 + 1 };
+}
+
 // The host becomes the driver: never returns.
 Int drv_enter(Int d, Int tab, Int maps, Int dmai, Int efd, Int msg, Int ppid) {
     Int g = drv_w();

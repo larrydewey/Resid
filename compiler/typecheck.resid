@@ -3201,6 +3201,21 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     // The isolated device host (runtime/rt/device.resid): a serialized
     // request in, a serialized reply out. Only lib/dev/device.resid's engine
     // may call it (E0260); a write descriptor goes through the _w entry.
+    // A driver's direct accesses to its device (runtime/rt/device.resid),
+    // for lib/dev/ only: whether one may be made, a load, a store.
+    if (name == "resid_device_drv_can") {
+        if (argtys == "Int,Int,Int,Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int, Int, Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_device_drv_load") {
+        if (argtys == "Int,Int,Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int, Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_device_drv_store") {
+        // The word to store: UInt(64), which is also spelled UInt.
+        if (argtys == "Int,Int,Int,UInt(64)" || argtys == "Int,Int,Int,UInt") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int, Int, Int, UInt(64)), got (" + argtys + ")"};
+    }
     if (name == "resid_device_call" || name == "resid_device_call_w") {
         if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects (List(Int)), got (" + argtys + ")"};
