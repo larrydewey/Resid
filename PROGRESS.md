@@ -285,6 +285,15 @@ region, with no diagnostic.
   `device_session.c` has 57 checks (a wait that times out, one refused,
   a plain session with none). Not yet: more than one vector; INTx for a
   device without MSI-X.
+- **Stage K: a disk.** `tests/device/vm/virtio_blk.resid`, a virtio
+  block driver with no change to compiler or runtime: requests of three
+  descriptors (header, sector, status), each put in the next slot of
+  the available ring, the device notified and its interrupt slept for.
+  In the virtual machine it reads a sector the test wrote text into,
+  writes another and reads it back, and makes forty more reads, the
+  ring wrapping five times; the script then finds the written sector in
+  the disk image. Each request is about twenty messages to the host.
+  Not yet: more than one request in flight; a measured rate.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

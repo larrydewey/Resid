@@ -1,0 +1,208 @@
+// A virtio block device, driven: run only by tests/device/virtio_vm.sh,
+// in a virtual machine with an IOMMU, as root, on a device bound to
+// vfio-pci. It RESETS the device it finds and WRITES sector 5 of its disk.
+//
+// Where virtio_rng.resid offers one buffer once, this sends many requests
+// through one queue, each a chain of three descriptors (Virtual I/O
+// Device 1.2, §5.2.6): a header the device reads, a sector it reads or
+// writes, and a status byte it writes. Each request is put in the next
+// slot of the available ring, the device is notified, and the driver
+// sleeps until its interrupt.
+import "dev/pci.resid";
+import "dev/virtio_pci.resid";
+import "dev/fx_device_virtio_window.resid";
+
+@word(16) type Half = { UInt(16) v; };
+@word(32) type Word = { UInt(32) v; };
+@word(64) type Wide = { UInt(64) v; };
+
+@word(8)
+type Status = {
+    Bool acknowledge;
+    Bool driver;
+    Bool driver_ok;
+    Bool features_ok;
+    @reserved(2);
+    DeviceOwned(Bool) needs_reset;
+    Bool failed;
+};
+
+// The common configuration (§4.1.4.3).
+@registers(size = 0x38, session = device)
+type Common = {
+    @at(0x00) Word   device_feature_select;
+    @at(0x04) Word   device_feature;
+    @at(0x08) Word   driver_feature_select;
+    @at(0x0c) Word   driver_feature;
+    @at(0x10) Half   config_msix_vector;
+    @at(0x14) Status device_status;
+    @at(0x16) Half   queue_select;
+    @at(0x18) Half   queue_size;
+    @at(0x1a) Half   queue_msix_vector;
+    @at(0x1c) Half   queue_enable;
+    @at(0x1e) Half   queue_notify_off;
+    @at(0x20) Wide   queue_desc;
+    @at(0x28) Wide   queue_driver;
+    @at(0x30) Wide   queue_device;
+};
+
+// Where a queue is notified: its number, written.
+@registers(size = 2, session = device)
+type Notify = { @at(0) Half queue; };
+
+// The device's own configuration (§5.2.4): its capacity in sectors.
+@registers(size = 8, session = device)
+type BlkConfig = { @at(0) Wide capacity; };
+
+// The queue's parts, placed in the device's memory (§2.7).
+@registers(size = 16, session = device)
+type Desc = { @at(0) Wide addr; @at(8) Word len; @at(12) Half flags; @at(14) Half next; };
+
+@registers(size = 4, session = device)
+type RingHead = { @at(0) Half flags; @at(2) Half idx; };
+
+@registers(size = 2, session = device)
+type Slot = { @at(0) Half head; };
+
+@device(dma = fx_blk_dma)
+type Blk = { Common common; Notify notify; BlkConfig config; };
+
+// The memory: descriptors at 0, the available ring at one page, the used
+// ring at two, and at three the header, the sector and the status byte.
+Int at_avail() { return 4096; }
+Int at_used() { return 8192; }
+Int at_header() { return 12288; }
+Int at_data() { return 12800; }
+Int at_status() { return 13312; }
+
+Status status(Bool ack, Bool drv, Bool feat, Bool ok) { return Status {.acknowledge = ack, .driver = drv, .driver_ok = ok, .features_ok = feat, .failed = false}; }
+
+// What a request needs that does not change: the session, the queue's
+// size, and where it is notified.
+type Queue = { BlkSession s; Int size; NotifySession bell; };
+
+List(UInt(8)) le(Int v, Int n, List(UInt(8)) acc) { return if (n <= 0) { acc } else { le(v >> 8, n - 1, acc.concat([(UInt(8)) (v & 255)])) }; }
+
+@requires(device)
+Result(Bool, DeviceError) describe(DmaRegion m, Int i, Int addr, Int len, Int flags, Int next) {
+    DescSession d = desc_in(m, 16 * i);
+    Bool a = desc_write_addr(d, Wide {.v = (UInt(64)) addr})?;
+    Bool b = desc_write_len(d, Word {.v = (UInt(32)) len})?;
+    Bool c = desc_write_flags(d, Half {.v = (UInt(16)) flags})?;
+    return desc_write_next(d, Half {.v = (UInt(16)) next});
+}
+
+// Request number `n` (from 0): read (`out` false) or write sector
+// `sector`; the sector's bytes are at at_data() before or after. Returns
+// the status byte the device wrote: 0 is success.
+@requires(device)
+Result(Int, DeviceError) request(Queue q, Int n, Bool out, Int sector) {
+    DmaRegion m = q.s.dma;
+    List(UInt(8)) none = [];
+    Bool h = dma_write(m, at_header(), le(sector, 8, le(0, 4, le(if (out) { 1 } else { 0 }, 4, none))))?;
+    Bool st = dma_write(m, at_status(), [255])?;
+    // Header: read by the device, then the next. Sector: written by the
+    // device on a read (flag 2). Status: written by the device, the last.
+    Bool d0 = describe(m, 0, m.iova + at_header(), 16, 1, 1)?;
+    Bool d1 = describe(m, 1, m.iova + at_data(), 512, if (out) { 1 } else { 3 }, 2)?;
+    Bool d2 = describe(m, 2, m.iova + at_status(), 1, 2, 0)?;
+    Bool s0 = slot_write_head(slot_in(m, at_avail() + 4 + 2 * (n % q.size)), Half {.v = 0})?;
+    Bool s1 = ring_head_write_idx(ring_head_in(m, at_avail()), Half {.v = (UInt(16)) ((n + 1) % 65536)})?;
+    Bool bell = notify_write_queue(q.bell, Half {.v = 0})?;
+    Int done = finished(q, n + 1, 50)?;
+    if (done != (n + 1) % 65536) { return Ok(254); }
+    List(UInt(8)) sb = dma_read(m, at_status(), 1)?;
+    return Ok((Int) sb[0]);
+}
+
+// Sleep for the interrupt until the used index is `want`, at most `left`
+// times a second.
+@requires(device(readonly))
+Result(Int, DeviceError) finished(Queue q, Int want, Int left) {
+    Half i = ring_head_read_idx(ring_head_in(q.s.dma, at_used()))?;
+    if ((Int) i.v == want % 65536 || left <= 0) { return Ok((Int) i.v); }
+    Int irqs = dma_wait(q.s.dma, 1000)?;
+    return finished(q, want, left - 1);
+}
+
+Str text(List(UInt(8)) b, Int i, Int end, Str acc) { return if (i >= end) { acc } else { text(b, i + 1, end, acc + str_from_code((Int) b[i])) }; }
+
+List(UInt(8)) pattern(Int i, List(UInt(8)) acc) { return if (i >= 512) { acc } else { pattern(i + 1, acc.concat([(UInt(8)) ((i * 3 + 7) % 251)])) }; }
+
+Bool same(List(UInt(8)) a, List(UInt(8)) b, Int i) { return a.len() == b.len() && (i >= a.len() || (a[i] == b[i] && same(a, b, i + 1))); }
+
+// `left` more reads of sector 3, each compared with the first.
+@requires(device)
+Result(Int, DeviceError) reread(Queue q, Int n, Int left, List(UInt(8)) first, Int good) {
+    if (left <= 0) { return Ok(good); }
+    Int st = request(q, n, false, 3)?;
+    List(UInt(8)) got = dma_read(q.s.dma, at_data(), 512)?;
+    return reread(q, n + 1, left - 1, first, if (st == 0 && same(got, first, 0)) { good + 1 } else { good });
+}
+
+@requires(device)
+Result(Str, DeviceError) drive(BlkSession s, Int step) {
+    CommonSession c = s.common;
+    Int io = s.dma.iova;
+    Bool a0 = common_write_device_status(c, status(false, false, false, false))?;
+    Bool a1 = common_write_device_status(c, status(true, false, false, false))?;
+    Bool a2 = common_write_device_status(c, status(true, true, false, false))?;
+    // Only version 1 and addresses through the IOMMU (word 1, bits 0 and 1).
+    Bool b0 = common_write_device_feature_select(c, Word {.v = 1})?;
+    Word f1 = common_read_device_feature(c)?;
+    Bool b1 = common_write_driver_feature_select(c, Word {.v = 0})?;
+    Bool b2 = common_write_driver_feature(c, Word {.v = 0})?;
+    Bool b3 = common_write_driver_feature_select(c, Word {.v = 1})?;
+    Bool b4 = common_write_driver_feature(c, Word {.v = f1.v & 3})?;
+    Bool b5 = common_write_device_status(c, status(true, true, true, false))?;
+    Status agreed = common_read_device_status(c)?;
+    if (!agreed.features_ok) { return Ok("the device did not accept the features"); }
+    Wide cap = blk_config_read_capacity(s.config)?;
+    Bool q0 = common_write_queue_select(c, Half {.v = 0})?;
+    Half offered = common_read_queue_size(c)?;
+    Bool q1 = if (offered.v > 8) { common_write_queue_size(c, Half {.v = 8})? } else { true };
+    Half size = common_read_queue_size(c)?;
+    Bool m0 = common_write_config_msix_vector(c, Half {.v = 65535})?;
+    Bool m1 = common_write_queue_msix_vector(c, Half {.v = 0})?;
+    Bool q2 = common_write_queue_desc(c, Wide {.v = (UInt(64)) io})?;
+    Bool q3 = common_write_queue_driver(c, Wide {.v = (UInt(64)) (io + at_avail())})?;
+    Bool q4 = common_write_queue_device(c, Wide {.v = (UInt(64)) (io + at_used())})?;
+    Half noff = common_read_queue_notify_off(c)?;
+    Bool q5 = common_write_queue_enable(c, Half {.v = 1})?;
+    Bool q6 = common_write_device_status(c, status(true, true, true, true))?;
+    Queue q = Queue {.s = s, .size = (Int) size.v, .bell = NotifySession {.id = s.notify.id, .map = s.notify.map, .base = s.notify.base + (Int) noff.v * step, .len = 2}};
+    // Read sector 3, which the test wrote a line of text into.
+    Int r3 = request(q, 0, false, 3)?;
+    List(UInt(8)) three = dma_read(s.dma, at_data(), 512)?;
+    // Write sector 5, then read it back through the device.
+    List(UInt(8)) none = [];
+    List(UInt(8)) pat = pattern(0, none);
+    Bool w0 = dma_write(s.dma, at_data(), pat)?;
+    Int w5 = request(q, 1, true, 5)?;
+    Bool w1 = dma_write(s.dma, at_data(), le(0, 512, none))?;
+    Int r5 = request(q, 2, false, 5)?;
+    List(UInt(8)) five = dma_read(s.dma, at_data(), 512)?;
+    // Forty more requests: the ring wraps five times.
+    Int good = reread(q, 3, 40, three, 0)?;
+    Bool r0 = common_write_device_status(c, status(false, false, false, false))?;
+    return Ok(f"capacity {cap.v} sectors, queue of {size.v}\nread sector 3: status {r3}, text: " + text(three, 0, 18, "") + f"\nwrote sector 5: status {w5}\nread it back: status {r5}, the same bytes: {same(five, pat, 0)}\n{good} of 40 more reads the same");
+}
+
+@requires(device)
+Result(Str, DeviceError) run(PciAddr a) {
+    PciWindow wc = virtio_pci_window(a, virtio_cfg_common())?;
+    PciWindow wn = virtio_pci_window(a, virtio_cfg_notify())?;
+    PciWindow wd = virtio_pci_window(a, virtio_cfg_device())?;
+    Int step = virtio_pci_notify_step(a)?;
+    Result(Str, DeviceError) done = blk_session(BlkWindows {.common = wc, .notify = wn, .config = wd}, lambda(s) { drive(s, step) })?;
+    return done;
+}
+
+@requires(device)
+Int main() {
+    List(PciAddr) none = [];
+    List(PciAddr) found = match (pci_find(virtio_pci_vendor(), virtio_pci_device_id(2))) { Ok(fs) => fs, Err(e) => none };
+    if (found.len() == 0) { println("no virtio block device here"); return 0; }
+    println(match (run(found[0])) { Ok(t) => t, Err(e) => device_error_text(e) });
+    return 0;
+}

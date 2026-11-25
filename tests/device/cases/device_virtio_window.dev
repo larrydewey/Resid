@@ -9,3 +9,6 @@ pub MmioWin fx_rng_w() { return MmioWin {.name = "fx.virtio_rng", .vendor = 0x1a
 // The same device given memory: 64 KiB of register space, 16 KiB of
 // memory the device sees at 1 MiB.
 pub DmaDev fx_rng_dma() { return DmaDev {.name = "fx.virtio_rng", .vendor = 0x1af4, .device = 0x1044, .size = 65536, .dma = 16384, .iova = 0x100000, .stability = OutOfTree}; }
+
+// A virtio block device (type 2: 1af4:1042), given the same memory.
+pub DmaDev fx_blk_dma() { return DmaDev {.name = "fx.virtio_blk", .vendor = 0x1af4, .device = 0x1042, .size = 65536, .dma = 16384, .iova = 0x100000, .stability = OutOfTree}; }

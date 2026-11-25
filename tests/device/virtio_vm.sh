@@ -20,7 +20,9 @@
 # a second machine is booted with an emulated IOMMU, the device is bound
 # to vfio-pci, and tests/device/vm/virtio_rng.resid drives it: a
 # virtqueue laid out in memory the device host maps for the device, one
-# buffer offered, and the random bytes the device wrote read back.
+# buffer offered, and the random bytes the device wrote read back. Then
+# tests/device/vm/virtio_blk.resid drives a virtio disk: sectors read and
+# written by requests of three descriptors, forty-three of them.
 #
 # KERNEL_IMAGE defaults to $RESID_VM_KERNEL, then the newest readable
 # /boot/vmlinuz-*. Exit 0 on a pass or a skip (a tool is missing), 1 on a
@@ -63,7 +65,7 @@ mkdir -p "$HOME_DIR"
 cp -r "$ROOT/lib" "$HOME_DIR/lib"
 ln -s "$ROOT/build/boot/rt.ll" "$HOME_DIR/rt.ll"
 cp "$CASES/device_virtio_window.dev" "$HOME_DIR/lib/dev/fx_device_virtio_window.resid"
-for prog in virtio_bring_up virtio_session virtio_rng; do
+for prog in virtio_bring_up virtio_session virtio_rng virtio_blk; do
     if ! RESID_HOME="$HOME_DIR" "$COMPILER" "$ROOT/tests/device/vm/$prog.resid" -o "$WORK/$prog" > "$WORK/compile.log" 2>&1; then
         echo "FAIL virtio_vm: $prog: compile failed"; grep -v '^OK ' "$WORK/compile.log" | head -20; exit 1
     fi
@@ -121,7 +123,10 @@ if [ -z "$MODULES" ] || [ ! -d "$MODULES" ]; then
 fi
 mkdir -p "$R/ko"
 cp "$MODULES"/*.ko "$R/ko/" 2>/dev/null
-cp "$WORK/virtio_rng" "$R/"
+cp "$WORK/virtio_rng" "$WORK/virtio_blk" "$R/"
+# A disk of 2048 sectors, a line of text at the start of sector 3.
+dd if=/dev/zero of="$WORK/disk.img" bs=512 count=2048 2>/dev/null
+printf 'RESID-SECTOR-THREE' | dd of="$WORK/disk.img" bs=512 seek=3 conv=notrunc 2>/dev/null
 cat > "$R/init" <<'INIT'
 #!/bin/busybox sh
 /bin/busybox --install -s /bin
@@ -130,27 +135,36 @@ mkdir -p /dev/shm; mount -t tmpfs shm /dev/shm
 for m in irqbypass iommufd vfio vfio_iommu_type1 vfio-pci-core vfio-pci; do
     [ -f /ko/$m.ko ] && insmod /ko/$m.ko
 done
-# Give the entropy device (1af4:1044) to vfio-pci.
+# Give the entropy device (1af4:1044) and the disk (1af4:1042) to vfio-pci.
 for d in /sys/bus/pci/devices/*; do
-    if [ "$(cat $d/vendor)" = "0x1af4" ] && [ "$(cat $d/device)" = "0x1044" ]; then
+    if [ "$(cat $d/vendor)" = "0x1af4" ] && { [ "$(cat $d/device)" = "0x1044" ] || [ "$(cat $d/device)" = "0x1042" ]; }; then
         [ -e "$d/driver" ] && echo "$(basename $d)" > "$d/driver/unbind"
         echo vfio-pci > "$d/driver_override"
         echo "$(basename $d)" > /sys/bus/pci/drivers_probe
     fi
 done
 echo "VM-BEGIN"
-/virtio_rng
-echo "VM-END $?"
+/virtio_rng; a=$?
+echo "-- a disk"
+/virtio_blk; b=$?
+echo "VM-END $((a + b))"
 poweroff -f
 INIT
 chmod +x "$R/init"
 (cd "$R" && find . | cpio -o -H newc 2>/dev/null | gzip > "$WORK/initrd2.gz")
 timeout 600 qemu-system-x86_64 -M q35,kernel-irqchip=split $ACCEL -m 512 -nographic -no-reboot \
     -kernel "$KERNEL" -initrd "$WORK/initrd2.gz" -append "console=ttyS0 quiet panic=-1 intel_iommu=on" \
-    -device intel-iommu,intremap=on -device virtio-rng-pci,disable-legacy=on,iommu_platform=on < /dev/null > "$WORK/console2.log" 2>&1
+    -device intel-iommu,intremap=on -device virtio-rng-pci,disable-legacy=on,iommu_platform=on \
+    -drive file="$WORK/disk.img",if=none,id=d0,format=raw -device virtio-blk-pci,drive=d0,disable-legacy=on,iommu_platform=on < /dev/null > "$WORK/console2.log" 2>&1
 tr -d '\r' < "$WORK/console2.log" | sed -n '/VM-BEGIN$/,/^VM-END/p' | sed '1d;$d' > "$WORK/out2.txt"
 if ! grep -q '^VM-END 0' <(tr -d '\r' < "$WORK/console2.log"); then
     echo "FAIL virtio_vm queue: the program did not finish in the machine"; tail -20 "$WORK/console2.log"; exit 1
+fi
+# What the program wrote to sector 5 is on the disk: 512 bytes, byte i
+# being (3 i + 7) mod 251, so it starts 7, 10, 13, 16.
+SECTOR5="$(dd if="$WORK/disk.img" bs=512 skip=5 count=1 2>/dev/null | od -An -tu1 -N4 | tr -s ' ' | sed 's/^ //')"
+if [ "$SECTOR5" != "7 10 13 16" ]; then
+    echo "FAIL virtio_vm queue: sector 5 of the disk starts '$SECTOR5', not '7 10 13 16'"; sed 's/^/    /' "$WORK/out2.txt"; exit 1
 fi
 if cmp -s "$WORK/out2.txt" "$ROOT/tests/device/vm/virtio_rng.out"; then
     echo "PASS virtio_vm queue"; cat "$WORK/out2.txt" | sed 's/^/    /'
