@@ -12,7 +12,10 @@
 # Not part of run.sh: it needs qemu-system-x86_64, a static busybox, cpio
 # and a kernel image, and about a minute without KVM.
 #
-#   tests/device/virtio_vm.sh [-c COMPILER] [-k KERNEL_IMAGE] [-m MODULES]
+#   tests/device/virtio_vm.sh [-c COMPILER] [-k KERNEL_IMAGE] [-m MODULES] [-v]
+#
+# -v: the kernel's own messages are kept on the machine's console (they
+# are shown when a machine fails), for finding out why one did not boot.
 #
 # With MODULES (or $RESID_VM_MODULES), a directory holding that kernel's
 # VFIO modules as .ko files whose names sort in the order they are loaded
@@ -41,11 +44,13 @@ CASES="$ROOT/tests/device/cases"
 COMPILER="$ROOT/build/boot/residc"
 KERNEL="${RESID_VM_KERNEL:-}"
 MODULES="${RESID_VM_MODULES:-}"
-while getopts "c:k:m:" opt; do
+QUIET="quiet"
+while getopts "c:k:m:v" opt; do
     case "$opt" in
         c) COMPILER="$(realpath "$OPTARG")" ;;
         k) KERNEL="$(realpath "$OPTARG")" ;;
         m) MODULES="$(realpath "$OPTARG")" ;;
+        v) QUIET="" ;;
         *) exit 2 ;;
     esac
 done
@@ -112,15 +117,25 @@ INIT
 chmod +x "$R/init"
 (cd "$R" && find . | cpio -o -H newc 2>/dev/null | gzip > "$WORK/initrd.gz")
 
+# A machine that did not finish: QEMU's exit status and the end of its
+# console, as text a terminal shows (the console's carriage returns and
+# escape sequences taken out).
+vm_failed() {
+    echo "FAIL virtio_vm$1: the program did not finish in the machine (qemu exit $2, kernel $KERNEL)"
+    tr -d '\r' < "$3" | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1bc//g' | grep -v '^[[:space:]]*$' | tail -${4:-25} | sed 's/^/  | /'
+    [ -n "$QUIET" ] && echo "  (run again with -v for the kernel's own messages)"
+    return 0
+}
 ACCEL=""
 [ -w /dev/kvm ] && ACCEL="-enable-kvm -cpu host"
 if [ -n "$ACCEL" ]; then echo "  (hardware virtualisation: the times are this machine's)"; else echo "  (no /dev/kvm: the machine is emulated, about 75 times slower)"; fi
 timeout 600 qemu-system-x86_64 -M q35 $ACCEL -m 512 -nographic -no-reboot \
-    -kernel "$KERNEL" -initrd "$WORK/initrd.gz" -append "console=ttyS0 quiet panic=-1" \
-    -device virtio-rng-pci,disable-legacy=on > "$WORK/console.log" 2>&1
+    -kernel "$KERNEL" -initrd "$WORK/initrd.gz" -append "console=ttyS0 $QUIET panic=-1" \
+    -device virtio-rng-pci,disable-legacy=on < /dev/null > "$WORK/console.log" 2>&1
+QRC=$?
 tr -d '\r' < "$WORK/console.log" | sed -n '/VM-BEGIN$/,/^VM-END/p' | sed '1d;$d' > "$WORK/out.txt"
 if ! grep -q '^VM-END 0' <(tr -d '\r' < "$WORK/console.log"); then
-    echo "FAIL virtio_vm: the program did not finish in the machine"; tail -20 "$WORK/console.log"; exit 1
+    vm_failed "" "$QRC" "$WORK/console.log" 40; exit 1
 fi
 if cmp -s "$WORK/out.txt" "$ROOT/tests/device/vm/virtio_vm.out"; then
     echo "PASS virtio_vm"; cat "$WORK/out.txt" | sed 's/^/    /'
@@ -172,17 +187,18 @@ INIT
 chmod +x "$R/init"
 (cd "$R" && find . | cpio -o -H newc 2>/dev/null | gzip > "$WORK/initrd2.gz")
 timeout 600 qemu-system-x86_64 -M q35,kernel-irqchip=split $ACCEL -m 512 -nographic -no-reboot \
-    -kernel "$KERNEL" -initrd "$WORK/initrd2.gz" -append "console=ttyS0 quiet panic=-1 intel_iommu=on" \
+    -kernel "$KERNEL" -initrd "$WORK/initrd2.gz" -append "console=ttyS0 $QUIET panic=-1 intel_iommu=on" \
     -device intel-iommu,intremap=on -device virtio-rng-pci,disable-legacy=on,iommu_platform=on \
     -drive file="$WORK/disk.img",if=none,id=d0,format=raw -device virtio-blk-pci,drive=d0,disable-legacy=on,iommu_platform=on \
     -netdev user,id=n0 -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56,disable-legacy=on,iommu_platform=on < /dev/null > "$WORK/console2.log" 2>&1
+QRC=$?
 tr -d '\r' < "$WORK/console2.log" | sed -n '/VM-BEGIN$/,/^VM-END/p' | sed '1d;$d' > "$WORK/all2.txt"
 # Timings are shown, not compared: they depend on the machine (and without
 # KVM the machine is emulated instruction by instruction).
 grep -v '^note:' "$WORK/all2.txt" > "$WORK/out2.txt"
 grep '^note:' "$WORK/all2.txt" | sed 's/^/  /'
 if ! grep -q '^VM-END 0' <(tr -d '\r' < "$WORK/console2.log"); then
-    echo "FAIL virtio_vm queue: the program did not finish in the machine"; tail -20 "$WORK/console2.log"; exit 1
+    vm_failed " queue" "$QRC" "$WORK/console2.log" 40; exit 1
 fi
 # What the program wrote to sector 5 is on the disk: 512 bytes, byte i
 # being (3 i + 7) mod 251, so it starts 7, 10, 13, 16.
