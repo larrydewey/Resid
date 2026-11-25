@@ -1,0 +1,77 @@
+// The first steps of a virtio driver through a session: one device host
+// kept alive for the device's common configuration, where
+// virtio_bring_up.resid starts a host for every access. Run only by
+// tests/device/virtio_vm.sh, in a virtual machine: it RESETS the device.
+import "dev/pci.resid";
+import "dev/virtio_pci.resid";
+import "dev/fx_device_virtio_window.resid";
+
+@word(32) type Select = { UInt(32) index; };
+@word(32) type Features = { DeviceOwned(UInt(32)) bits; };
+@word(16) type QueueCount = { DeviceOwned(UInt(16)) n; };
+
+@word(8)
+type Status = {
+    Bool acknowledge;
+    Bool driver;
+    Bool driver_ok;
+    Bool features_ok;
+    @reserved(2);
+    DeviceOwned(Bool) needs_reset;
+    Bool failed;
+};
+
+@registers(size = 0x38, session = fx_rng, session_write = fx_rng_w)
+type Common = {
+    @at(0x00) Select     device_feature_select;
+    @at(0x04) Features   device_feature;
+    @at(0x12) QueueCount num_queues;
+    @at(0x14) Status     device_status;
+};
+
+Status status(Bool ack, Bool drv) { return Status {.acknowledge = ack, .driver = drv, .driver_ok = false, .features_ok = false, .failed = false}; }
+
+Str status_text(Status s) { return f"ack={s.acknowledge} driver={s.driver} ok={s.driver_ok} needs_reset={s.needs_reset} failed={s.failed}"; }
+
+// A thousand reads of the status register through the one host.
+@requires(device(readonly))
+Result(Int, DeviceError) poll(CommonSession s, Int i, Int acks) {
+    if (i >= 1000) { return Ok(acks); }
+    Status st = common_read_device_status(s)?;
+    return poll(s, i + 1, if (st.acknowledge) { acks + 1 } else { acks });
+}
+
+@requires(device)
+Result(Str, DeviceError) steps(CommonSession s) {
+    QueueCount q = common_read_num_queues(s)?;
+    Bool r0 = common_write_device_status(s, status(false, false))?;
+    Status s0 = common_read_device_status(s)?;
+    Bool r1 = common_write_device_status(s, status(true, false))?;
+    Bool r2 = common_write_device_status(s, status(true, true))?;
+    Status s1 = common_read_device_status(s)?;
+    Bool r3 = common_write_device_feature_select(s, Select {.index = 1})?;
+    Features f = common_read_device_feature(s)?;
+    Int acks = poll(s, 0, 0)?;
+    Bool r4 = common_write_device_status(s, status(false, false))?;
+    return Ok(f"queues {q.n}\nafter reset: " + status_text(s0) + "\nafter driver: " + status_text(s1) + f"\nversion 1: {(f.bits & 1) == 1}\nacknowledged in {acks} of 1000 reads");
+}
+
+@requires(device)
+Result(Str, DeviceError) bring_up(PciAddr a) {
+    PciWindow w = virtio_pci_window(a, virtio_cfg_common())?;
+    Result(Str, DeviceError) done = common_session(w, lambda(s) { steps(s) })?;
+    // The session ended with the block: a read-only one opens after it.
+    Result(Status, DeviceError) after = common_session_ro(w, lambda(s) { common_read_device_status(s) })?;
+    Status last = after?;
+    Str t = done?;
+    return Ok(t + "\nafter the session: " + status_text(last));
+}
+
+@requires(device)
+Int main() {
+    List(PciAddr) none = [];
+    List(PciAddr) found = match (pci_find(virtio_pci_vendor(), virtio_pci_device_id(4))) { Ok(fs) => fs, Err(e) => none };
+    if (found.len() == 0) { println("no virtio entropy device here"); return 0; }
+    println(match (bring_up(found[0])) { Ok(t) => t, Err(e) => device_error_text(e) });
+    return 0;
+}

@@ -1,0 +1,15 @@
+// A register write through a session is a write: device(readonly) opens
+// a session that loads and covers its reads, not a write (E0219).
+import "dev/fx_device_virtio_window.resid";
+
+@word(8) type Ctl = { Bool on; @reserved(7); };
+
+@registers(size = 0x38, session = fx_rng, session_write = fx_rng_w)
+type Common = { @at(0x14) Ctl ctl; };
+
+@requires(device(readonly))
+Int main() {
+    PciAddr a = PciAddr {.domain = 0, .bus = 0, .device = 4, .function = 0};
+    Result(Result(Bool, DeviceError), DeviceError) r = common_session_ro(PciWindow {.addr = a, .resource = 4, .base = 0, .len = 0x38}, lambda(s) { common_write_ctl(s, Ctl {.on = true}) });
+    return 0;
+}

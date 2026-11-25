@@ -439,6 +439,34 @@ host parsing capabilities (device-family logic in the most trusted
 code). Built as stage F and run against a virtio entropy device in a
 virtual machine.
 
+**A session: one helper for many accesses** (decided 2026-11-25). A
+host per access costs about 2 ms, which rules out anything but set-up.
+
+- **What runs in it**: the same generic host, kept alive for one
+  device. It checks the ids, maps the windows, installs its filter
+  once, then serves load and store requests, checking each against the
+  windows it mapped. No device logic moves into it; the driver stays in
+  the program. Deferred, and built on this: the driver's own Resid code
+  as the confined process (needs a process entry point, a proof of what
+  it touches, typed messages).
+- **How a program holds one**: a scoped block. `device.session(...)`
+  takes a function, gives it the session, and ends the host when the
+  function returns. A session cannot leak or be used after its end, and
+  no linear type is needed. A long-running driver is one function (its
+  tail loop). Rejected for now: a linear handle closed exactly once.
+- **Transport**: a private socket pair made before the host starts; one
+  small message each way per access, the host asleep between them
+  (about 3 to 5 µs by §8's wake-up cost). No shared memory. A ring can
+  replace it for a data path later.
+
+Built as stage G. Two things differ from the first sketch. The scoped
+function is written by the register block (`t_session(w, f)`), not a
+`device.session(...)` verb: the closure's result type is then an
+ordinary generic parameter and the descriptor stays a literal at the
+verb. And `device.session_open` itself can be called by a device module
+directly, without the scope; such a session lasts until the program
+ends it or exits, and a thread holds eight at most.
+
 Built (PROGRESS.md, stage E): `device.mmio_pci`, `device.pci_list`,
 `lib/dev/pci.resid`. What the check does and does not give: the ids
 are read after the host's filter is in and the resource is mapped but

@@ -2,7 +2,8 @@
 # A real register read and write, in a virtual machine: boots a Linux
 # kernel under QEMU with a virtio entropy device, takes the device from
 # the kernel's driver, and runs tests/device/vm/virtio_bring_up.resid
-# there as root. The program finds the device by its ids, reads where its
+# there as root, then tests/device/vm/virtio_session.resid, which does the
+# same through a session (one host kept alive). The program finds the device by its ids, reads where its
 # common configuration is from its capability list, and resets it,
 # acknowledges it and reads its features through a register block
 # (PLAN-hardware-access.md §11). Each access is a device host that maps
@@ -52,16 +53,18 @@ mkdir -p "$HOME_DIR"
 cp -r "$ROOT/lib" "$HOME_DIR/lib"
 ln -s "$ROOT/build/boot/rt.ll" "$HOME_DIR/rt.ll"
 cp "$CASES/device_virtio_window.dev" "$HOME_DIR/lib/dev/fx_device_virtio_window.resid"
-if ! RESID_HOME="$HOME_DIR" "$COMPILER" "$ROOT/tests/device/vm/virtio_bring_up.resid" -o "$WORK/prog" > "$WORK/compile.log" 2>&1; then
-    echo "FAIL virtio_vm: compile failed"; grep -v '^OK ' "$WORK/compile.log" | head -20; exit 1
-fi
+for prog in virtio_bring_up virtio_session; do
+    if ! RESID_HOME="$HOME_DIR" "$COMPILER" "$ROOT/tests/device/vm/$prog.resid" -o "$WORK/$prog" > "$WORK/compile.log" 2>&1; then
+        echo "FAIL virtio_vm: $prog: compile failed"; grep -v '^OK ' "$WORK/compile.log" | head -20; exit 1
+    fi
+done
 
 # The initial file system: busybox, the program and the libraries it loads.
 R="$WORK/root"
 mkdir -p "$R/bin" "$R/proc" "$R/sys" "$R/dev" "$R/tmp"
 cp "$BB" "$R/bin/busybox"
-cp "$WORK/prog" "$R/prog"
-for l in $(ldd "$WORK/prog" 2>/dev/null | grep -o '/[^ ]*'); do
+cp "$WORK/virtio_bring_up" "$WORK/virtio_session" "$R/"
+for l in $(ldd "$WORK/virtio_bring_up" 2>/dev/null | grep -o '/[^ ]*'); do
     mkdir -p "$R$(dirname "$l")"; cp -L "$l" "$R$l"
 done
 cat > "$R/init" <<'INIT'
@@ -78,8 +81,10 @@ for d in /sys/bus/pci/devices/*; do
     fi
 done
 echo "VM-BEGIN"
-/prog
-echo "VM-END $?"
+/virtio_bring_up; a=$?
+echo "-- through a session"
+/virtio_session; b=$?
+echo "VM-END $((a + b))"
 poweroff -f
 INIT
 chmod +x "$R/init"
@@ -94,8 +99,8 @@ tr -d '\r' < "$WORK/console.log" | sed -n '/VM-BEGIN$/,/^VM-END/p' | sed '1d;$d'
 if ! grep -q '^VM-END 0' <(tr -d '\r' < "$WORK/console.log"); then
     echo "FAIL virtio_vm: the program did not finish in the machine"; tail -20 "$WORK/console.log"; exit 1
 fi
-if cmp -s "$WORK/out.txt" "$ROOT/tests/device/vm/virtio_bring_up.out"; then
+if cmp -s "$WORK/out.txt" "$ROOT/tests/device/vm/virtio_vm.out"; then
     echo "PASS virtio_vm"; cat "$WORK/out.txt" | sed 's/^/    /'
 else
-    echo "FAIL virtio_vm: output differs from vm/virtio_bring_up.out"; diff "$WORK/out.txt" "$ROOT/tests/device/vm/virtio_bring_up.out" 2>&1 | head -20; echo "  got:"; sed 's/^/    /' "$WORK/out.txt"; exit 1
+    echo "FAIL virtio_vm: output differs from vm/virtio_vm.out"; diff "$WORK/out.txt" "$ROOT/tests/device/vm/virtio_vm.out" 2>&1 | head -20; echo "  got:"; sed 's/^/    /' "$WORK/out.txt"; exit 1
 fi

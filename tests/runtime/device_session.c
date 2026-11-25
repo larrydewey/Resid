@@ -1,0 +1,308 @@
+/* A session: one device host kept alive for many accesses to a PCI
+ * function's resource (runtime/rt/device.resid, kinds 11 to 13;
+ * PLAN-hardware-access.md §11).
+ *
+ * As device_pci.c, the host runs in self-test mode 30 against a tree of
+ * plain files under /dev/shm in place of /sys/bus/pci/devices, and this
+ * program is its own device host. */
+#include <dirent.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+void* resid_box_i64(int64_t v);
+int64_t resid_unbox_i64(void* p);
+void* resid_list_new(int64_t n, void** items, const char* ty);
+int64_t resid_list_len(void* l);
+void* resid_list_get(void* l, int64_t i);
+void* resid_device_call(void* req);
+void* resid_device_call_w(void* req);
+void resid_device_host_test(int64_t argc, char** argv, char** envp, int64_t mode, const char* root);
+
+static char exe[4096];
+
+static void mode_path(char* out) {
+    ssize_t n = readlink("/proc/self/exe", out, 4000);
+    out[n < 0 ? 0 : n] = 0;
+    strcat(out, ".mode");
+}
+
+static void set_mode(int mode, const char* root) {
+    FILE* f = fopen(exe, "w");
+    if (!f) return;
+    fprintf(f, "%d %s\n", mode, root ? root : "-");
+    fclose(f);
+}
+
+typedef struct { uint8_t b[4096]; int n; } Req;
+typedef struct { int n; uint8_t b[65536]; } Rep;
+
+static void u(Req* r, uint64_t v, int n) { for (int i = 0; i < n; i++) r->b[r->n++] = (v >> (8 * i)) & 255; }
+static void str(Req* r, const char* s) { u(r, strlen(s), 2); memcpy(r->b + r->n, s, strlen(s)); r->n += strlen(s); }
+
+static void head(Req* r, int kind, int write, const char* name, const char* path) {
+    r->n = 0;
+    u(r, 'R', 1); u(r, 'D', 1); u(r, 'V', 1); u(r, 1, 1); u(r, kind, 1); u(r, write, 1);
+    str(r, name); str(r, path);
+}
+
+/* Open a session on resource `res` of the function at `addr`, which must
+ * have the ids `ven`:`dev`: kind 9's request with a load of one byte. */
+static void req_open(Req* r, int write, const char* addr, uint32_t size, int res, int ven, int dev) {
+    char path[512];
+    snprintf(path, sizeof path, "/sys/bus/pci/devices/%s", addr);
+    head(r, 11, write, "fx.sess", path);
+    u(r, size, 4); u(r, 0, 1); u(r, 0, 4); u(r, 1, 1); u(r, 0, 8);
+    u(r, res, 1); u(r, ven, 2); u(r, dev, 2);
+}
+static void req_access(Req* r, uint64_t id, int store, uint32_t off, int width, uint64_t v) {
+    r->n = 0;
+    u(r, 'R', 1); u(r, 'D', 1); u(r, 'V', 1); u(r, 1, 1); u(r, 12, 1); u(r, store, 1);
+    u(r, id, 8); u(r, off, 4); u(r, width, 1); u(r, v, 8);
+}
+static void req_close(Req* r, uint64_t id) {
+    r->n = 0;
+    u(r, 'R', 1); u(r, 'D', 1); u(r, 'V', 1); u(r, 1, 1); u(r, 13, 1); u(r, 0, 1);
+    u(r, id, 8);
+}
+
+static void* list_of(Req* r) {
+    void* items[4096];
+    for (int i = 0; i < r->n; i++) items[i] = resid_box_i64(r->b[i]);
+    return resid_list_new(r->n, items, "List(Int(64))");
+}
+
+static Rep reply(void* l) {
+    Rep r;
+    r.n = (int)resid_list_len(l);
+    for (int i = 0; i < r.n && i < 65536; i++) r.b[i] = (uint8_t)resid_unbox_i64(resid_list_get(l, i));
+    return r;
+}
+
+static Rep call(Req* q, int write) { return reply(write ? resid_device_call_w(list_of(q)) : resid_device_call(list_of(q))); }
+
+static int code(Rep* r) { return r->n >= 10 && r->b[0] == 1 ? r->b[1] : 0; }
+static int64_t value(Rep* r) {
+    int64_t v = 0;
+    for (int i = 7; i >= 0; i--) v = (v << 8) | r->b[2 + i];
+    return v;
+}
+static int loaded(Rep* r, uint64_t want) {
+    if (r->n != 14 || r->b[0] != 0 || r->b[1] != 1 || r->b[5] != 0) return 0;
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; i--) v = (v << 8) | r->b[6 + i];
+    return v == want;
+}
+static int stored(Rep* r) { return r->n == 5 && r->b[0] == 0 && r->b[1] == 0; }
+
+/* A reply of one number (a session's, or a word loaded); 0 when it is not one. */
+static uint64_t number(Rep* r) {
+    if (r->n != 14 || r->b[0] != 0 || r->b[1] != 1 || r->b[5] != 0) return 0;
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; i--) v = (v << 8) | r->b[6 + i];
+    return v;
+}
+
+static int bad = 0;
+static void check(const char* name, int ok) {
+    printf("%s %s\n", ok ? "PASS" : "FAIL", name);
+    if (!ok) bad++;
+}
+
+static void put(const char* dir, const char* file, const void* data, int n) {
+    char p[600];
+    snprintf(p, sizeof p, "%s/%s", dir, file);
+    int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd >= 0) { if (write(fd, data, n) != n) bad++; close(fd); }
+}
+
+static void rm_tree(const char* root) {
+    static const char* fns[] = {"0000:00:04.0", "0000:00:05.0", "0001:3b:1f.7", NULL};
+    static const char* files[] = {"vendor", "device", "resource0", "resource4", NULL};
+    char p[700];
+    for (int i = 0; fns[i]; i++) {
+        for (int j = 0; files[j]; j++) { snprintf(p, sizeof p, "%s/%s/%s", root, fns[i], files[j]); unlink(p); }
+        snprintf(p, sizeof p, "%s/%s", root, fns[i]);
+        rmdir(p);
+    }
+    snprintf(p, sizeof p, "%s/.hidden", root);
+    unlink(p);
+    rmdir(root);
+}
+
+int main(int argc, char** argv, char** envp) {
+    if (argc == 1 && strcmp(argv[0], "resid-device-host") == 0) {
+        char p[4096], root[4096];
+        int mode = 0;
+        mode_path(p);
+        root[0] = 0;
+        FILE* f = fopen(p, "r");
+        if (f) { if (fscanf(f, "%d %4000s", &mode, root) != 2) mode = 0; fclose(f); }
+        resid_device_host_test(argc, argv, envp, mode, (mode != 0 && strcmp(root, "-")) ? root : NULL);
+        return 125;   /* not a host after all */
+    }
+    mode_path(exe);
+    char root[256], d4[320], d5[320], d7[320];
+    snprintf(root, sizeof root, "/dev/shm/resid_fx_sess_%d", (int)getpid());
+    if (mkdir(root, 0700) != 0) { printf("SKIP device_session (no /dev/shm)\n"); return 0; }
+    snprintf(d4, sizeof d4, "%s/0000:00:04.0", root);
+    snprintf(d5, sizeof d5, "%s/0000:00:05.0", root);
+    snprintf(d7, sizeof d7, "%s/0001:3b:1f.7", root);
+    mkdir(d4, 0700); mkdir(d5, 0700); mkdir(d7, 0700);
+    uint8_t blk[8192];
+    for (int i = 0; i < 8192; i++) blk[i] = (uint8_t)(i * 5 + 1);
+    put(d4, "vendor", "0x1af4\n", 7); put(d4, "device", "0x1041\n", 7);
+    put(d4, "resource0", blk, 4096); put(d4, "resource4", blk + 100, 8092);
+    put(d5, "vendor", "0x8086\n", 7); put(d5, "device", "0x1234\n", 7);
+    put(d5, "resource0", blk, 4096);
+    put(d7, "vendor", "0x1af4\n", 7); put(d7, "device", "0x1041\n", 7);
+    put(d7, "resource0", blk, 100);
+    put(root, ".hidden", "x", 1);
+    Req q;
+    Rep r;
+    char p[700];
+    uint32_t w32;
+    uint64_t w64;
+    set_mode(30, root);
+
+    /* A session that only loads. */
+    req_open(&q, 0, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041);
+    r = call(&q, 0);
+    uint64_t ro = number(&r);
+    check("session_open", ro > 0);
+    req_access(&q, ro, 0, 16, 4, 0);
+    r = call(&q, 0);
+    memcpy(&w32, blk + 16, 4);
+    check("session_load", loaded(&r, w32));
+    req_access(&q, ro, 0, 4088, 8, 0);
+    r = call(&q, 0);
+    memcpy(&w64, blk + 4088, 8);
+    check("session_load_wide", loaded(&r, w64));
+    req_access(&q, ro, 0, 3, 1, 0);
+    r = call(&q, 0);
+    check("session_load_byte", loaded(&r, blk[3]));
+    /* A store is a write: the read entry refuses it, and the host refuses
+     * one in a session that was opened to load. Neither ends the session. */
+    req_access(&q, ro, 1, 0x70, 4, 0x11111111);
+    r = call(&q, 0);
+    check("session_store_needs_write_grant", code(&r) == 2);
+    r = call(&q, 1);
+    check("session_store_needs_write_session", code(&r) == 10 && value(&r) == 72);
+    req_access(&q, ro, 0, 4096, 4, 0);
+    r = call(&q, 0);
+    check("session_refuses_past_block", code(&r) == 10 && value(&r) == 72);
+    req_access(&q, ro, 0, 2, 4, 0);
+    r = call(&q, 0);
+    check("session_refuses_unaligned", code(&r) == 10 && value(&r) == 72);
+    req_access(&q, ro, 0, 16, 4, 0);
+    r = call(&q, 0);
+    check("session_survives_refusals", loaded(&r, w32));
+
+    /* A second session, at the same time, that writes. */
+    req_open(&q, 1, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041);
+    r = call(&q, 1);
+    uint64_t rw = number(&r);
+    check("session_open_write", rw > 0 && rw != ro);
+    req_access(&q, rw, 1, 0x70, 4, 0xdeadbeef);
+    r = call(&q, 1);
+    check("session_store", stored(&r));
+    req_access(&q, rw, 0, 0x70, 4, 0);
+    r = call(&q, 0);
+    check("session_store_read_back", loaded(&r, 0xdeadbeefu));
+    req_access(&q, ro, 0, 0x70, 4, 0);
+    r = call(&q, 0);
+    check("session_other_sees_store", loaded(&r, 0xdeadbeefu));
+    snprintf(p, sizeof p, "%s/resource0", d4);
+    int fd = open(p, O_RDONLY);
+    uint32_t got = 0;
+    check("session_store_reached_file", fd >= 0 && pread(fd, &got, 4, 0x70) == 4 && got == 0xdeadbeefu);
+    if (fd >= 0) close(fd);
+
+    /* Many accesses through one host. */
+    struct timespec t0, t1;
+    int same = 1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (int i = 0; i < 2000; i++) {
+        req_access(&q, ro, 0, 16, 4, 0);
+        r = call(&q, 0);
+        if (!loaded(&r, w32)) same = 0;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double us = ((t1.tv_sec - t0.tv_sec) * 1e9 + (t1.tv_nsec - t0.tv_nsec)) / 2000.0 / 1000.0;
+    check("session_2000_loads", same);
+    fprintf(stderr, "note: %.1f microseconds a load through a session\n", us);
+
+    /* Ended: its number names nothing, and ending it again is refused. */
+    req_close(&q, ro);
+    r = call(&q, 0);
+    check("session_close", stored(&r));
+    req_access(&q, ro, 0, 16, 4, 0);
+    r = call(&q, 0);
+    check("session_ended_is_refused", code(&r) == 10 && value(&r) == 71);
+    req_close(&q, ro);
+    r = call(&q, 0);
+    check("session_close_twice", code(&r) == 10 && value(&r) == 71);
+    req_access(&q, rw, 0, 16, 4, 0);
+    r = call(&q, 0);
+    check("session_other_still_open", loaded(&r, w32));
+    req_close(&q, rw);
+    r = call(&q, 0);
+    check("session_close_write", stored(&r));
+    req_access(&q, 12345, 0, 16, 4, 0);
+    r = call(&q, 0);
+    check("session_unknown_number", code(&r) == 10 && value(&r) == 71);
+
+    /* Not opened: another device there, no function, a resource too small,
+     * a bad address, a write session under the read entry. */
+    req_open(&q, 0, "0000:00:05.0", 4096, 0, 0x1af4, 0x1041);
+    r = call(&q, 0);
+    check("session_wrong_ids", code(&r) == 6);
+    req_open(&q, 0, "0000:00:09.0", 4096, 0, 0x1af4, 0x1041);
+    r = call(&q, 0);
+    check("session_absent_function", code(&r) == 1);
+    req_open(&q, 0, "0001:3b:1f.7", 4096, 0, 0x1af4, 0x1041);
+    r = call(&q, 0);
+    check("session_resource_too_small", code(&r) == 6);
+    req_open(&q, 0, "0000:00:04.0/x", 4096, 0, 0x1af4, 0x1041);
+    r = call(&q, 0);
+    check("session_refuses_bad_address", code(&r) == 10 && value(&r) == 65);
+    req_open(&q, 1, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041);
+    r = call(&q, 0);
+    check("session_write_needs_grant", code(&r) == 2);
+
+    /* Eight at once on a thread, and no ninth; all end. */
+    uint64_t ids[9];
+    int opened = 0;
+    for (int i = 0; i < 8; i++) {
+        req_open(&q, 0, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041);
+        r = call(&q, 0);
+        ids[i] = number(&r);
+        if (ids[i] > 0) opened++;
+    }
+    req_open(&q, 0, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041);
+    r = call(&q, 0);
+    check("session_eight_at_once", opened == 8 && code(&r) == 10 && value(&r) == 70);
+    int closed = 0;
+    for (int i = 0; i < 8; i++) {
+        req_close(&q, ids[i]);
+        r = call(&q, 0);
+        if (stored(&r)) closed++;
+    }
+    check("session_all_closed", closed == 8);
+    /* The slots are free again. */
+    req_open(&q, 0, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041);
+    r = call(&q, 0);
+    uint64_t again = number(&r);
+    check("session_slot_reused_number_not", again > ids[7]);
+    req_close(&q, again);
+    r = call(&q, 0);
+
+    rm_tree(root);
+    unlink(exe);
+    return bad != 0;
+}

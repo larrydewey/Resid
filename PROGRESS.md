@@ -219,6 +219,26 @@ region, with no diagnostic.
   common block from the capabilities, reset, acknowledge and driver
   written and read back, feature word 1 read (VIRTIO_F_VERSION_1 set).
   The first loads and stores on a device's own registers.
+- **Stage G: sessions.** One device host kept alive for a window, where
+  every access started one. Request kind 11 opens it (kind 9's request:
+  the host maps the resource, installs its filter, with reads of its
+  socket allowed, checks the ids, answers, and stays); kind 12 is an
+  access, 16 bytes to the host and 9 back, checked there against the
+  block mapped and the session's write flag; kind 13, or the program's
+  exit, ends it. The program's end keeps eight sessions a thread
+  (`ds_*`), numbers never reused. All through `resid_device_call` and
+  `_w`, so the read entry refuses a store as it refuses any write.
+  `device.session_open(MmioWin, PciWindow)`;
+  `lib/dev/device.resid` `device_session_load` / `_end`,
+  `device_write.resid` `device_session_store`. A block declared
+  `@registers(size = N, session = d, session_write = dw)` gets its
+  session type, `t_session(w, f)` and `t_session_ro(w, f)` (open, call
+  the closure, end), and accessors over the session. Tests:
+  `tests/runtime/device_session.c` (29 checks), cases `device_session`
+  and `session_write_needs_grant`, and `tests/device/virtio_vm.sh` now
+  runs the virtio bring-up through a session too, with 1000 reads of the
+  status register through one host. Not yet: one session for several
+  blocks; the driver's own code as the confined process.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

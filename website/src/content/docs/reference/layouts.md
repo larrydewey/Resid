@@ -238,7 +238,36 @@ The ids are checked as before. Which resource of that device is touched
 is then run-time data: the provenance record names the device, not the
 resource.
 
-Each access runs in a device host of its own, like every device call:
+#### Sessions
+
+A host per access costs about 2 ms. A block declared with `session` and
+`session_write` (the same `MmioWin` descriptors) is read and written
+through one host that stays alive, a session, and each access is then
+one small message to it:
+
+```resid
+@registers(size = 0x38, session = virtio_rng, session_write = virtio_rng_w)
+type Common = { @at(0x14) Status device_status; };
+
+Result(Status, DeviceError) r = common_session(w, lambda(s) { common_read_device_status(s) })?;
+```
+
+| Generated | For | Grant |
+|---|---|---|
+| `CommonSession` | the type of the block's sessions | |
+| `common_session(w, f)` | opens a session that loads and stores, calls `f` with it, ends it; `Ok` of what `f` gave, or why no session opened | `device` |
+| `common_session_ro(w, f)` | the same, for loads only | `device(readonly)` |
+| `common_read_r(s)`, `common_write_r(s, v)`, `common_take_r(s)` | the accessors, over the session | as for any block |
+
+The session ends when the scoped function returns, whatever `f` gave; a
+session value kept past that names nothing, and an accessor called with
+it gives `BadInput`. The host checks the device's ids once, when the
+session opens, and every access against the window it mapped and
+whether the session may store. A thread holds at most eight sessions,
+and uses only the ones it opened. A host is still one per block: a
+device with several blocks has a session for each.
+
+Without a session, each access runs in a device host of its own, like every device call:
 the host maps the device's memory, installs its filter, makes the one
 load or store and exits. It costs about what a device call does (2 ms),
 which suits start-up and configuration, not a data path
