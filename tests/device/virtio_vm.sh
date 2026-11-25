@@ -156,7 +156,11 @@ timeout 600 qemu-system-x86_64 -M q35,kernel-irqchip=split $ACCEL -m 512 -nograp
     -kernel "$KERNEL" -initrd "$WORK/initrd2.gz" -append "console=ttyS0 quiet panic=-1 intel_iommu=on" \
     -device intel-iommu,intremap=on -device virtio-rng-pci,disable-legacy=on,iommu_platform=on \
     -drive file="$WORK/disk.img",if=none,id=d0,format=raw -device virtio-blk-pci,drive=d0,disable-legacy=on,iommu_platform=on < /dev/null > "$WORK/console2.log" 2>&1
-tr -d '\r' < "$WORK/console2.log" | sed -n '/VM-BEGIN$/,/^VM-END/p' | sed '1d;$d' > "$WORK/out2.txt"
+tr -d '\r' < "$WORK/console2.log" | sed -n '/VM-BEGIN$/,/^VM-END/p' | sed '1d;$d' > "$WORK/all2.txt"
+# Timings are shown, not compared: they depend on the machine (and without
+# KVM the machine is emulated instruction by instruction).
+grep -v '^note:' "$WORK/all2.txt" > "$WORK/out2.txt"
+grep '^note:' "$WORK/all2.txt" | sed 's/^/  /'
 if ! grep -q '^VM-END 0' <(tr -d '\r' < "$WORK/console2.log"); then
     echo "FAIL virtio_vm queue: the program did not finish in the machine"; tail -20 "$WORK/console2.log"; exit 1
 fi

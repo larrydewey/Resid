@@ -293,7 +293,13 @@ region, with no diagnostic.
   writes another and reads it back, and makes forty more reads, the
   ring wrapping five times; the script then finds the written sector in
   the disk image. Each request is about twenty messages to the host.
-  Not yet: more than one request in flight; a measured rate.
+  Measured in the emulated machine (no KVM, so about 75 times slower
+  than hardware throughout): 7.7 ms a read with its 22 messages, 3.8 ms
+  with the 8 it needs once the descriptors are left alone, so about
+  0.28 ms a message there and 1.5 ms for the device and its interrupt.
+  On the laptop a message is 3.7 µs, which would make those 81 µs and
+  30 µs a request before the device's own time. The cost is the count
+  of messages. Not yet: more than one request in flight.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

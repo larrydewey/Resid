@@ -10,3 +10,4 @@ read sector 3: status 0, text: RESID-SECTOR-THREE
 wrote sector 5: status 0
 read it back: status 0, the same bytes: true
 40 of 40 more reads the same
+200 of 200 reads, then 200 of 200 with the descriptors left alone

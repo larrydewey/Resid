@@ -125,6 +125,47 @@ Result(Int, DeviceError) finished(Queue q, Int want, Int left) {
     return finished(q, want, left - 1);
 }
 
+// The same read with what does not change between requests left alone:
+// the three descriptors stay as the last read left them, so a request is
+// the header, the ring slot, the index, the bell, the wait, the used
+// index, the status and the sector: eight messages where request() sends
+// twenty-two.
+@requires(device)
+Result(Int, DeviceError) read_again(Queue q, Int n, Int sector) {
+    DmaRegion m = q.s.dma;
+    List(UInt(8)) none = [];
+    Bool h = dma_write(m, at_header(), le(sector, 8, le(0, 8, none)))?;
+    Bool s0 = slot_write_head(slot_in(m, at_avail() + 4 + 2 * (n % q.size)), Half {.v = 0})?;
+    Bool s1 = ring_head_write_idx(ring_head_in(m, at_avail()), Half {.v = (UInt(16)) ((n + 1) % 65536)})?;
+    Bool bell = notify_write_queue(q.bell, Half {.v = 0})?;
+    Int done = finished(q, n + 1, 50)?;
+    if (done != (n + 1) % 65536) { return Ok(254); }
+    List(UInt(8)) sb = dma_read(m, at_status(), 1)?;
+    List(UInt(8)) got = dma_read(m, at_data(), 512)?;
+    return Ok((Int) sb[0]);
+}
+
+// `left` reads of sector 3 one way or the other; how many succeeded.
+@requires(device)
+Result(Int, DeviceError) many(Queue q, Int n, Int left, Bool lean, Int good) {
+    if (left <= 0) { return Ok(good); }
+    Int st = if (lean) { read_again(q, n, 3)? } else { request(q, n, false, 3)? };
+    return many(q, n + 1, left - 1, lean, if (st == 0) { good + 1 } else { good });
+}
+
+// Two hundred reads each way, timed. The times are printed on lines that
+// start "note:", which the test's script shows and does not compare.
+@requires(device, clock(readonly))
+Result(Str, DeviceError) timed(Queue q, Int n) {
+    Int t0 = clock.monotonic_ns();
+    Int a = many(q, n, 200, false, 0)?;
+    Int t1 = clock.monotonic_ns();
+    Int b = many(q, n + 200, 200, true, 0)?;
+    Int t2 = clock.monotonic_ns();
+    println(f"note: {(t1 - t0) / 200000} microseconds a read with 22 messages, {(t2 - t1) / 200000} with 8");
+    return Ok(f"{a} of 200 reads, then {b} of 200 with the descriptors left alone");
+}
+
 Str text(List(UInt(8)) b, Int i, Int end, Str acc) { return if (i >= end) { acc } else { text(b, i + 1, end, acc + str_from_code((Int) b[i])) }; }
 
 List(UInt(8)) pattern(Int i, List(UInt(8)) acc) { return if (i >= 512) { acc } else { pattern(i + 1, acc.concat([(UInt(8)) ((i * 3 + 7) % 251)])) }; }
@@ -140,7 +181,7 @@ Result(Int, DeviceError) reread(Queue q, Int n, Int left, List(UInt(8)) first, I
     return reread(q, n + 1, left - 1, first, if (st == 0 && same(got, first, 0)) { good + 1 } else { good });
 }
 
-@requires(device)
+@requires(device, clock(readonly))
 Result(Str, DeviceError) drive(BlkSession s, Int step) {
     CommonSession c = s.common;
     Int io = s.dma.iova;
@@ -184,11 +225,12 @@ Result(Str, DeviceError) drive(BlkSession s, Int step) {
     List(UInt(8)) five = dma_read(s.dma, at_data(), 512)?;
     // Forty more requests: the ring wraps five times.
     Int good = reread(q, 3, 40, three, 0)?;
+    Str rate = timed(q, 43)?;
     Bool r0 = common_write_device_status(c, status(false, false, false, false))?;
-    return Ok(f"capacity {cap.v} sectors, queue of {size.v}\nread sector 3: status {r3}, text: " + text(three, 0, 18, "") + f"\nwrote sector 5: status {w5}\nread it back: status {r5}, the same bytes: {same(five, pat, 0)}\n{good} of 40 more reads the same");
+    return Ok(f"capacity {cap.v} sectors, queue of {size.v}\nread sector 3: status {r3}, text: " + text(three, 0, 18, "") + f"\nwrote sector 5: status {w5}\nread it back: status {r5}, the same bytes: {same(five, pat, 0)}\n{good} of 40 more reads the same\n" + rate);
 }
 
-@requires(device)
+@requires(device, clock(readonly))
 Result(Str, DeviceError) run(PciAddr a) {
     PciWindow wc = virtio_pci_window(a, virtio_cfg_common())?;
     PciWindow wn = virtio_pci_window(a, virtio_cfg_notify())?;
@@ -198,7 +240,7 @@ Result(Str, DeviceError) run(PciAddr a) {
     return done;
 }
 
-@requires(device)
+@requires(device, clock(readonly))
 Int main() {
     List(PciAddr) none = [];
     List(PciAddr) found = match (pci_find(virtio_pci_vendor(), virtio_pci_device_id(2))) { Ok(fs) => fs, Err(e) => none };
