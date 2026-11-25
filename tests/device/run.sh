@@ -80,7 +80,8 @@ for f in "$CASES"/*.resid; do
         missing=""
         while IFS= read -r dev; do
             [ -z "$dev" ] && continue
-            { [ -r "$dev" ] && [ -w "$dev" ]; } || missing="$dev"
+            # A directory the case only reads (sysfs) need not be writable.
+            { [ -d "$dev" ] && [ -r "$dev" ]; } || { [ -r "$dev" ] && [ -w "$dev" ]; } || missing="$dev"
         done < "$CASES/$n.needs"
         if [ -n "$missing" ]; then echo "SKIP $n (no usable $missing here)"; skip=$((skip + 1)); continue; fi
     fi
