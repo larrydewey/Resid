@@ -5,9 +5,11 @@ used index 1
 the device wrote 32 bytes
 more than 8 distinct values in them: true
 -- a disk
-capacity 2048 sectors, queue of 8
+capacity 2048 sectors, queue of 64
 read sector 3: status 0, text: RESID-SECTOR-THREE
 wrote sector 5: status 0
 read it back: status 0, the same bytes: true
 40 of 40 more reads the same
 200 of 200 reads, then 200 of 200 with the descriptors left alone, then 200 of 200 in one message each
+16 writes in flight: 16 succeeded
+16 reads in flight: 16 brought back what was written

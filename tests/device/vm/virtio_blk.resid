@@ -2,6 +2,8 @@
 // in a virtual machine with an IOMMU, as root, on a device bound to
 // vfio-pci. It RESETS the device it finds and WRITES sector 5 of its disk.
 //
+// It also WRITES sectors 10 to 25.
+//
 // Where virtio_rng.resid offers one buffer once, this sends many requests
 // through one queue, each a chain of three descriptors (Virtual I/O
 // Device 1.2, §5.2.6): a header the device reads, a sector it reads or
@@ -204,6 +206,79 @@ List(UInt(8)) pattern(Int i, List(UInt(8)) acc) { return if (i >= 512) { acc } e
 
 Bool same(List(UInt(8)) a, List(UInt(8)) b, Int i) { return a.len() == b.len() && (i >= a.len() || (a[i] == b[i] && same(a, b, i + 1))); }
 
+// ─── Sixteen requests in flight ─────────────────────────────────────
+// Request k of a group has a kilobyte of the memory from at_header() on:
+// its header first, its status byte at 16, its sector at 512; and the
+// descriptors 3k, 3k + 1 and 3k + 2.
+Int group_at(Int k) { return at_header() + 1024 * k; }
+
+// What sector `sector` is written with: byte i is (i + 13 sector) mod 251.
+List(UInt(8)) filling(Int sector, Int i, List(UInt(8)) acc) { return if (i >= 512) { acc } else { filling(sector, i + 1, acc.concat([(UInt(8)) ((i + 13 * sector) % 251)])) }; }
+
+List(UInt(8)) descriptor(Int addr, Int len, Int flags, Int next, List(UInt(8)) acc) { return le(next, 2, le(flags, 2, le(len, 4, le(addr, 8, acc)))); }
+
+// The three descriptors of request k, as the 48 bytes they are.
+List(UInt(8)) chain(Int io, Int k, Bool out) {
+    List(UInt(8)) none = [];
+    Int g = io + group_at(k);
+    return descriptor(g + 16, 1, 2, 0, descriptor(g + 512, 512, if (out) { 1 } else { 3 }, 3 * k + 2, descriptor(g, 16, 1, 3 * k + 1, none)));
+}
+
+// The operations that offer requests k on of a group of `count`, the
+// first of them request number n0 of the queue: for each its header, its
+// sector when it is written, its descriptors and its slot in the ring.
+List(DevOp) offers(Queue q, Int n0, Int k, Int count, Bool out, Int first, List(DevOp) acc) {
+    if (k >= count) { return acc; }
+    DmaRegion m = q.s.dma;
+    List(UInt(8)) none = [];
+    List(DevOp) head = [dma_write_op(m, group_at(k), le(first + k, 8, le(0, 4, le(if (out) { 1 } else { 0 }, 4, none))))];
+    List(DevOp) data = if (out) { [dma_write_op(m, group_at(k) + 512, filling(first + k, 0, none))] } else { [] };
+    List(DevOp) rest = [dma_write_op(m, 48 * k, chain(m.iova, k, out)), slot_head_store(slot_in(m, at_avail() + 4 + 2 * ((n0 + k) % q.size)), Half {.v = (UInt(16)) (3 * k)})];
+    return offers(q, n0, k + 1, count, out, first, acc.concat(head).concat(data).concat(rest));
+}
+
+// Asleep for interrupts until the used index is `want`: a wait and a
+// load of the index in each message.
+@requires(device)
+Result(Int, DeviceError) all_used(Queue q, Int want, Int left) {
+    List(DevOut) o = device_batch(q.s.dma.id, [dma_wait_op(1000), ring_head_idx_load(ring_head_in(q.s.dma, at_used()))])?;
+    Half i = ring_head_idx_of(o, 1)?;
+    if ((Int) i.v == want % 65536 || left <= 0) { return Ok((Int) i.v); }
+    return all_used(q, want, left - 1);
+}
+
+List(DevOp) answers(Queue q, Int k, Int count, Bool data, List(DevOp) acc) {
+    if (k >= count) { return acc; }
+    List(DevOp) one = if (data) { [dma_read_op(q.s.dma, group_at(k) + 16, 1), dma_read_op(q.s.dma, group_at(k) + 512, 512)] } else { [dma_read_op(q.s.dma, group_at(k) + 16, 1)] };
+    return answers(q, k + 1, count, data, acc.concat(one));
+}
+
+// How many of the group succeeded; of a group of reads, how many also
+// brought back what filling() wrote.
+Int tally(List(DevOut) o, Int k, Int count, Bool data, Int first, Int good) {
+    if (k >= count) { return good; }
+    List(UInt(8)) none = [];
+    Int step = if (data) { 2 } else { 1 };
+    List(UInt(8)) st = match (dv_out_bytes(o, step * k)) { Some(b) => b, None => none };
+    List(UInt(8)) got = if (data) { match (dv_out_bytes(o, 2 * k + 1)) { Some(b) => b, None => none } } else { none };
+    Bool ok = st.len() == 1 && (Int) st[0] == 0 && (!data || same(got, filling(first + k, 0, none), 0));
+    return tally(o, k + 1, count, data, first, if (ok) { good + 1 } else { good });
+}
+
+// `count` requests on sectors from `first`, all offered in one message
+// and in flight together: two more messages while they finish, one to
+// collect them.
+@requires(device)
+Result(Int, DeviceError) group(Queue q, Int n0, Int count, Bool out, Int first) {
+    List(DevOp) none = [];
+    List(DevOp) go = [ring_head_idx_store(ring_head_in(q.s.dma, at_avail()), Half {.v = (UInt(16)) ((n0 + count) % 65536)}), notify_queue_store(q.bell, Half {.v = 0})];
+    List(DevOut) sent = device_batch(q.s.dma.id, offers(q, n0, 0, count, out, first, none).concat(go))?;
+    Int done = all_used(q, n0 + count, 50)?;
+    if (done != (n0 + count) % 65536) { return Ok(0 - 1); }
+    List(DevOut) o = device_batch_ro(q.s.dma.id, answers(q, 0, count, !out, none))?;
+    return Ok(tally(o, 0, count, !out, first, 0));
+}
+
 // `left` more reads of sector 3, each compared with the first.
 @requires(device)
 Result(Int, DeviceError) reread(Queue q, Int n, Int left, List(UInt(8)) first, Int good) {
@@ -233,7 +308,7 @@ Result(Str, DeviceError) drive(BlkSession s, Int step) {
     Wide cap = blk_config_read_capacity(s.config)?;
     Bool q0 = common_write_queue_select(c, Half {.v = 0})?;
     Half offered = common_read_queue_size(c)?;
-    Bool q1 = if (offered.v > 8) { common_write_queue_size(c, Half {.v = 8})? } else { true };
+    Bool q1 = if (offered.v > 64) { common_write_queue_size(c, Half {.v = 64})? } else { true };
     Half size = common_read_queue_size(c)?;
     Bool m0 = common_write_config_msix_vector(c, Half {.v = 65535})?;
     Bool m1 = common_write_queue_msix_vector(c, Half {.v = 0})?;
@@ -255,11 +330,14 @@ Result(Str, DeviceError) drive(BlkSession s, Int step) {
     Bool w1 = dma_write(s.dma, at_data(), le(0, 512, none))?;
     Int r5 = request(q, 2, false, 5)?;
     List(UInt(8)) five = dma_read(s.dma, at_data(), 512)?;
-    // Forty more requests: the ring wraps five times.
+    // Forty more requests, one after another.
     Int good = reread(q, 3, 40, three, 0)?;
     Str rate = timed(q, 43)?;
+    // Sixteen sectors written at once, then read back at once.
+    Int wrote = group(q, 643, 16, true, 10)?;
+    Int back = group(q, 659, 16, false, 10)?;
     Bool r0 = common_write_device_status(c, status(false, false, false, false))?;
-    return Ok(f"capacity {cap.v} sectors, queue of {size.v}\nread sector 3: status {r3}, text: " + text(three, 0, 18, "") + f"\nwrote sector 5: status {w5}\nread it back: status {r5}, the same bytes: {same(five, pat, 0)}\n{good} of 40 more reads the same\n" + rate);
+    return Ok(f"capacity {cap.v} sectors, queue of {size.v}\nread sector 3: status {r3}, text: " + text(three, 0, 18, "") + f"\nwrote sector 5: status {w5}\nread it back: status {r5}, the same bytes: {same(five, pat, 0)}\n{good} of 40 more reads the same\n" + rate + f"\n16 writes in flight: {wrote} succeeded\n16 reads in flight: {back} brought back what was written");
 }
 
 @requires(device, clock(readonly))

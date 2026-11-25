@@ -312,6 +312,17 @@ region, with no diagnostic.
   index, status, sector): 1.4 ms in the emulated machine against 3.4 ms
   with 8 messages and 6.9 ms with 22, which is about what the emulated
   device and its interrupt take by themselves.
+- **Stage M: requests in flight.** No change to compiler or runtime:
+  `virtio_blk.resid` offers sixteen requests in one batch (each its
+  header, its sector, its three descriptors as 48 bytes and its ring
+  slot, then the index and the bell), sleeps in batches of a wait and a
+  load of the used index until all are used, and collects their status
+  bytes and sectors in one more. Sixteen sectors written so and read
+  back so; the script finds one of them in the disk image. The queue is
+  64 entries, the device's memory 64 KiB. A single load's time on the
+  laptop varied with the machine's load (3.7 µs, then 10.2 µs); the
+  message room's size was ruled out as a cause, and
+  `device_session.c` now times the best of five passes.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

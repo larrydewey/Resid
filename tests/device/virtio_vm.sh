@@ -170,6 +170,11 @@ SECTOR5="$(dd if="$WORK/disk.img" bs=512 skip=5 count=1 2>/dev/null | od -An -tu
 if [ "$SECTOR5" != "7 10 13 16" ]; then
     echo "FAIL virtio_vm queue: sector 5 of the disk starts '$SECTOR5', not '7 10 13 16'"; sed 's/^/    /' "$WORK/out2.txt"; exit 1
 fi
+# And sector 12, one of sixteen written in flight: byte i is (i + 156) mod 251.
+SECTOR12="$(dd if="$WORK/disk.img" bs=512 skip=12 count=1 2>/dev/null | od -An -tu1 -N4 | tr -s ' ' | sed 's/^ //')"
+if [ "$SECTOR12" != "156 157 158 159" ]; then
+    echo "FAIL virtio_vm queue: sector 12 of the disk starts '$SECTOR12', not '156 157 158 159'"; sed 's/^/    /' "$WORK/out2.txt"; exit 1
+fi
 if cmp -s "$WORK/out2.txt" "$ROOT/tests/device/vm/virtio_rng.out"; then
     echo "PASS virtio_vm queue"; cat "$WORK/out2.txt" | sed 's/^/    /'
 else
