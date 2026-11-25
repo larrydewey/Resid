@@ -5495,7 +5495,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     // generation (runtime region.resid, Generations): a push writes into
     // a builder's buffer in place, with no region test, so a builder must
     // stay in the region the loop allocates in.
-    Bool gen = lr_gen_ok(w.fs, tyl, 0);
+    Bool gen = region && lr_gen_ok(w.fs, tyl, 0);
     List(Str) fn_lines_r = if (region) { lr_region(fn_lines0, evs, rev, cmv, gen) } else { fn_lines0 };
     // --loop-report: name a loop that allocates and has no region, and why.
     Bool lrn = if (!region && tco_ok && !resid_rtmod() && resid_raw_load64(loop_report_word()) == 1) { lr_report(w, d, fn_lines0, tyl, rev, cmv, evs) } else { false };
@@ -7775,30 +7775,70 @@ List(Str) lr_rec_fields(Funcs fs, Str fields, Int i, Int k, List(Str) acc) {
 // carried value; each ret moves its result to the caller's region and
 // pops L.
 // Whether a loop's carried values hold no builder (see lr_region's caller):
-// a type's text, and the records and sums it names, mention none.
+// a type's text, and the records, sums and aliases it names, mention none.
+// A breadth-first search over the types the carried values reach: each
+// record or sum is expanded once (one visited list for every path), and
+// a type names another only as a whole identifier.
 Bool lr_gen_ok(Funcs fs, List(Str) tyl, Int i) {
-    if (i >= tyl.len()) { return true; }
-    Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(tyl[i]));
-    return !lr_holds_buf(fs, t, [t]) && lr_gen_ok(fs, tyl, i + 1);
+    return !lr_reach_buf(fs, lr_bases(fs, tyl, 0, []), 0, []);
 }
 
-Bool lr_holds_buf(Funcs fs, Str t, List(Str) seen) {
+List(Str) lr_bases(Funcs fs, List(Str) tyl, Int i, List(Str) acc) {
+    if (i >= tyl.len()) { return acc; }
+    return lr_bases(fs, tyl, i + 1, acc.concat([ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(tyl[i]))]));
+}
+
+// ws: type texts still to look at, from i; seen: names already queued.
+Bool lr_reach_buf(Funcs fs, List(Str) ws, Int i, List(Str) seen) {
+    if (i >= ws.len()) { return false; }
+    Str t = ws[i];
     if (str_contains(t, "Buf")) { return true; }
-    return lr_named_buf(fs, t, seen, 0) || lr_sum_buf(fs, t, seen, 0);
+    List(Str) toks = lr_idents(t, 0, 0, []);
+    List(Str) n1 = lr_named_in(fs.stn, toks, seen, 0, []);
+    List(Str) seen1 = seen.concat(n1);
+    List(Str) n2 = lr_named_in(fs.sun, toks, seen1, 0, []);
+    List(Str) seen2 = seen1.concat(n2);
+    // A type alias names its target's text.
+    List(Str) n3 = lr_named_in(fs.ctn, toks, seen2, 0, []);
+    List(Str) more = lr_texts(fs, n1, true, 0, lr_texts(fs, n2, false, 0, lr_alias_texts(fs, n3, 0, [])));
+    return lr_reach_buf(fs, ws.concat(more), i + 1, seen2.concat(n3));
 }
 
-Bool lr_named_buf(Funcs fs, Str t, List(Str) seen, Int i) {
-    if (i >= fs.stn.len()) { return false; }
-    Str n = fs.stn[i];
-    Bool hit = !seen.contains(n) && str_contains(t, n) && lr_holds_buf(fs, fs.stf[i], seen.concat([n]));
-    return hit || lr_named_buf(fs, t, seen, i + 1);
+List(Str) lr_alias_texts(Funcs fs, List(Str) ns, Int i, List(Str) acc) {
+    if (i >= ns.len()) { return acc; }
+    Int k = lr_index(fs.ctn, ns[i], 0);
+    Str t = if (k >= 0 && k < fs.ctb.len()) { fs.ctb[k] } else { "" };
+    return lr_alias_texts(fs, ns, i + 1, acc.concat([t]));
 }
 
-Bool lr_sum_buf(Funcs fs, Str t, List(Str) seen, Int i) {
-    if (i >= fs.sun.len() || i >= fs.suv.len()) { return false; }
-    Str n = fs.sun[i];
-    Bool hit = !seen.contains(n) && str_contains(t, n) && lr_holds_buf(fs, fs.suv[i], seen.concat([n]));
-    return hit || lr_sum_buf(fs, t, seen, i + 1);
+// The names in ns that are tokens of the text and not yet seen.
+List(Str) lr_named_in(List(Str) ns, List(Str) toks, List(Str) seen, Int i, List(Str) acc) {
+    if (i >= ns.len()) { return acc; }
+    Str n = ns[i];
+    Bool add = toks.contains(n) && !seen.contains(n) && !acc.contains(n);
+    return lr_named_in(ns, toks, seen, i + 1, if (add) { acc.concat([n]) } else { acc });
+}
+
+// The field (record) or variant (sum) texts of the named types.
+List(Str) lr_texts(Funcs fs, List(Str) ns, Bool rec, Int i, List(Str) acc) {
+    if (i >= ns.len()) { return acc; }
+    Int k = lr_index(if (rec) { fs.stn } else { fs.sun }, ns[i], 0);
+    Str t = if (k < 0) { "" } else if (rec) { fs.stf[k] } else if (k < fs.suv.len()) { fs.suv[k] } else { "" };
+    return lr_texts(fs, ns, rec, i + 1, acc.concat([t]));
+}
+
+Int lr_index(List(Str) ns, Str n, Int i) {
+    if (i >= ns.len()) { return -1; }
+    if (ns[i] == n) { return i; }
+    return lr_index(ns, n, i + 1);
+}
+
+// The identifiers of a type's text; a token starts at b.
+List(Str) lr_idents(Str t, Int i, Int b, List(Str) acc) {
+    if (i >= t.len()) { return if (i > b) { acc.concat([str_slice(t, b, i)]) } else { acc }; }
+    if (is_alnum(str_char_at(t, i))) { return lr_idents(t, i + 1, b, acc); }
+    List(Str) a2 = if (i > b) { acc.concat([str_slice(t, b, i)]) } else { acc };
+    return lr_idents(t, i + 1, i + 1, a2);
 }
 
 List(Str) lr_region(List(Str) ls, List(Str) evs, Str rev, List(Str) cmv, Bool gen) {
