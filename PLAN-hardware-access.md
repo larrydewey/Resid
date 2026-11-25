@@ -498,6 +498,13 @@ Interrupts followed as stage J: one event for MSI-X vector 0, waited
 for by a message with a timeout (`dma_wait`), so a driver that has
 nothing to do sleeps in its host's ppoll.
 
+Measured with a virtio disk (stage K): a request's time is its count
+of messages. So batches (decided 2026-11-25, stage L): several
+operations of a session in one message, made in order by the host,
+which stays as generic as before. A disk read is then one crossing.
+Rejected for now: the driver's code in the host process (the end
+state; nothing is faster until all of it exists).
+
 Built as stage I, and a virtio entropy device read through it in a
 virtual machine with an emulated IOMMU. Every privileged call the host
 makes (the VFIO descriptors, the mappings) comes before its filter, so

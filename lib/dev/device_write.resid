@@ -181,3 +181,14 @@ ListBuf(Int) dma_bytes(ListBuf(Int) b, List(UInt(8)) bytes, Int i, Int end) {
     if (i >= end) { return b; }
     return dma_bytes(b.push((Int) bytes[i]), bytes, i + 1, end);
 }
+
+/// Makes the operations `ops` on session `id`, in one message to its
+/// host: stores, writes, loads, reads and waits, in order. Returns an
+/// output for each load and wait (OutNum) and each read (OutBytes), in
+/// order. When the host refuses one, those before it were made.
+@requires(device)
+pub Result(List(DevOut), DeviceError) device_batch(Int id, List(DevOp) ops) {
+    DvReq r = dv_prep_batch(id, ops);
+    if (r.err != "") { return Err(BadInput("batch", r.err)); }
+    return dv_session_answer("batch", dv_answer("batch", r, if (dv_ops_write(ops, 0)) { resid_device_call_w(r.req) } else { resid_device_call(r.req) }));
+}

@@ -87,6 +87,16 @@ static int bytes_are(Rep* r, const uint8_t* want, int len) {
     if (r->n != 10 + len || r->b[0] != 0 || r->b[1] != 1 || r->b[5] != 1) return 0;
     return (r->b[6] | (r->b[7] << 8)) == len && memcmp(r->b + 10, want, len) == 0;
 }
+/* A batch (kind 18): begun for session `id`, then operations added. */
+static void batch_begin(Req* r, uint64_t id, int write) {
+    r->n = 0;
+    u(r, 'R', 1); u(r, 'D', 1); u(r, 'V', 1); u(r, 1, 1); u(r, 18, 1); u(r, write, 1);
+    u(r, id, 8);
+}
+static void batch_op(Req* r, int op, int width, int map, uint32_t off, uint64_t v, const uint8_t* data) {
+    u(r, op, 1); u(r, width, 1); u(r, map, 1); u(r, 0, 1); u(r, off, 4); u(r, v, 8);
+    if (data) { memcpy(r->b + r->n, data, v); r->n += v; }
+}
 static int map_index = 0;   /* which of the session's resources the next accesses name */
 static void req_access(Req* r, uint64_t id, int store, uint32_t off, int width, uint64_t v) {
     r->n = 0;
@@ -383,6 +393,63 @@ int main(int argc, char** argv, char** envp) {
     r = call(&q, 0);
     uint8_t zero[8] = {0};
     check("dma_untouched_is_zero", bytes_are(&r, zero, 8));
+    /* Several operations in one message: bytes in, a word stored, the
+     * word and the bytes read back, a register loaded, a short wait. */
+    uint8_t run[40];
+    for (int i = 0; i < 40; i++) run[i] = (uint8_t)(200 - i);
+    batch_begin(&q, dm, 1);
+    batch_op(&q, 4, 0, 1, 1000, 40, run);
+    batch_op(&q, 2, 4, 1, 2000, 0xcafef00d, NULL);
+    batch_op(&q, 1, 4, 1, 2000, 0, NULL);
+    batch_op(&q, 3, 0, 1, 1000, 40, NULL);
+    batch_op(&q, 1, 4, 0, 16, 0, NULL);
+    batch_op(&q, 5, 0, 0, 0, 20, NULL);
+    r = call(&q, 1);
+    memcpy(&w32, blk + 16, 4);
+    int bok = r.n == 5 + 9 + (5 + 40) + 9 + 9 && r.b[0] == 0 && r.b[1] == 4;
+    uint32_t b1 = 0, b3 = 0;
+    if (bok) { memcpy(&b1, r.b + 6, 4); memcpy(&b3, r.b + 14 + 45 + 1, 4); }
+    check("batch_six_operations", bok && b1 == 0xcafef00du && r.b[14] == 1 && memcmp(r.b + 19, run, 40) == 0 && b3 == w32 && r.b[14 + 45 + 9] == 0);
+    r = call(&q, 0);
+    check("batch_with_stores_needs_write_grant", code(&r) == 2);
+    q.b[5] = 0;
+    r = call(&q, 0);
+    check("batch_must_say_it_writes", code(&r) == 10 && value(&r) == 76);
+    /* The third operation is past the memory: refused by number, and the
+     * store before it was made. */
+    batch_begin(&q, dm, 1);
+    batch_op(&q, 2, 4, 1, 3000, 0x12345678, NULL);
+    batch_op(&q, 1, 4, 1, 3000, 0, NULL);
+    batch_op(&q, 1, 4, 1, 8192, 0, NULL);
+    r = call(&q, 1);
+    check("batch_refused_at_third", code(&r) == 10 && value(&r) == 1002);
+    map_index = 1;
+    req_access(&q, dm, 0, 3000, 4, 0);
+    r = call(&q, 0);
+    check("batch_earlier_store_made", loaded(&r, 0x12345678u));
+    map_index = 0;
+    /* A run of bytes is never a register's; an unknown operation. */
+    batch_begin(&q, dm, 0);
+    batch_op(&q, 3, 0, 0, 0, 16, NULL);
+    r = call(&q, 0);
+    check("batch_no_run_from_register", code(&r) == 10 && value(&r) == 1000);
+    batch_begin(&q, dm, 0);
+    batch_op(&q, 9, 0, 0, 0, 0, NULL);
+    r = call(&q, 0);
+    check("batch_unknown_operation", code(&r) == 10 && value(&r) == 76);
+    /* Many loads in one message, timed. */
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    int bsame = 1;
+    for (int k = 0; k < 200; k++) {
+        batch_begin(&q, dm, 0);
+        for (int i = 0; i < 10; i++) batch_op(&q, 1, 4, 0, 16, 0, NULL);
+        r = call(&q, 0);
+        if (r.n != 5 + 90 || memcmp(r.b + 6, &w32, 4) != 0) bsame = 0;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    check("batch_2000_loads", bsame);
+    fprintf(stderr, "note: %.1f microseconds a load in a batch of ten\n", ((t1.tv_sec - t0.tv_sec) * 1e9 + (t1.tv_nsec - t0.tv_nsec)) / 2000.0 / 1000.0);
+
     /* Waiting for an interrupt: none comes here, so the time passes; a
      * plain session has none to wait for. */
     q.n = 0;

@@ -877,6 +877,112 @@ pub Result(Int, DeviceError) dma_wait(DmaRegion r, Int timeout_ms) {
     return match (dv_out_num(o, 0)) { Some(n) => Ok(n), None => Err(BadReply("dma", "no count")) };
 }
 
+// -- Batches ------------------------------------------------------------------
+// Several operations of one session in one message to its host, which
+// makes them in order and answers once: a request to a device is then a
+// crossing or two, not one for every register. A register block declared
+// with sessions writes an operation for each register (`t_r_load(s)`,
+// `t_r_store(s, v)`) and the reader of its answer (`t_r_of(outs, i)`).
+
+/// One operation of a batch: a word loaded or stored (resource, offset
+/// in it, bytes, value), bytes of a device's memory read or written
+/// (resource, offset, length or the bytes), a wait for the interrupt
+/// (milliseconds), or one that cannot be made, with why.
+pub type DevOp = OpLoad(Int, Int, Int) | OpStore(Int, Int, Int, UInt(64)) | OpRead(Int, Int, Int) | OpWrite(Int, Int, List(UInt(8))) | OpWait(Int) | OpBad(Str);
+
+/// The load of `bytes` bytes at `off` of the window of `len` bytes at
+/// `base` in resource number `map`.
+pub DevOp device_op_load(Int map, Int base, Int len, Int off, Int bytes) {
+    if (off < 0 || off + bytes > len) { return OpBad("the access is not inside the window"); }
+    return OpLoad(map, base + off, bytes);
+}
+
+/// The store of the low `bytes` bytes of `value` there.
+pub DevOp device_op_store(Int map, Int base, Int len, Int off, Int bytes, UInt(64) value) {
+    if (off < 0 || off + bytes > len) { return OpBad("the access is not inside the window"); }
+    return OpStore(map, base + off, bytes, value);
+}
+
+/// The read of `n` bytes (1 to 65536) at `off` of a DMA session's memory.
+pub DevOp dma_read_op(DmaRegion r, Int off, Int n) {
+    if (off < 0 || n < 1 || n > 65536 || off + n > r.len) { return OpBad("the bytes are not inside the memory"); }
+    return OpRead(r.map, off, n);
+}
+
+/// The write of `bytes` (1 to 65536 of them) at `off` of that memory.
+pub DevOp dma_write_op(DmaRegion r, Int off, List(UInt(8)) bytes) {
+    if (off < 0 || bytes.len() < 1 || bytes.len() > 65536 || off + bytes.len() > r.len) { return OpBad("the bytes are not inside the memory"); }
+    return OpWrite(r.map, off, bytes);
+}
+
+/// A wait for the device's interrupt, at most `timeout_ms` milliseconds.
+pub DevOp dma_wait_op(Int timeout_ms) {
+    if (timeout_ms < 0 || timeout_ms > 60000) { return OpBad("a wait is at most 60000 milliseconds"); }
+    return OpWait(timeout_ms);
+}
+
+Bool dv_op_writes(DevOp o) { return match (o) { OpStore(m, a, b, v) => true, OpWrite(m, a, bs) => true, _ => false }; }
+
+/// Whether any of `ops` stores or writes.
+pub Bool dv_ops_write(List(DevOp) ops, Int i) { return i < ops.len() && (dv_op_writes(ops[i]) || dv_ops_write(ops, i + 1)); }
+
+Str dv_ops_bad(List(DevOp) ops, Int i) {
+    if (i >= ops.len()) { return ""; }
+    return match (ops[i]) { OpBad(why) => f"operation {i}: " + why, _ => dv_ops_bad(ops, i + 1) };
+}
+
+// One operation as the host takes it: what, the width, which resource, a
+// zero, the offset (4), the value, length or time (8), a write's bytes.
+ListBuf(Int) dv_op(ListBuf(Int) b, DevOp o) {
+    return match (o) {
+        OpLoad(m, off, n) => dv_u(dv_u(b.push(1).push(n).push(m).push(0), off, 4), 0, 8),
+        OpStore(m, off, n, v) => dv_u64(dv_u(b.push(2).push(n).push(m).push(0), off, 4), v, 8),
+        OpRead(m, off, n) => dv_u(dv_u(b.push(3).push(0).push(m).push(0), off, 4), n, 8),
+        OpWrite(m, off, bs) => dv_op_bytes(dv_u(dv_u(b.push(4).push(0).push(m).push(0), off, 4), bs.len(), 8), bs, 0),
+        OpWait(ms) => dv_u(dv_u(b.push(5).push(0).push(0).push(0), 0, 4), ms, 8),
+        OpBad(why) => b,
+    };
+}
+
+ListBuf(Int) dv_op_bytes(ListBuf(Int) b, List(UInt(8)) bs, Int i) { return if (i >= bs.len()) { b } else { dv_op_bytes(b.push((Int) bs[i]), bs, i + 1) }; }
+
+ListBuf(Int) dv_ops(ListBuf(Int) b, List(DevOp) ops, Int i) { return if (i >= ops.len()) { b } else { dv_ops(dv_op(b, ops[i]), ops, i + 1) }; }
+
+// What comes back: a number for each load and wait, bytes for each read.
+List(DvSlot) dv_op_slots(List(DevOp) ops, Int i, List(DvSlot) acc) {
+    if (i >= ops.len()) { return acc; }
+    List(DvSlot) one = match (ops[i]) {
+        OpLoad(m, off, n) => [DvSlot {.num = true, .max = 8, .secret = false}],
+        OpWait(ms) => [DvSlot {.num = true, .max = 8, .secret = false}],
+        OpRead(m, off, n) => [DvSlot {.num = false, .max = n, .secret = false}],
+        _ => [],
+    };
+    return dv_op_slots(ops, i + 1, acc.concat(one));
+}
+
+/// The request for the batch `ops` on session `id`. `err` is set for no
+/// operation or more than 256, and for one that cannot be made.
+pub DvReq dv_prep_batch(Int id, List(DevOp) ops) {
+    if (ops.len() == 0 || ops.len() > 256) { return dv_bad("a batch is 1 to 256 operations"); }
+    Str bad = dv_ops_bad(ops, 0);
+    if (bad != "") { return dv_bad(bad); }
+    ListBuf(Int) none = ListBuf();
+    List(DvSlot) no = [];
+    return DvReq {.err = "", .req = dv_ops(dv_u(none.push(82).push(68).push(86).push(1).push(18).push(dv_bool(dv_ops_write(ops, 0))), id, 8), ops, 0).finish(), .outs = dv_op_slots(ops, 0, no)};
+}
+
+/// Makes the operations `ops`, none of which stores or writes, on
+/// session `id`, in one message. Returns an output for each load and
+/// wait (OutNum) and each read (OutBytes), in order; Err(BadInput) for a
+/// batch that writes, one the host refuses, or a session that has ended.
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_batch_ro(Int id, List(DevOp) ops) {
+    if (dv_ops_write(ops, 0)) { return Err(BadInput("batch", "a batch that stores or writes needs device_batch and the `device` grant")); }
+    DvReq r = dv_prep_batch(id, ops);
+    if (r.err != "") { return Err(BadInput("batch", r.err)); }
+    return dv_session_answer("batch", dv_answer("batch", r, resid_device_call(r.req)));
+}
+
 /// The request for one access to session `id`: `off` from the start of
 /// its resource number `map`. `err` is set for an access that is not a word.
 pub DvReq dv_prep_session_access(Int id, Int map, Bool store, Int off, Int bytes, UInt(64) value) {
@@ -925,6 +1031,8 @@ Str dv_session_why(Str why) {
     if (str_ends_with(why, "request (71)")) { return "the session has ended"; }
     if (str_ends_with(why, "request (70)")) { return "eight sessions are open on this thread already"; }
     if (str_ends_with(why, "request (72)")) { return "the session's host refused the access"; }
+    if (str_ends_with(why, "request (76)")) { return "the batch is not 1 to 256 whole operations within 64 KiB, with 64 KiB of answers at most"; }
+    if (str_contains(why, "request (1")) { return "the session's host refused an operation of the batch; those before it were made"; }
     if (str_ends_with(why, "request (74)")) { return "a wait is at most 60000 milliseconds"; }
     if (str_ends_with(why, "request (75)")) { return "the session has no interrupt to wait for"; }
     return why;

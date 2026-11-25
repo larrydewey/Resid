@@ -654,6 +654,11 @@ Str wd_rgen_regs(Str sn, List(WdR) rs, Int i, StrBuf acc) {
 //   Result(T, DeviceError) common_session(PciWindow w, T closure(CommonSession) f)       device
 //   Result(T, DeviceError) common_session_ro(PciWindow w, T closure(CommonSession) f)    device(readonly)
 //
+// For a batch (several operations in one message to the host), each
+// register also gets its access as an operation, `common_status_load(s)`
+// and `common_status_store(s, v)`, and `common_status_of(outs, i)`, which
+// reads a load's answer from the batch's outputs.
+//
 // and its accessors take the session: `common_read_status(s)`. The
 // session ends when the scoped function returns; an accessor called with
 // it afterwards gets Err(BadInput).
@@ -754,7 +759,16 @@ Str wd_sacc_regs(Str name, Str sn, List(WdR) rs, List(WdT) ts, Bool writes, Int 
         "@requires(device)\npub Result(" + r.ty + ", DeviceError) " + sn + "_take_" + r.name + "(" + name + "Session __wd_s) {\n" + load };
     Str wr = if (!wd_writable(t.fs, 0) || !writes) { "" } else {
         "@requires(device)\npub Result(Bool, DeviceError) " + sn + "_write_" + r.name + "(" + name + "Session __wd_s, " + r.ty + " __wd_x) {\n    UInt(64) __wd_w = " + tsn + "_word(__wd_x);\n    List(DevOut) __wd_o = device_session_store(" + label + ", " + at + ", __wd_w)?;\n    return Ok(__wd_o.len() == 0);\n}\n" };
-    return wd_sacc_regs(name, sn, rs, ts, writes, i + 1, acc.push(rd).push(tk).push(wr));
+    // The same accesses as operations of a batch (lib/dev/device.resid's
+    // DevOp), and the reader of a load's answer among a batch's outputs.
+    Str opat = "__wd_s.map, __wd_s.base, __wd_s.len, " + f"{r.off}" + ", " + f"{r.bytes}";
+    Bool can_load = wd_readable(t.fs, 0) && (!t.clears || writes);
+    Str lo = if (!can_load) { "" } else {
+        "pub DevOp " + sn + "_" + r.name + "_load(" + name + "Session __wd_s) { return device_op_load(" + opat + "); }\n" +
+        "pub Result(" + r.ty + ", DeviceError) " + sn + "_" + r.name + "_of(List(DevOut) __wd_o, Int __wd_i) {\n    return match (dv_out_num(__wd_o, __wd_i)) {\n        Some(__wd_v) => Ok(" + tsn + "_from_word(" + word + ")),\n        None => Err(BadReply(" + label + ", \"no word\")),\n    };\n}\n" };
+    Str so = if (!wd_writable(t.fs, 0) || !writes) { "" } else {
+        "pub DevOp " + sn + "_" + r.name + "_store(" + name + "Session __wd_s, " + r.ty + " __wd_x) { return device_op_store(" + opat + ", " + tsn + "_word(__wd_x)); }\n" };
+    return wd_sacc_regs(name, sn, rs, ts, writes, i + 1, acc.push(rd).push(tk).push(wr).push(lo).push(so));
 }
 
 // ─── A device: several blocks, one session ──────────────────────────

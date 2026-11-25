@@ -300,6 +300,18 @@ region, with no diagnostic.
   On the laptop a message is 3.7 µs, which would make those 81 µs and
   30 µs a request before the device's own time. The cost is the count
   of messages. Not yet: more than one request in flight.
+- **Stage L: batches.** Request kind 18 carries up to 256 operations
+  of one session (load, store, bytes out, bytes in, wait) in one
+  message; the host makes them in order (`ds_batch`) and answers once.
+  A refused operation stops the batch, those before it made. `DevOp`,
+  `device_batch`, `device_batch_ro`, `dma_read_op`, `dma_write_op`,
+  `dma_wait_op`; each register of a session block gets `t_r_load`,
+  `t_r_store` and `t_r_of`. `device_session.c`: 65 checks, and a load
+  in a batch of ten costs 3.9 µs there against 30 µs alone. The disk
+  test's read as one batch (header, slot, index, bell, wait, used
+  index, status, sector): 1.4 ms in the emulated machine against 3.4 ms
+  with 8 messages and 6.9 ms with 22, which is about what the emulated
+  device and its interrupt take by themselves.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

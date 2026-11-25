@@ -1123,8 +1123,8 @@ Int dp_call(Int req) {
     // An access to a session, or its end: no descriptor, only the
     // session's number (ds_access, ds_close).
     Int k4 = ld8(buf + 4);
-    if (k4 == 12 || k4 == 13 || k4 == 15 || k4 == 16 || k4 == 17) {
-        Int so = if (k4 == 12) { ds_access(buf, n) } else if (k4 == 13) { ds_close(buf, n) } else if (k4 == 17) { ds_wait_req(buf, n) } else { ds_bulk(buf, n, k4 == 16) };
+    if (k4 == 12 || k4 == 13 || k4 == 15 || k4 == 16 || k4 == 17 || k4 == 18) {
+        Int so = if (k4 == 12) { ds_access(buf, n) } else if (k4 == 13) { ds_close(buf, n) } else if (k4 == 17) { ds_wait_req(buf, n) } else if (k4 == 18) { ds_batch_req(buf, n) } else { ds_bulk(buf, n, k4 == 16) };
         return resid_raw_fill(buf, 0, n) * 0 + c_free(buf) * 0 + so;
     }
     Int d = pq_parse(buf, n);
@@ -1397,6 +1397,102 @@ Int ds_wait_req(Int buf, Int n) {
     _ = c_free(m);
     if (status != 0) { return dev_err_reply(de_refused(), 75); }   // the session has no interrupt
     return ds_num_reply(v);
+}
+
+// A request of kind 18: several operations in one message to the host,
+// which makes them in order and answers once. After the six bytes: the
+// session's number (8), then the operations, each the 16 bytes the host
+// takes for one -- what (1 a load, 2 a store, 3 bytes out, 4 bytes in, 5
+// wait for the interrupt), the width, which resource, the offset at 4,
+// the value, length or time at 8 -- and, after a 4, its bytes. At most
+// 256 operations, 64 KiB of them and 64 KiB of answers. The request's
+// write byte is 1 when any operation stores or writes, so the read entry
+// has refused such a batch. The reply is one output for each load, wait
+// (a number) and run of bytes out, in order. An operation the host
+// refuses stops the batch there: those before it were made.
+Int ds_batch_req(Int buf, Int n) {
+    Int blen = n - 14;
+    if (blen < 16 || blen > 65536) { return dev_err_reply(de_refused(), 76); }
+    Int body = buf + 14;
+    // What the answer holds: its bytes (word 0), its outputs (1), whether
+    // anything is written (2), the time spent waiting at most (3).
+    Int acc = xmalloc(32);
+    _ = resid_raw_fill(acc, 0, 32);
+    Bool shaped = ds_batch_shape(body, blen, 0, 0, acc);
+    Int rlen = ld64(acc);
+    Int outs = ld64(acc + 8);
+    Bool writes = ld64(acc + 16) != 0;
+    Int ms = ld64(acc + 24);
+    _ = c_free(acc);
+    if (!shaped || rlen > 65536 || (writes && ld8(buf + 5) != 1)) { return dev_err_reply(de_refused(), 76); }
+    Int id = le_get(buf + 6, 8);
+    Int e = if (id > 0) { ds_find(id, 0) } else { 0 };
+    if (e == 0) { return dev_err_reply(de_refused(), 71); }
+    Int m = xmalloc(32);
+    _ = resid_raw_fill(m, 0, 32);
+    _ = st8(m, 6) + le_put(m + 8, blen, 8);
+    Int a = ld64(e + 8);
+    Int dl = hs_deadline(ms + 5000);
+    _ = st64(hs_timeout_w(), 0) + st64(hs_peer_w(), ld64(e + 16));
+    Bool ok = hs_send_until(a, m, 0, 16, dl) && hs_send_until(a, body, 0, blen, dl) && hs_recv_until(a, m + 16, 0, 9, dl) == 9;
+    Int status = if (ok) { ld8(m + 16) } else { 1 };
+    Int v = ld64(m + 17);
+    Int rb = if (ok && status == 0 && v == rlen) { xmalloc(rlen + 16) } else { 0 };
+    Bool got = rb != 0 && hs_recv_until(a, rb, 0, rlen, dl) == rlen;
+    _ = c_free(m);
+    if (!ok || (status == 0 && !got)) {
+        Bool late = ld64(hs_timeout_w()) != 0;
+        Int st = ds_drop(e);
+        Int sig = if (st >= 0) { st & 127 } else { 0 };
+        _ = if (rb != 0) { c_free(rb) } else { 0 };
+        if (late) { return dev_err_reply(de_timeout(), 0); }
+        return dev_err_reply(de_host(), if (sig != 0) { 256 + sig } else { 4 * 256 });
+    }
+    if (status != 0) { return dev_err_reply(de_refused(), 1000 + v); }   // which operation the host refused
+    // The engine's reply: [0, outputs] and each output as dp_reply has them.
+    Int ob = xmalloc(5 + outs * 9 + rlen + 16);
+    _ = st8(ob, 0) + le_put(ob + 1, outs, 4);
+    Int end = ds_batch_outs(body, blen, 0, rb, 0, ob, 5);
+    Int out = dp_list(ob, end);
+    _ = resid_raw_fill(rb, 0, rlen + 16) + c_free(rb) + resid_raw_fill(ob, 0, end) + c_free(ob);
+    return out;
+}
+
+// The operations from byte `pos` on are whole and of known kinds; acc
+// gathers what ds_batch_req needs.
+Bool ds_batch_shape(Int body, Int blen, Int pos, Int i, Int acc) {
+    if (pos == blen) { return i >= 1; }
+    if (pos + 16 > blen || i >= 256) { return false; }
+    Int op = ld8(body + pos);
+    Int v = le_get(body + pos + 8, 4);
+    if (op < 1 || op > 5) { return false; }
+    if ((op == 3 || op == 4) && (v < 1 || v > 65536)) { return false; }
+    if (op == 5 && (v < 0 || v > 60000)) { return false; }
+    Int extra = if (op == 4) { v } else { 0 };
+    if (pos + 16 + extra > blen) { return false; }
+    _ = st64(acc, ld64(acc) + (if (op == 1 || op == 5) { 8 } else if (op == 3) { v } else { 0 }));
+    _ = st64(acc + 8, ld64(acc + 8) + (if (op == 1 || op == 3 || op == 5) { 1 } else { 0 }));
+    _ = st64(acc + 16, ld64(acc + 16) + (if (op == 2 || op == 4) { 1 } else { 0 }));
+    _ = st64(acc + 24, ld64(acc + 24) + (if (op == 5) { v } else { 0 }));
+    return ds_batch_shape(body, blen, pos + 16 + extra, i + 1, acc);
+}
+
+// The host's answers at rb, as outputs at ob + at: a number is tag 0 and
+// 8 bytes, bytes are tag 1, their length (4) and themselves. The end.
+Int ds_batch_outs(Int body, Int blen, Int pos, Int rb, Int rp, Int ob, Int at) {
+    if (pos >= blen) { return at; }
+    Int op = ld8(body + pos);
+    Int v = le_get(body + pos + 8, 4);
+    Int next = pos + 16 + (if (op == 4) { v } else { 0 });
+    if (op == 1 || op == 5) {
+        _ = st8(ob + at, 0) + mcopy(ob + at + 1, rb + rp, 8);
+        return ds_batch_outs(body, blen, next, rb, rp + 8, ob, at + 9);
+    }
+    if (op == 3) {
+        _ = st8(ob + at, 1) + le_put(ob + at + 1, v, 4) + mcopy(ob + at + 5, rb + rp, v);
+        return ds_batch_outs(body, blen, next, rb, rp + v, ob, at + 5 + v);
+    }
+    return ds_batch_outs(body, blen, next, rb, rp, ob, at);
 }
 
 // A request of kind 13: the session's number after the first six bytes.
@@ -2688,7 +2784,7 @@ Int dh_session(Int h, Int d) {
     if (!dh_regions(h, 4)) { return native_child_exit(125); }
     Int vb = dh_region(h, 32, 0);
     Int db = dh_region(h, 32, 0);
-    Int msg = dh_region(h, 96, 0);
+    Int msg = dh_region(h, ds_msg_room(), 0);
     if (vb == 0 || db == 0 || msg == 0 || !dh_bufs(h, d)) { return native_child_exit(125); }
     _ = dh_rule(h, resid_raw_nr(0), 1, vfd, 0) + dh_rule(h, resid_raw_nr(0), 1, dfd, 0);
     _ = dh_rule(h, resid_raw_nr(47), 1, 3, 0) + dh_rule(h, resid_raw_nr(102), 0, 0, 0) + dh_rule(h, resid_raw_nr(104), 0, 0, 0);   // recvmsg(3), getuid, getgid
@@ -2831,12 +2927,12 @@ Int dh_vfio(Int h, Int d) {
     _ = st64(tab + (more + 1) * 16, dmem) + st64(tab + (more + 1) * 16 + 8, ds);
     Int efd = vf_irq(dev, w);
     if (!dh_regions(h, 2)) { return native_child_exit(125); }
-    Int msg = dh_region(h, 96, 0);
+    Int msg = dh_region(h, ds_msg_room(), 0);
     if (msg == 0 || !dh_bufs(h, d)) { return native_child_exit(125); }
     _ = dh_rule(h, resid_raw_nr(47), 1, 3, 0) + dh_rule(h, resid_raw_nr(102), 0, 0, 0) + dh_rule(h, resid_raw_nr(104), 0, 0, 0);   // recvmsg(3), getuid, getgid
     _ = ds_wait_rules(h, efd);
     if (!dh_lock(h)) { return native_child_exit(126); }
-    _ = resid_raw_fill(msg, 0, 96);
+    _ = resid_raw_fill(msg, 0, 128);
     if (!native_write(msg, 0, 10)) { return native_child_exit(125); }
     return ds_serve(tab, more + 2, 1, dget(h, 22), msg, more + 1, efd);
 }
@@ -2871,6 +2967,62 @@ Int ds_wait(Int efd, Int ms, Int m) {
     return if (resid_raw_syscall(0, efd, m + 56, 8, 0, 0, 0) == 8) { ld64(m + 56) } else { 0 };
 }
 
+// The room for a session's messages: 128 bytes for one, then 64 KiB for
+// a batch's operations and 64 KiB for its answers.
+Int ds_msg_room() { return 131200; }
+
+// Where a word access is made, or 0 when it is refused: the resource is
+// one of the session's, a store needs a session that writes, the width
+// is 1, 2, 4 or 8 and the word lies at a multiple of it inside.
+Int ds_word_at(Int tab, Int maps, Int wr, Int op, Int w, Int mi, Int off) {
+    if (mi >= maps) { return 0; }
+    Bool ok = (op == 1 || (op == 2 && wr == 1)) && (w == 1 || w == 2 || w == 4 || w == 8) && off >= 0 && off % w == 0 && off + w <= ld64(tab + mi * 16 + 8);
+    return if (ok) { ld64(tab + mi * 16) + off } else { 0 };
+}
+
+// Where a run of `len` bytes of the device's memory is, or 0.
+Int ds_run_at(Int tab, Int maps, Int dmai, Int mi, Int off, Int len) {
+    Bool fits = mi < maps && mi == dmai && off >= 0 && len >= 1 && len <= 65536 && off + len <= ld64(tab + mi * 16 + 8);
+    return if (fits) { ld64(tab + mi * 16) + off } else { 0 };
+}
+
+// A batch's operations from b + pos on, `blen` bytes of them, made in
+// order; answers gathered at r. The length of the answers, or -1 - i when
+// operation i is refused (those before it were made).
+Int ds_batch(Int tab, Int maps, Int wr, Int dmai, Int efd, Int m, Int b, Int blen, Int pos, Int r, Int rp, Int i) {
+    if (pos == blen) { return rp; }
+    if (pos + 16 > blen || i >= 256) { return 0 - 1 - i; }
+    Int q = b + pos;
+    Int op = ld8(q);
+    Int mi = ld8(q + 2);
+    Int off = le_get(q + 4, 4);
+    Int v = le_get(q + 8, 4);
+    if (op == 1 || op == 2) {
+        Int at = ds_word_at(tab, maps, wr, op, ld8(q + 1), mi, off);
+        if (at == 0 || (op == 1 && rp + 8 > 65536)) { return 0 - 1 - i; }
+        _ = if (op == 2) { mm_store(at, ld8(q + 1), ld64(q + 8)) } else { st64(r + rp, mm_load(at, ld8(q + 1))) };
+        return ds_batch(tab, maps, wr, dmai, efd, m, b, blen, pos + 16, r, if (op == 1) { rp + 8 } else { rp }, i + 1);
+    }
+    if (op == 3) {
+        Int at = ds_run_at(tab, maps, dmai, mi, off, v);
+        if (at == 0 || rp + v > 65536) { return 0 - 1 - i; }
+        _ = mcopy(r + rp, at, v);
+        return ds_batch(tab, maps, wr, dmai, efd, m, b, blen, pos + 16, r, rp + v, i + 1);
+    }
+    if (op == 4) {
+        Int at = ds_run_at(tab, maps, dmai, mi, off, v);
+        if (at == 0 || wr != 1 || pos + 16 + v > blen) { return 0 - 1 - i; }
+        _ = mcopy(at, q + 16, v);
+        return ds_batch(tab, maps, wr, dmai, efd, m, b, blen, pos + 16 + v, r, rp, i + 1);
+    }
+    if (op == 5) {
+        if (efd < 0 || v < 0 || v > 60000 || rp + 8 > 65536) { return 0 - 1 - i; }
+        _ = st64(r + rp, ds_wait(efd, v, m));
+        return ds_batch(tab, maps, wr, dmai, efd, m, b, blen, pos + 16, r, rp + 8, i + 1);
+    }
+    return 0 - 1 - i;
+}
+
 Int ds_serve(Int tab, Int maps, Int wr, Int ppid, Int m, Int dmai, Int efd) {
     Int r = hs_recv_cred(3, m, 0, 16, ppid);
     if (r != 16) { return native_child_exit(if (r == 0) { 0 } else { 125 }); }
@@ -2892,6 +3044,21 @@ Int ds_serve(Int tab, Int maps, Int wr, Int ppid, Int m, Int dmai, Int efd) {
         _ = st8(m + 16, if (fits) { 0 } else { 1 }) + st64(m + 17, 0);
         if (!native_write(m + 16, 0, 9)) { return native_child_exit(125); }
         if (fits && op == 3 && !native_write(at, 0, len)) { return native_child_exit(125); }
+        return ds_serve(tab, maps, wr, ppid, m, dmai, efd);
+    }
+    // Several operations at once (6): their bytes follow, as many as
+    // m + 8 says; made in order, answered together. A batch the host
+    // cannot take whole ends the session, as a refused write does.
+    if (op == 6) {
+        Int blen = le_get(m + 8, 4);
+        if (blen < 16 || blen > 65536) { return native_child_exit(125); }
+        Int b = m + 128;
+        Int rr = m + 128 + 65536;
+        if (hs_recv_cred(3, b, 0, blen, ppid) != blen) { return native_child_exit(125); }
+        Int done = ds_batch(tab, maps, wr, dmai, efd, m, b, blen, 0, rr, 0, 0);
+        _ = st8(m + 16, if (done >= 0) { 0 } else { 1 }) + st64(m + 17, if (done >= 0) { done } else { 0 - 1 - done });
+        if (!native_write(m + 16, 0, 9)) { return native_child_exit(125); }
+        if (done > 0 && !native_write(rr, 0, done)) { return native_child_exit(125); }
         return ds_serve(tab, maps, wr, ppid, m, dmai, efd);
     }
     // Wait for the device's interrupt (5): the time at m + 8.

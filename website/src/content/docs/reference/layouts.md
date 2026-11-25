@@ -330,6 +330,43 @@ vector 0, which the host turns into an event before its filter is
 installed; the driver points its queues at that vector. A device
 without MSI-X has none to wait for (`BadInput`), and its driver polls.
 
+#### Batches
+
+Every access of a session is a message to its host and its answer. A
+batch sends several operations in one message; the host makes them in
+order and answers once, so a request to a device is a crossing or two.
+Each register of a block with sessions also gets its access as an
+operation:
+
+```resid
+List(DevOp) ops = [
+    dma_write_op(m, at_header, header),                // bytes into the device's memory
+    slot_head_store(slot, Half {.v = 0}),              // a register, or a block placed in memory
+    ring_head_idx_store(avail, Half {.v = next}),
+    notify_queue_store(bell, Half {.v = 0}),
+    dma_wait_op(1000),                                 // sleep for the interrupt, in the host
+    ring_head_idx_load(used),
+    dma_read_op(m, at_data, 512)
+];
+List(DevOut) outs = device_batch(m.id, ops)?;
+Half used = ring_head_idx_of(outs, 1)?;               // output 0 is the wait's count
+```
+
+| Generated for register `r` of block `T` | |
+|---|---|
+| `t_r_load(s)` | the load as a `DevOp` |
+| `t_r_store(s, v)` | the store as a `DevOp` |
+| `t_r_of(outs, i)` | the load's answer, output `i` of the batch, as the register's type |
+
+`dma_read_op`, `dma_write_op` and `dma_wait_op` are the other
+operations. The outputs are one for each load and wait (a number) and
+each read (bytes), in the order of the operations; stores and writes
+give none. `device_batch(id, ops)` needs `device`;
+`device_batch_ro(id, ops)` takes a batch that neither stores nor writes
+under `device(readonly)`. A batch is at most 256 operations, 64 KiB of
+them and 64 KiB of answers. When the host refuses an operation, the
+batch stops there and those before it were made.
+
 Without a session, each access runs in a device host of its own, like every device call:
 the host maps the device's memory, installs its filter, makes the one
 load or store and exits. It costs about what a device call does (2 ms),
