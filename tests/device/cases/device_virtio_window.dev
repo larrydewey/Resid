@@ -12,3 +12,6 @@ pub DmaDev fx_rng_dma() { return DmaDev {.name = "fx.virtio_rng", .vendor = 0x1a
 
 // A virtio block device (type 2: 1af4:1042), given 64 KiB.
 pub DmaDev fx_blk_dma() { return DmaDev {.name = "fx.virtio_blk", .vendor = 0x1af4, .device = 0x1042, .size = 65536, .dma = 65536, .iova = 0x100000, .stability = OutOfTree}; }
+
+// A virtio network device (type 1: 1af4:1041), given 64 KiB.
+pub DmaDev fx_net_dma() { return DmaDev {.name = "fx.virtio_net", .vendor = 0x1af4, .device = 0x1041, .size = 65536, .dma = 65536, .iova = 0x100000, .stability = OutOfTree}; }

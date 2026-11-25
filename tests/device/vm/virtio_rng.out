@@ -13,3 +13,7 @@ read it back: status 0, the same bytes: true
 200 of 200 reads, then 200 of 200 with the descriptors left alone, then 200 of 200 in one message each
 16 writes in flight: 16 succeeded
 16 reads in flight: 16 brought back what was written
+-- a network
+address 52:54:00:12:34:56
+sent an ARP request for 10.0.2.2
+received an ARP reply: 10.0.2.2 is at 52:55:0a:00:02:02

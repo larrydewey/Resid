@@ -1,0 +1,214 @@
+// A virtio network device, driven: run only by tests/device/virtio_vm.sh,
+// in a virtual machine with an IOMMU, as root, on a device bound to
+// vfio-pci. It RESETS the device it finds and SENDS one frame.
+//
+// The first device here with traffic both ways (Virtual I/O Device 1.2,
+// §5.1): two queues in one session, one the device fills with frames it
+// receives and one the driver fills with frames to send. The driver
+// offers a buffer for a frame, sends an ARP request for the machine's
+// gateway, sleeps for the interrupt, and reads the reply the network
+// sent back.
+import "dev/pci.resid";
+import "dev/virtio_pci.resid";
+import "dev/fx_device_virtio_window.resid";
+
+@word(16) type Half = { UInt(16) v; };
+@word(32) type Word = { UInt(32) v; };
+@word(64) type Wide = { UInt(64) v; };
+
+@word(8)
+type Status = {
+    Bool acknowledge;
+    Bool driver;
+    Bool driver_ok;
+    Bool features_ok;
+    @reserved(2);
+    DeviceOwned(Bool) needs_reset;
+    Bool failed;
+};
+
+// The common configuration (§4.1.4.3).
+@registers(size = 0x38, session = device)
+type Common = {
+    @at(0x00) Word   device_feature_select;
+    @at(0x04) Word   device_feature;
+    @at(0x08) Word   driver_feature_select;
+    @at(0x0c) Word   driver_feature;
+    @at(0x10) Half   config_msix_vector;
+    @at(0x14) Status device_status;
+    @at(0x16) Half   queue_select;
+    @at(0x18) Half   queue_size;
+    @at(0x1a) Half   queue_msix_vector;
+    @at(0x1c) Half   queue_enable;
+    @at(0x1e) Half   queue_notify_off;
+    @at(0x20) Wide   queue_desc;
+    @at(0x28) Wide   queue_driver;
+    @at(0x30) Wide   queue_device;
+};
+
+// Where a queue is notified: its number, written.
+@registers(size = 2, session = device)
+type Notify = { @at(0) Half queue; };
+
+// The device's own configuration (§5.1.4): its address, six bytes.
+@registers(size = 6, session = device)
+type NetConfig = { @at(0) Word mac_low; @at(4) Half mac_high; };
+
+// The queue's parts, placed in the device's memory (§2.7).
+@registers(size = 16, session = device)
+type Desc = { @at(0) Wide addr; @at(8) Word len; @at(12) Half flags; @at(14) Half next; };
+
+@registers(size = 4, session = device)
+type RingHead = { @at(0) Half flags; @at(2) Half idx; };
+
+@registers(size = 2, session = device)
+type Slot = { @at(0) Half head; };
+
+// The first entry of a used ring: which chain, and how many bytes the
+// device wrote.
+@registers(size = 8, session = device)
+type UsedEntry = { @at(0) Word id; @at(4) Word len; };
+
+@device(dma = fx_net_dma)
+type Net = { Common common; Notify notify; NetConfig config; };
+
+// The memory: queue 0 (frames in) in the first three pages, queue 1
+// (frames out) in the next three, then a buffer for each.
+Int at_queue(Int q) { return 12288 * q; }
+Int at_in() { return 24576; }
+Int at_out() { return 28672; }
+
+Status status(Bool ack, Bool drv, Bool feat, Bool ok) { return Status {.acknowledge = ack, .driver = drv, .driver_ok = ok, .features_ok = feat, .failed = false}; }
+
+List(UInt(8)) le(Int v, Int n, List(UInt(8)) acc) { return if (n <= 0) { acc } else { le(v >> 8, n - 1, acc.concat([(UInt(8)) (v & 255)])) }; }
+
+List(UInt(8)) zeros(Int n, List(UInt(8)) acc) { return if (n <= 0) { acc } else { zeros(n - 1, acc.concat([0])) }; }
+
+// Queue `qi` set up at at_queue(qi), eight entries, interrupting on
+// vector 0. Returns where it is notified from (its notify offset).
+@requires(device)
+Result(Int, DeviceError) queue(NetSession s, Int qi) {
+    CommonSession c = s.common;
+    Int io = s.dma.iova + at_queue(qi);
+    Bool q0 = common_write_queue_select(c, Half {.v = (UInt(16)) qi})?;
+    Half offered = common_read_queue_size(c)?;
+    Bool q1 = if (offered.v > 8) { common_write_queue_size(c, Half {.v = 8})? } else { true };
+    Bool m1 = common_write_queue_msix_vector(c, Half {.v = 0})?;
+    Bool q2 = common_write_queue_desc(c, Wide {.v = (UInt(64)) io})?;
+    Bool q3 = common_write_queue_driver(c, Wide {.v = (UInt(64)) (io + 4096)})?;
+    Bool q4 = common_write_queue_device(c, Wide {.v = (UInt(64)) (io + 8192)})?;
+    Half noff = common_read_queue_notify_off(c)?;
+    Bool q5 = common_write_queue_enable(c, Half {.v = 1})?;
+    return Ok((Int) noff.v);
+}
+
+// One buffer offered on queue `qi`, as its descriptor 0 and the first
+// slot of its ring: operations for a batch. `flags` 2 when the device
+// writes the buffer.
+List(DevOp) offer(NetSession s, Int qi, Int at, Int len, Int flags) {
+    DmaRegion m = s.dma;
+    DescSession d = desc_in(m, at_queue(qi));
+    return [
+        desc_addr_store(d, Wide {.v = (UInt(64)) (m.iova + at)}),
+        desc_len_store(d, Word {.v = (UInt(32)) len}),
+        desc_flags_store(d, Half {.v = (UInt(16)) flags}),
+        desc_next_store(d, Half {.v = 0}),
+        slot_head_store(slot_in(m, at_queue(qi) + 4096 + 4), Half {.v = 0}),
+        ring_head_idx_store(ring_head_in(m, at_queue(qi) + 4096), Half {.v = 1})
+    ];
+}
+
+NotifySession bell(NetSession s, Int noff, Int step) { return NotifySession {.id = s.notify.id, .map = s.notify.map, .base = s.notify.base + noff * step, .len = 2}; }
+
+// An ARP request (RFC 826) from `mac` at 10.0.2.15 for 10.0.2.2, after
+// the twelve bytes every frame to the device starts with (§5.1.6): to
+// everyone, type 0x0806; Ethernet and IPv4, a request.
+List(UInt(8)) arp_request(List(UInt(8)) mac) {
+    List(UInt(8)) none = [];
+    List(UInt(8)) all = [255, 255, 255, 255, 255, 255];
+    List(UInt(8)) kind = [8, 6, 0, 1, 8, 0, 6, 4, 0, 1];
+    List(UInt(8)) me = [10, 0, 2, 15];
+    List(UInt(8)) gateway = [10, 0, 2, 2];
+    List(UInt(8)) frame = all.concat(mac).concat(kind).concat(mac).concat(me).concat(zeros(6, none)).concat(gateway);
+    return zeros(12, none).concat(frame).concat(zeros(60 - frame.len(), none));
+}
+
+Str hex2(Int v) { return f"{v:hex, zero, width 2}"; }
+
+Str mac_text(List(UInt(8)) b, Int from) { return hex2((Int) b[from]) + ":" + hex2((Int) b[from + 1]) + ":" + hex2((Int) b[from + 2]) + ":" + hex2((Int) b[from + 3]) + ":" + hex2((Int) b[from + 4]) + ":" + hex2((Int) b[from + 5]); }
+
+// What a received frame is, from the byte after the device's twelve.
+Str describe(List(UInt(8)) f) {
+    if (f.len() < 12 + 42) { return f"a frame of {f.len()} bytes"; }
+    Bool arp = (Int) f[24] == 8 && (Int) f[25] == 6;
+    Bool reply = (Int) f[32] == 0 && (Int) f[33] == 2;
+    if (!arp || !reply) { return "a frame that is not an ARP reply"; }
+    return f"an ARP reply: {f[40]}.{f[41]}.{f[42]}.{f[43]} is at " + mac_text(f, 34);
+}
+
+// Sleep for interrupts until queue 0's used index is 1.
+@requires(device)
+Result(Int, DeviceError) arrived(NetSession s, Int left) {
+    List(DevOut) o = device_batch(s.dma.id, [dma_wait_op(1000), ring_head_idx_load(ring_head_in(s.dma, at_queue(0) + 8192))])?;
+    Half i = ring_head_idx_of(o, 1)?;
+    if ((Int) i.v >= 1 || left <= 0) { return Ok((Int) i.v); }
+    return arrived(s, left - 1);
+}
+
+@requires(device)
+Result(Str, DeviceError) drive(NetSession s, Int step) {
+    CommonSession c = s.common;
+    Bool a0 = common_write_device_status(c, status(false, false, false, false))?;
+    Bool a1 = common_write_device_status(c, status(true, false, false, false))?;
+    Bool a2 = common_write_device_status(c, status(true, true, false, false))?;
+    // Feature 5 (the device has an address), and 32 and 33 as before.
+    Bool b0 = common_write_device_feature_select(c, Word {.v = 0})?;
+    Word f0 = common_read_device_feature(c)?;
+    Bool b1 = common_write_device_feature_select(c, Word {.v = 1})?;
+    Word f1 = common_read_device_feature(c)?;
+    Bool b2 = common_write_driver_feature_select(c, Word {.v = 0})?;
+    Bool b3 = common_write_driver_feature(c, Word {.v = f0.v & 32})?;
+    Bool b4 = common_write_driver_feature_select(c, Word {.v = 1})?;
+    Bool b5 = common_write_driver_feature(c, Word {.v = f1.v & 3})?;
+    Bool b6 = common_write_device_status(c, status(true, true, true, false))?;
+    Status agreed = common_read_device_status(c)?;
+    if (!agreed.features_ok) { return Ok("the device did not accept the features"); }
+    Bool m0 = common_write_config_msix_vector(c, Half {.v = 65535})?;
+    Int in_off = queue(s, 0)?;
+    Int out_off = queue(s, 1)?;
+    Bool up = common_write_device_status(c, status(true, true, true, true))?;
+    Word lo = net_config_read_mac_low(s.config)?;
+    Half hi = net_config_read_mac_high(s.config)?;
+    List(UInt(8)) none = [];
+    List(UInt(8)) mac = le((Int) hi.v, 2, le((Int) lo.v, 4, none));
+    // One message: a buffer for a frame in, the frame out, both bells.
+    List(DevOp) send = [dma_write_op(s.dma, at_out(), arp_request(mac))];
+    List(DevOp) bells = [notify_queue_store(bell(s, in_off, step), Half {.v = 0}), notify_queue_store(bell(s, out_off, step), Half {.v = 1})];
+    List(DevOut) sent = device_batch(s.dma.id, offer(s, 0, at_in(), 2048, 2).concat(send).concat(offer(s, 1, at_out(), 72, 0)).concat(bells))?;
+    Int got = arrived(s, 20)?;
+    if (got < 1) { return Ok("address " + mac_text(mac, 0) + "\nno frame arrived"); }
+    Word wrote = used_entry_read_len(used_entry_in(s.dma, at_queue(0) + 8192 + 4))?;
+    Int n = if ((Int) wrote.v > 2048) { 2048 } else { (Int) wrote.v };
+    List(UInt(8)) frame = dma_read(s.dma, at_in(), n)?;
+    Bool r0 = common_write_device_status(c, status(false, false, false, false))?;
+    return Ok("address " + mac_text(mac, 0) + "\nsent an ARP request for 10.0.2.2\nreceived " + describe(frame));
+}
+
+@requires(device)
+Result(Str, DeviceError) run(PciAddr a) {
+    PciWindow wc = virtio_pci_window(a, virtio_cfg_common())?;
+    PciWindow wn = virtio_pci_window(a, virtio_cfg_notify())?;
+    PciWindow wd = virtio_pci_window(a, virtio_cfg_device())?;
+    Int step = virtio_pci_notify_step(a)?;
+    Result(Str, DeviceError) done = net_session(NetWindows {.common = wc, .notify = wn, .config = wd}, lambda(s) { drive(s, step) })?;
+    return done;
+}
+
+@requires(device)
+Int main() {
+    List(PciAddr) none = [];
+    List(PciAddr) found = match (pci_find(virtio_pci_vendor(), virtio_pci_device_id(1))) { Ok(fs) => fs, Err(e) => none };
+    if (found.len() == 0) { println("no virtio network device here"); return 0; }
+    println(match (run(found[0])) { Ok(t) => t, Err(e) => device_error_text(e) });
+    return 0;
+}

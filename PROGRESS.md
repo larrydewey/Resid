@@ -323,6 +323,14 @@ region, with no diagnostic.
   laptop varied with the machine's load (3.7 µs, then 10.2 µs); the
   message room's size was ruled out as a cause, and
   `device_session.c` now times the best of five passes.
+- **Stage N: a network.** `tests/device/vm/virtio_net.resid`, again
+  with no change to compiler or runtime: two queues in one session.
+  The driver reads the device's address, and in one batch offers a
+  buffer on the receive queue, puts an ARP request for the gateway on
+  the transmit queue and rings both; it sleeps for the interrupt and
+  reads the reply QEMU's network sent (10.0.2.2 at 52:55:0a:00:02:02).
+  The first device here with traffic both ways. Not yet: more than one
+  frame; checksums or anything above Ethernet.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.
