@@ -308,12 +308,19 @@ For BurrowDB, which is moving its keys, rows and pages to packed bytes.
   rest (memcmp). `resid_bytes_cmp` now finds the first differing byte of
   a word from the XOR's lowest set bit instead of a byte loop. Test:
   `tests/conformance/cases/bytes_find`.
-- **Loop-region compaction slack** (`runtime/rt/region.resid`, `rg_slack`):
-  a loop region is compacted once it holds more than twice its live pages
-  plus 8 (was 2). A loop carrying a structure that keeps growing copies it
-  at every compaction, so this copies a small live set less often: a
-  10,000-insert loop in BurrowDB compacts 14 times instead of 34 (17% of
-  its instructions), for up to 6 MB more held by such a loop.
+- **Loop generations** (`runtime/rt/region.resid`, Generations; `compiler/lower.resid`,
+  `lr_gen_ok`, `lr_cur_after`): a loop's first compaction moves what is live
+  into an old region O, which takes the loop's depth, and the loop's region
+  L starts again above it; later compactions move only L's live values into
+  O, and both move into a fresh O once O has doubled since its last full
+  compaction (`rg_old_slack`). L is compacted past `rg_slack()` = 4 pages.
+  The compiler asks for it (`resid_loop_move` steps 11 and 12) only for a
+  loop whose carried values hold no builder, since a push writes into a
+  builder's buffer with no region test; and after a compaction it copies a
+  cur record (written in place without a young test) back into L. A
+  10,000-insert loop in BurrowDB spends 26M instructions compacting (90M
+  before, 45M with a slack of 8 pages) at the original 25 MB peak (33 MB
+  with that slack). Test: `tests/runtime/mem/generations.resid`.
 - **`resid_bytes_append(b, xs, from, n)`** and **`resid_crc32c(xs, from, n, state)`**
   (`runtime/rt/bytelist.resid`): bytes `from..from + n` of a packed list
   pushed onto a `ListBuf(UInt(8))` with room made once and one copy; and

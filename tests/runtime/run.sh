@@ -378,6 +378,19 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/builder_loops.resid -o "$W/build
 else
     fail=$((fail + 1)); echo "FAIL builders in loop regions: $(tail -1 "$W/builder_loops.out" "$W/builder_loops.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# Loop generations (region.resid, Generations): a loop carrying a structure
+# that keeps growing (a list kept every 97 steps, a map of 500 entries
+# rewritten), a loop inside a loop, and one returning through a function.
+# Its first compaction makes an old region, later ones move only what is
+# new into it, and a full one runs when the old region has doubled.
+# Measured: 39 MB.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/generations.resid -o "$W/generations") > "$W/generations.log" 2>&1 \
+    && RESID_MEM_LIMIT=96 timeout 120 "$W/generations" > "$W/generations.out" 2>&1 \
+    && [ "$(tr '\n' '|' < "$W/generations.out")" = "4124 27719 500 v399507-garbage  v399999-garbage  1183175|400 10 514|3093907677|" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL loop generations: $(tail -1 "$W/generations.out" "$W/generations.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # Volatile raw loads and stores (lower.resid): two processes pass a counter
 # through a shared page, each polling with resid_raw_loadv64; a plain load
 # is hoisted out of the loop and the program never ends. Built from its own

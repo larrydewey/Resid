@@ -1,0 +1,55 @@
+// Loop regions with an old generation: a carried structure that grows,
+// one whose old entries die (full compactions), nested loops, and results
+// returned through an exit at depth 0 and above it.
+
+type St = { List(Str) kept; Map(Int, Str) live; Int n; };
+
+Str junk(Int i) { return f"garbage {i} " + str_repeat("x", i % 50); }
+
+St step(St s, Int i) {
+    Str g = junk(i);
+    List(Str) k2 = if (i % 97 == 0) { s.kept.concat([f"k{i}"]) } else { s.kept };
+    Map(Int, Str) m2 = s.live.insert(i % 500, f"v{i}-" + str_slice(g, 0, 8));
+    return St {.kept = k2, .live = m2, .n = s.n + str_len(g) % 7};
+}
+
+St run(St s, Int i, Int n) {
+    if (i >= n) { return s; }
+    return run(step(s, i), i + 1, n);
+}
+
+Int sum_len(List(Str) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return sum_len(xs, i + 1, acc + str_len(xs[i]));
+}
+
+// A loop inside a loop: each outer step runs an inner loop that builds a
+// list it returns.
+List(Int) inner(List(Int) acc, Int j, Int n) {
+    if (j >= n) { return acc; }
+    return inner(acc.concat([j * j % 1000]), j + 1, n);
+}
+
+List(Int) outer(List(Int) acc, Int i, Int n) {
+    if (i >= n) { return acc; }
+    List(Int) one = inner([], 0, 200);
+    Int x = one[i % 200] + str_len(junk(i));
+    return outer(if (i % 50 == 0) { acc.concat([x]) } else { acc }, i + 1, n);
+}
+
+// The same run, called from a function (its exit at a depth above 0).
+Int nested(Int n) {
+    St s = run(St {.kept = [], .live = {}, .n = 0}, 0, n);
+    return s.kept.len() * 1000000 + sum_len(s.kept, 0, 0) + s.n;
+}
+
+Int main() {
+    St s = run(St {.kept = [], .live = {}, .n = 0}, 0, 400000);
+    Str a = s.live.get(7) else { "none" };
+    Str b = s.live.get(499) else { "none" };
+    println(f"{s.kept.len()} {sum_len(s.kept, 0, 0)} {s.live.len()} {a} {b} {s.n}");
+    List(Int) o = outer([], 0, 20000);
+    println(f"{o.len()} {o[0]} {o[o.len() - 1]}");
+    println(f"{nested(300000)}");
+    return 0;
+}
