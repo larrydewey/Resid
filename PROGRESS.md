@@ -390,6 +390,22 @@ region, with no diagnostic.
   device emulation in the way): 0.9 to 1.0 µs a read through the
   accessor, from 1.4 to 1.8 µs. What is left is the typed value the
   accessor returns (its record and its Result), not the access.
+- **Stage S: hardware times, and requests in flight from the driver.**
+  `tests/device/vm_modules.sh` collects the kernel's VFIO modules in
+  load order for `virtio_vm.sh -m`, which now finds the running
+  kernel's image, says whether its times are the machine's (KVM) or an
+  emulation's, and on a machine that does not finish shows QEMU's
+  status and the console (`-v` keeps the kernel's messages). On the
+  laptop under KVM (kernel 7.2.8, best of four runs; the machine was
+  loaded and later runs were up to five times slower): a disk read
+  589 µs with 22 messages from the program, 216 with 8, 99 as one
+  batch, 92 asked of the driver by message, 25 by the driver alone; a
+  read of the device's memory through the generated accessor in the
+  driver 21 ns; a read of a virtio register 7 µs, which is the guest's
+  exit to QEMU. One run of five did not finish in the first machine and
+  was not seen again. The disk's driver now also keeps sixteen reads in
+  flight (a queue of 64, chains laid down once): in the emulated
+  machine 20 µs a read against 182 one at a time.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.
