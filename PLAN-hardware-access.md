@@ -428,6 +428,17 @@ known only when the program runs.
   pci_write = dw)`, gets the same functions with the address first:
   `t_read_r(addr)`, `t_write_r(addr, v)`, `t_take_r(addr)`.
 
+**A block the device places** (decided 2026-11-25). Virtio says in its
+capability list which resource and offset each block is at. Chosen: a
+run-time window (address, resource, base, length) from a library
+function that reads the list; the descriptor names the ids and a
+maximum size; the host checks ids and bounds as before. Which resource
+of the named device is touched is no longer known at compile time.
+Rejected: one fixed layout per hypervisor (breaks on the next one); the
+host parsing capabilities (device-family logic in the most trusted
+code). Built as stage F and run against a virtio entropy device in a
+virtual machine.
+
 Built (PROGRESS.md, stage E): `device.mmio_pci`, `device.pci_list`,
 `lib/dev/pci.resid`. What the check does and does not give: the ids
 are read after the host's filter is in and the resource is mapped but

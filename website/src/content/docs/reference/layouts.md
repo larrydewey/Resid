@@ -220,6 +220,24 @@ the descriptor's before it touches its memory, and answers `Unsupported`
 when they differ, so an address chosen at run time reaches no other kind
 of device.
 
+Some devices say only at run time where in their memory a block is
+(virtio lists its blocks in its PCI capabilities). Such a block is
+declared with `window` and `window_write`, naming `MmioWin` descriptors,
+and its functions take a `PciWindow`: the address, the resource, and the
+block's base and length there.
+
+```resid
+@registers(size = 0x38, window = virtio_rng, window_write = virtio_rng_w)
+type Common = { @at(0x14) Status device_status; };
+
+PciWindow w = virtio_pci_window(addr, virtio_cfg_common())?;   // lib/dev/virtio_pci.resid
+Status s = common_read_device_status(w)?;
+```
+
+The ids are checked as before. Which resource of that device is touched
+is then run-time data: the provenance record names the device, not the
+resource.
+
 Each access runs in a device host of its own, like every device call:
 the host maps the device's memory, installs its filter, makes the one
 load or store and exits. It costs about what a device call does (2 ms),

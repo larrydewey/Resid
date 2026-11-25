@@ -110,3 +110,15 @@ pub Result(List(DevOut), DeviceError) device_engine_mmio_pci_w(MmioPci op, PciAd
     Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
     return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
 }
+
+/// Makes one load or store inside the window `w` through a writing
+/// MmioWin descriptor `op`. Compiler-generated calls only; needs the full
+/// `device` grant.
+@descriptor(engine_mmio_win_w)
+@requires(device)
+pub Result(List(DevOut), DeviceError) device_engine_mmio_win_w(MmioWin op, PciWindow w, MmioAccess x) {
+    DvReq r = dv_prep_mmio_win(op, w, x);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
+}

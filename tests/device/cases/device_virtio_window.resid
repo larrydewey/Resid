@@ -1,0 +1,54 @@
+// A block a device places at run time (PLAN-hardware-access.md §11): a
+// virtio device's capability list says which resource and offset its
+// common configuration is at, and a register block declared
+// `@registers(window = ...)` is read at that window. This case touches no
+// device: it parses a configuration space written out here, and asks for
+// windows that the library or the host refuses. A real device is driven
+// by tests/device/virtio_vm.sh, in a virtual machine.
+import "dev/virtio_pci.resid";
+import "dev/fx_device_virtio_window.resid";
+
+@word(8) type Status = { Bool acknowledge; Bool driver; Bool driver_ok; Bool features_ok; @reserved(2); DeviceOwned(Bool) needs_reset; Bool failed; };
+
+@registers(size = 0x38, window = fx_rng, window_write = fx_rng_w)
+type Common = { @at(0x14) Status device_status; };
+
+List(UInt(8)) zeros(Int n, List(UInt(8)) acc) { return if (n <= 0) { acc } else { zeros(n - 1, acc.concat([0])) }; }
+
+// A capability list at 0x40: the notify block first, the common block second.
+Str parsed() {
+    List(UInt(8)) none = [];
+    List(UInt(8)) has_list = [16];
+    List(UInt(8)) first = [0x40];
+    List(UInt(8)) head = zeros(6, none).concat(has_list).concat(zeros(45, none)).concat(first).concat(zeros(11, none));
+    List(UInt(8)) notify = [9, 0x54, 20, 2, 4, 0, 0, 0, 0, 0x30, 0, 0, 0, 0x10, 0, 0, 4, 0, 0, 0];
+    List(UInt(8)) common = [9, 0, 16, 1, 4, 0, 0, 0, 0, 0x10, 0, 0, 0x38, 0, 0, 0];
+    List(UInt(8)) c = head.concat(notify).concat(common);
+    Str a = match (virtio_pci_cap(c, virtio_cfg_common())) { Some(w) => f"common: resource {w.resource} base {w.base} len {w.len}", None => "common: none" };
+    Str b = match (virtio_pci_cap(c, virtio_cfg_isr())) { Some(w) => "isr: found", None => "isr: none" };
+    Str n = match (virtio_pci_cap(head, virtio_cfg_common())) { Some(w) => "no list: found", None => "no list: none" };
+    return a + "\n" + b + "\n" + n;
+}
+
+Str got(Result(Status, DeviceError) r) { return match (r) { Ok(s) => "read", Err(e) => device_error_text(e) }; }
+
+@requires(device(readonly))
+Str refusals() {
+    // No function is at this address.
+    PciAddr gone = PciAddr {.domain = 0xffff, .bus = 255, .device = 31, .function = 7};
+    Str absent = got(common_read_device_status(PciWindow {.addr = gone, .resource = 4, .base = 0x1000, .len = 0x38}));
+    // Refused by the library before any host is started: a resource past
+    // 5, a window past the descriptor's size, one the register is outside.
+    Str res = got(common_read_device_status(PciWindow {.addr = gone, .resource = 6, .base = 0, .len = 0x38}));
+    Str big = got(common_read_device_status(PciWindow {.addr = gone, .resource = 4, .base = 0x10000, .len = 0x38}));
+    Str small = got(common_read_device_status(PciWindow {.addr = gone, .resource = 4, .base = 0, .len = 0x14}));
+    Str cfg = match (virtio_pci_window(gone, virtio_cfg_common())) { Ok(w) => "found", Err(e) => device_error_text(e) };
+    return absent + "\n" + res + "\n" + big + "\n" + small + "\n" + cfg;
+}
+
+@requires(device(readonly))
+Int main() {
+    println(parsed());
+    println(refusals());
+    return 0;
+}

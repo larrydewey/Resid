@@ -1,0 +1,8 @@
+common: resource 4 base 4096 len 56
+isr: none
+no list: none
+fx.virtio_rng: device absent
+fx.virtio_rng: bad input: a window is in resource 0 to 5
+fx.virtio_rng: bad input: the window is not inside the descriptor's size
+fx.virtio_rng: bad input: the access is not at a multiple of its width inside the window
+virtio_pci.config: device absent

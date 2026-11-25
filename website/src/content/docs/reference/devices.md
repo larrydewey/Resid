@@ -210,6 +210,17 @@ device host reads the ids of the function at the address it is given,
 through the one directory it opened, and touches the function's memory
 only when they are the descriptor's.
 
+### `virtio_pci`
+
+A virtio device says where its register blocks are in its PCI
+capability list, and hypervisors differ. `virtio_pci_window(addr,
+virtio_cfg_common())` reads the list and gives the block as a
+`PciWindow`, for the accessors of a register block declared
+`@registers(window = ...)`. It needs the privilege to read the whole
+configuration space (`Unsupported` without it). `virtio_pci_cap` is the
+pure parser. `tests/device/virtio_vm.sh` brings a virtio entropy device
+up in a virtual machine this way.
+
 ### `pci_tsm`
 
 `pci_tsm_present()` says whether the kernel has a platform TSM
@@ -262,6 +273,7 @@ Device modules are written over these verbs, each giving
 | `device.read_pci_attr(op, addr)` | `PciAttr`: attribute path under a PCI device and maximum | `PciAddr` (domain, bus, device, function) |
 | `device.mmio(op, access)` | `Mmio`: a device's memory as a file to map (a PCI function's `resource<N>`, or a fixture under `/dev/shm/`), its size, whether stores are made | `MmioAccess`: a load, or a store of a value, of 1, 2, 4 or 8 bytes at an offset |
 | `device.mmio_pci(op, addr, access)` | `MmioPci`: the vendor and device ids of the functions it is for, which resource (0 to 5), its size, whether stores are made | `PciAddr`, then an `MmioAccess`. The host reads the ids of the function at that address and makes the access only when they are the descriptor's (`Unsupported` otherwise) |
+| `device.mmio_win(op, window, access)` | `MmioWin`: the vendor and device ids, a maximum size, whether stores are made | `PciWindow` (address, resource, base, length), then an `MmioAccess` inside the window. For a device that says at run time where its registers are; the ids are checked as for `mmio_pci` |
 | `device.pci_list(op)` | `PciList`: the maximum bytes of names | none. The names under `/sys/bus/pci/devices`, a line each |
 | `device.transact_chain(op, cmds, links)` | `Transact` (not secret): command and response maxima | `List(List(UInt(8)))` (1 to 16 commands), `List(Int)` links: quadruples (from step, offset in its response, to step, offset in its command), each 4 bytes copied before the later command is sent |
 | `device.sequence(op, args)` | `Sequence`: ioctl steps on one file, with links | `List(DevIn)` |
