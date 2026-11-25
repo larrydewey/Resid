@@ -42,3 +42,4 @@ bench/**/*.ll
 
 # resid-devgen --matrix / --snapshot kernel checkouts (tools/devgen/kernels.toml).
 tools/devgen/cache/
+tests/runtime/core

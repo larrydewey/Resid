@@ -477,6 +477,23 @@ is repeated per device); views handed out by an open session (the host
 would map after its filter, or the whole resource before). Built as
 stage H. Next, by the same decision: the virtio queue.
 
+**The virtio queue** (decided 2026-11-25). The device reads and writes
+memory the driver gives it.
+
+- **DMA through VFIO and an IOMMU**, as §1 already required: the
+  function is bound to vfio-pci, the host maps one buffer at
+  device-visible addresses through the IOMMU, and reaches the registers
+  through VFIO as well. A wrong address from a driver reaches nothing
+  else. Rejected for now: physical addresses without an IOMMU, even as
+  a test-only waiver.
+- **The queue's memory lives in the host** and the program reads and
+  writes it by messages, as it does registers, with a bulk copy for
+  data. Nothing is shared between program and host, and the host knows
+  nothing of queues: their layout is packed types in the program.
+  Deferred: a mapping shared with the program (needs typed linear
+  regions first).
+- **Completion by polling** the used index. Interrupts as events later.
+
 Built (PROGRESS.md, stage E): `device.mmio_pci`, `device.pci_list`,
 `lib/dev/pci.resid`. What the check does and does not give: the ids
 are read after the host's filter is in and the resource is mapped but
