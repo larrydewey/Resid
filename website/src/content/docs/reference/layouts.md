@@ -259,7 +259,9 @@ Result(Status, DeviceError) r = common_session(w, lambda(s) { common_read_device
 | `common_session_ro(w, f)` | the same, for loads only | `device(readonly)` |
 | `common_read_r(s)`, `common_write_r(s, v)`, `common_take_r(s)` | the accessors, over the session | as for any block |
 
-The session ends when the scoped function returns, whatever `f` gave; a
+Only these scoped functions open a session: `device.session_open`
+written by hand is `E0260`, so every session has an end. The session
+ends when the scoped function returns, whatever `f` gave; a
 session value kept past that names nothing, and an accessor called with
 it gives `BadInput`. The host checks the device's ids once, when the
 session opens, and every access against the window it mapped and

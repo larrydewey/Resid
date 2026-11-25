@@ -4975,7 +4975,7 @@ Int gk_finish(GK k0, List(Int) fnode, Str src, Str smap, Str smap0) {
     Bool err5 = gk_authority(k, fnode, facts);
     Bool err6 = gk_internals_at(k, 0, k.nls, smap, gm_prelude_pos(src), false);
     Bool err7 = sec_wide_scan(k, k.tl.keys, k.tl.tys, 0, src, smap);
-    Bool err8 = dv_scan(k, 0, k.nls, src, smap, dv_std_dir(gm_pk(smap0), 0), false);
+    Bool err8 = dv_scan(k, 0, k.nls, src, smap, dv_std_dir(gm_pk(smap0), 0), false) || dv_raw_sessions(k, src, smap);
     Bool err9 = op_scan(k, 0, k.nls, src, smap, op_std_root(gm_pk(smap0), 0), false);
     if (err1 || err2 || err3 || err4 || err5 || err6 || err7 || err8 || err9) { return 1; }
     if (!resid_quiet()) { println("typecheck OK"); }
@@ -6340,6 +6340,48 @@ Bool dv_scan(GK k, Int id, List(Int) nls, Str src, Str smap, Str stddev, Bool ac
         b1 || b2
     };
     return dv_scan(k, id + 1, nls, src, smap, stddev, acc || bad);
+}
+
+// A session is opened only by the scope a register block generates
+// (compiler/word.resid's wd_sess_fn, marked wd_scope_mark), which ends it
+// before it returns: `device.session_open` anywhere else, lib/dev/
+// included, would be a session with no end but the program's. The opens
+// under the marked functions are collected, and any other is E0260.
+Bool dv_is_open(Kg g, Int id) {
+    if (g.ns[id].kind != "mcall" || g.ns[id].text != "session_open" || g.ns[id].nk < 1) { return false; }
+    Int r = kg_kid(g, id, 0);
+    return g.ns[r].kind == "ref" && g.ns[r].text == "device";
+}
+
+Bool dv_raw_sessions(GK k, Str src, Str smap) {
+    if (!dv_any_open(k.g, 0)) { return false; }
+    Map(Int, Int) none = {};
+    return dv_raw_at(k, 0, dv_scoped(k.g, 0, none), src, smap, false);
+}
+
+Bool dv_any_open(Kg g, Int id) {
+    if (id >= g.ns.len()) { return false; }
+    return dv_is_open(g, id) || dv_any_open(g, id + 1);
+}
+
+// The opens under every function that carries the mark.
+Map(Int, Int) dv_scoped(Kg g, Int id, Map(Int, Int) acc) {
+    if (id >= g.ns.len()) { return acc; }
+    Bool marked = g.ns[id].kind == "fn" && str_contains(g.ns[id].aux, wd_scope_mark());
+    return dv_scoped(g, id + 1, if (marked) { dv_opens_under(g, id, 0, acc) } else { acc });
+}
+
+Map(Int, Int) dv_opens_under(Kg g, Int id, Int i, Map(Int, Int) acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    Int c = kg_kid(g, id, i);
+    Map(Int, Int) a1 = if (dv_is_open(g, c)) { acc.insert(c, 1) } else { acc };
+    return dv_opens_under(g, id, i + 1, dv_opens_under(g, c, 0, a1));
+}
+
+Bool dv_raw_at(GK k, Int id, Map(Int, Int) ok, Str src, Str smap, Bool acc) {
+    if (id >= k.g.ns.len()) { return acc; }
+    Bool bad = if (dv_is_open(k.g, id) && !ok.contains(id)) { dv_diag("E0260", "`device.session_open` is written only by a register block: declare the block `@registers(size = N, session = d, session_write = dw)` and call the scope it generates (`t_session(w, f)`), which ends the session when it returns", k.g, id, src, smap) } else { false };
+    return dv_raw_at(k, id + 1, ok, src, smap, acc || bad);
 }
 
 // ─── Opaque types and runtime-record builtins (PLAN-labels.md §6.5) ──

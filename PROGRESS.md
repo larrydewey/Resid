@@ -238,7 +238,11 @@ region, with no diagnostic.
   and `session_write_needs_grant`, and `tests/device/virtio_vm.sh` now
   runs the virtio bring-up through a session too, with 1000 reads of the
   status register through one host. Not yet: one session for several
-  blocks; the driver's own code as the confined process.
+  blocks; the driver's own code as the confined process. A session is
+  opened only by the generated scope: it carries a mark that
+  `wd_expand` refuses in a program's text, and `dv_raw_sessions`
+  (gcheck) refuses any other `device.session_open` (E0260; cases
+  `e0260_session_open_raw`, `err_session_scope_mark`).
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

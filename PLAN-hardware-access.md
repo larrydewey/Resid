@@ -463,9 +463,9 @@ Built as stage G. Two things differ from the first sketch. The scoped
 function is written by the register block (`t_session(w, f)`), not a
 `device.session(...)` verb: the closure's result type is then an
 ordinary generic parameter and the descriptor stays a literal at the
-verb. And `device.session_open` itself can be called by a device module
-directly, without the scope; such a session lasts until the program
-ends it or exits, and a thread holds eight at most.
+verb. `device.session_open` written out by hand is refused (E0260),
+in lib/dev/ too: only the generated scope, which carries a mark no
+program text may contain, opens a session, so every session has an end.
 
 Built (PROGRESS.md, stage E): `device.mmio_pci`, `device.pci_list`,
 `lib/dev/pci.resid`. What the check does and does not give: the ids

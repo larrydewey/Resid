@@ -1,0 +1,9 @@
+// A session is opened only by the scope a register block generates, which
+// ends it: the open written out by hand is refused, in lib/dev/ too (E0260).
+import "dev/fx_e0260_session_open_raw.resid";
+
+@requires(device(readonly))
+Int main() {
+    println(fx_open(PciWindow {.addr = PciAddr {.domain = 0, .bus = 0, .device = 4, .function = 0}, .resource = 0, .base = 0, .len = 16}));
+    return 0;
+}

@@ -700,6 +700,12 @@ Str wd_racc_regs(Str name, Str sn, List(WdR) rs, List(WdT) ts, Str dev, Str devw
     return wd_racc_regs(name, sn, rs, ts, dev, devw, mode, i + 1, acc.push(rd).push(tk).push(wr));
 }
 
+// The annotation on a generated session scope: the one kind of function
+// that may open a session (gcheck's dv_raw_sessions), because it ends the
+// session before it returns. Refused in a program's own text (wd_expand),
+// and spelled in two halves here so that this file is not such a text.
+pub Str wd_scope_mark() { return "@session" + "_scope"; }
+
 // A session block's type and scoped functions. `_ro` opens through the
 // descriptor that only loads; the plain one, there when the block names a
 // writing descriptor, through that.
@@ -712,7 +718,7 @@ Str wd_sess(Str name, Str sn, Str dev, Str devw) {
 }
 
 Str wd_sess_fn(Str fname, Str grant, Str ty, Str sn, Str dev) {
-    return "@requires(" + grant + ")\npub Result(T, DeviceError) " + fname + "(PciWindow __wd_w, T closure(" + ty + ") __wd_f) {\n" +
+    return wd_scope_mark() + "\n@requires(" + grant + ")\npub Result(T, DeviceError) " + fname + "(PciWindow __wd_w, T closure(" + ty + ") __wd_f) {\n" +
         "    List(DevOut) __wd_o = device.session_open(" + dev + "(), __wd_w)?;\n" +
         "    Int __wd_id = match (dv_out_num(__wd_o, 0)) { Some(__wd_v) => __wd_v, None => 0 };\n" +
         "    T __wd_r = __wd_f(" + ty + " {.id = __wd_id, .base = __wd_w.base, .len = __wd_w.len});\n" +
@@ -745,6 +751,9 @@ Str wd_reg_type() { return "\n// a register of word type T: its byte offset in i
 
 /// Expand every word type in the merged text src.
 pub LyR wd_expand(Str src) {
+    // The mark of a generated session scope is this pass's to write.
+    Int forged = str_find(src, wd_scope_mark());
+    if (forged >= 0) { return LyR {.text = src, .code = "E0260", .err = "`" + wd_scope_mark() + "` marks the function a register block generates to open and end a session; it is not written by hand", .at = forged}; }
     if (!str_contains(src, "@word(")) { return LyR {.text = src, .code = "", .err = "", .at = -1}; }
     WdS st = wd_scan(src, WdS {.out = [], .i = 0, .gen = "", .ts = [], .code = "", .err = "", .at = -1});
     if (st.err != "") { return LyR {.text = src, .code = st.code, .err = st.err, .at = st.at}; }

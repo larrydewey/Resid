@@ -1,0 +1,10 @@
+// Fixture for e0260_session_open_raw: a device module that opens a session itself (installed as lib/dev/fx_e0260_session_open_raw.resid).
+import "device.resid";
+
+pub MmioWin fx_card() { return MmioWin {.name = "fx.card", .vendor = 0x1af4, .device = 0x1044, .size = 4096, .write = false, .stability = OutOfTree}; }
+
+// No scope around it: nothing would end this session.
+@requires(device(readonly))
+pub Str fx_open(PciWindow w) {
+    return match (device.session_open(fx_card(), w)) { Ok(o) => "open", Err(e) => device_error_text(e), };
+}

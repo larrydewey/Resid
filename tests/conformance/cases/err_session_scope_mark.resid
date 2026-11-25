@@ -1,0 +1,6 @@
+// The mark of a generated session scope is the compiler's to write: a
+// function that carries it by hand is refused.
+@session_scope
+Int open_one() { return 1; }
+
+Int main() { return open_one(); }
