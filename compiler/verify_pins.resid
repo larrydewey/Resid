@@ -87,7 +87,7 @@ pub List(Str) vp_pins() {
         "x25519.resid=4ae393aa47d5ed7ff504188b888a4c1effa47922798f37042da2a35c12971897",
         "x25519g.resid=37b2a1330996e77a452ab7df621b24a25ccff7227b3502719b9737d35e315fea",
         "x509.resid=177eb4693b09157251d43cc7af6ce83eba8448cd41cec362b27726f1711e4fb7",
-        "rt.ll=6bf8682a61106d5bd0edf492b1002d9e7b1b8a35dd60f0c58ac888155100fbf9",
-        "rt-aarch64.ll=dd749236a02f0a5d1b19ad9d1fc0a9e9f97e71e14d64e701ecb677ff494bb053"
+        "rt.ll=3f3c060865bf8dbd5163fe80a68fa5b8544df68d309b23f714c16cd09c17bfda",
+        "rt-aarch64.ll=9dba5b9e717951f4fd49cb5eb22ba23e62cfc0a230b9d324574f1dc5ee63d7dd"
     ];
 }
