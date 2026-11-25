@@ -421,7 +421,12 @@ pub Int rt_loop_enter() {
 @noinline
 Int loop_push() { return rt_scope_push(); }
 
-Bool lazy_full(Int r) { return ld64(r + 32) > 2 * ld64(r + 40) + 2; }
+// Pages a loop region may grow past twice its live size before it is
+// compacted: a loop carrying a structure that keeps growing copies it
+// again at every compaction, so a small live set is copied less often.
+Int rg_slack() { return 8; }
+
+Bool lazy_full(Int r) { return ld64(r + 32) > 2 * ld64(r + 40) + rg_slack(); }
 
 // Whether the innermost region is full by lazy_full's rule, kept in step
 // where its counts or the depth change: scope push and pop, a compaction,
@@ -444,7 +449,7 @@ pub Bool rt_loop_due(Int l) {
 Bool loop_due_full(Int l) {
     if (ag_scope_depth() == l) { return lazy_full(rec_at(l - 1)) && lazy_push(); }
     Int r = rec_at(l);
-    return ld64(r + 32) > 2 * ld64(r + 40) + 2;
+    return ld64(r + 32) > 2 * ld64(r + 40) + rg_slack();
 }
 
 // rt_loop_due, telling a lazy push apart: 0 nothing, 1 a compaction is
@@ -461,7 +466,7 @@ pub Int rt_loop_due2(Int l) {
 Int loop_due2_full(Int l) {
     if (ag_scope_depth() == l) { return if (lazy_full(rec_at(l - 1)) && !lazy_push()) { 2 } else { 0 }; }
     Int r = rec_at(l);
-    return if (ld64(r + 32) > 2 * ld64(r + 40) + 2) { 1 } else { 0 };
+    return if (ld64(r + 32) > 2 * ld64(r + 40) + rg_slack()) { 1 } else { 0 };
 }
 
 // A carried owned record the loop writes in place without a young test

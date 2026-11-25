@@ -283,6 +283,18 @@ kind 5, missed.
 
 For BurrowDB, which is moving its keys, rows and pages to packed bytes.
 
+- **`resid_bytes_find(a, from, n, x)`** (`runtime/rt/list.resid`): where
+  the bytes of x first occur in a[from..from + n], -1 when nowhere; packed
+  lists look for the first byte a word at a time (memchr), then compare the
+  rest (memcmp). `resid_bytes_cmp` now finds the first differing byte of
+  a word from the XOR's lowest set bit instead of a byte loop. Test:
+  `tests/conformance/cases/bytes_find`.
+- **Loop-region compaction slack** (`runtime/rt/region.resid`, `rg_slack`):
+  a loop region is compacted once it holds more than twice its live pages
+  plus 8 (was 2). A loop carrying a structure that keeps growing copies it
+  at every compaction, so this copies a small live set less often: a
+  10,000-insert loop in BurrowDB compacts 14 times instead of 34 (17% of
+  its instructions), for up to 6 MB more held by such a loop.
 - **`resid_bytes_append(b, xs, from, n)`** and **`resid_crc32c(xs, from, n, state)`**
   (`runtime/rt/bytelist.resid`): bytes `from..from + n` of a packed list
   pushed onto a `ListBuf(UInt(8))` with room made once and one copy; and

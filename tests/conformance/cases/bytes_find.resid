@@ -1,0 +1,16 @@
+// resid_bytes_find: where a byte string first occurs in a range of another.
+List(UInt(8)) bytes(Str s, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= str_len(s)) { return acc.finish(); }
+    return bytes(s, i + 1, acc.push((UInt(8)) str_char_at(s, i)));
+}
+
+List(UInt(8)) b(Str s) { return bytes(s, 0, ListBuf()); }
+
+Int main() {
+    List(UInt(8)) h = b("the cat sat on the mat; the end of the long line that runs past thirty-two bytes");
+    println(f"{resid_bytes_find(h, 0, h.len(), b("the"))} {resid_bytes_find(h, 1, h.len() - 1, b("the"))} {resid_bytes_find(h, 0, h.len(), b("mat;"))}");
+    println(f"{resid_bytes_find(h, 0, h.len(), b("bytes"))} {resid_bytes_find(h, 0, h.len() - 1, b("bytes"))} {resid_bytes_find(h, 0, h.len(), b("dog"))}");
+    println(f"{resid_bytes_find(h, 5, 0, b(""))} {resid_bytes_find(h, 0, 2, b("the"))} {resid_bytes_find(h, 0, h.len(), b("t"))}");
+    println(f"{resid_bytes_cmp(b("abcdefgh1"), 0, 9, b("abcdefgh2"), 0, 9)} {resid_bytes_cmp(b("abcXefghij"), 0, 10, b("abcAefghij"), 0, 10)} {resid_bytes_cmp(b("abcdefghij"), 0, 10, b("abcdefghij"), 0, 10)}");
+    return 0;
+}

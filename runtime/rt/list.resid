@@ -665,8 +665,47 @@ Int bc_check(Int l, Int o, Int n) {
 }
 
 Int bc_words(Int p, Int an, Int q, Int bn, Int i, Int m) {
-    if (i + 8 <= m && ld64(p + i) == ld64(q + i)) { return bc_words(p, an, q, bn, i + 8, m); }
+    if (i + 8 <= m) {
+        Int d = ld64(p + i) ^ ld64(q + i);
+        if (d == 0) { return bc_words(p, an, q, bn, i + 8, m); }
+        // The lowest set bit of the XOR is in the first byte that differs
+        // (the words are read little-endian).
+        Int j = i + resid_raw_popcount((d & (0 - d)) - 1) / 8;
+        return if (ld8(p + j) < ld8(q + j)) { 0 - (j + 1) } else { j + 1 };
+    }
     return bc_tail(p, an, q, bn, i, m);
+}
+
+// resid_bytes_find(a, from, n, x): the first place p in from..from + n -
+// x.len() where the bytes of x occur in a; -1 when they occur nowhere
+// there. Packed lists look for x's first byte a word at a time (memchr)
+// and compare the rest where it is found (memcmp).
+@export("resid_bytes_find", "i64(ptr,i64,i64,ptr)")
+pub Int rt_bytes_find(Int a, Int from, Int n, Int x) {
+    _ = bc_check(a, from, n);
+    Int m = lcount(x);
+    if (m == 0) { return from; }
+    if (m > n) { return 0 - 1; }
+    if (lbytes(a) && lbytes(x)) {
+        Int base = lroot(a) + 24;
+        Int xp = lroot(x) + 24;
+        return bf_scan(base, from, from + n - m, xp, m, ld8(xp));
+    }
+    return bf_slow(a, from, from + n - m, x, m);
+}
+
+Int bf_scan(Int base, Int p, Int last, Int xp, Int m, Int c0) {
+    if (p > last) { return 0 - 1; }
+    Int q = c_memchr(base + p, c0, last - p + 1);
+    if (q == 0) { return 0 - 1; }
+    if (m == 1 || c_memcmp(q + 1, xp + 1, m - 1) == 0) { return q - base; }
+    return bf_scan(base, q - base + 1, last, xp, m, c0);
+}
+
+Int bf_slow(Int a, Int p, Int last, Int x, Int m) {
+    if (p > last) { return 0 - 1; }
+    if (bc_slow(a, p, m, x, 0, m, 0, m) == 0) { return p; }
+    return bf_slow(a, p + 1, last, x, m);
 }
 
 Int bc_tail(Int p, Int an, Int q, Int bn, Int i, Int m) {

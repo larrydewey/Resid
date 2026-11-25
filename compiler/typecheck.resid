@@ -3072,6 +3072,12 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     // resid_bytes_append(b, xs, from, n): builder b with bytes from..from + n
     // of xs pushed in one copy. resid_crc32c(xs, from, n, state): CRC-32C of
     // that range continuing from state (the running value, not complemented).
+    // resid_bytes_find(a, from, n, x): where x first occurs in a[from..from + n], -1 if nowhere.
+    if (name == "resid_bytes_find") {
+        List(Str) a = str_split(argtys, ",");
+        if (a.len() == 4 && a[0] == "List(UInt(8))" && a[3] == "List(UInt(8))" && bx_int(a[1]) && bx_int(a[2])) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (List(UInt(8)), Int, Int, List(UInt(8))), got (" + argtys + ")"};
+    }
     if (name == "resid_bytes_append") {
         List(Str) a = str_split(argtys, ",");
         if (a.len() == 4 && a[0] == "ListBuf(UInt(8))" && a[1] == "List(UInt(8))" && bx_int(a[2]) && bx_int(a[3])) { return ERes {.pos = pos, .ty = a[0], .err = ""}; }
