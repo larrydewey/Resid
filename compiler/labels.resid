@@ -135,7 +135,7 @@ Int lb_builtin(Str n) {
     if (str_starts_with(n, "resid_raw_")) {
         Str op = str_slice(n, 10, str_len(n));
         if (op == "cpuid" || op == "cpuid_ab") { return 3; }
-        return if (op == "arch" || op == "nr" || op == "bits_f64" || op == "bits_f128" || op == "f128_bits" || op == "popcount") { 1 } else { 2 };
+        return if (op == "arch" || op == "nr" || op == "bits_f64" || op == "bits_f128" || op == "f128_bits" || op == "popcount" || op == "crc32c" || op == "crc32c8") { 1 } else { 2 };
     }
     if (str_starts_with(n, "resid_cpu_has_")) { return 3; }
     if (str_starts_with(n, "resid_tcp_") || str_starts_with(n, "resid_udp_") || str_starts_with(n, "resid_unix_") || str_starts_with(n, "resid_term_") || str_starts_with(n, "resid_dbg_") || str_starts_with(n, "resid_pty_") || str_starts_with(n, "resid_disp_") || str_starts_with(n, "resid_a11y_") || str_starts_with(n, "resid_clock_") || str_starts_with(n, "resid_device_")) { return 2; }

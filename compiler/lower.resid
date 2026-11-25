@@ -3137,6 +3137,21 @@ GT lw_raw(LW w, Int id, Str n, List(Str) env, GT c) {
         return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 asm sideeffect \"" + mv + "\", \"=r\"()"]), t);
     }
     if (op == "popcount") { return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 @llvm.ctpop.i64(i64 " + v[0] + ")"]), t); }
+    // crc32c(c, w): the CRC-32C state c (32 bits) advanced over the eight
+    // little-endian bytes of w; crc32c8(c, b) over the low byte of b. The
+    // CPU's instruction (SSE4.2 CRC32; AArch64 CRC32CX/CRC32CB): callers
+    // check the feature first (runtime bytelist.resid, crc_hw).
+    if ((op == "crc32c" || op == "crc32c8") && tgt_a64()) {
+        Str ins = if (op == "crc32c") { "crc32cx ${0:w}, ${1:w}, $2" } else { "crc32cb ${0:w}, ${1:w}, ${2:w}" };
+        return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 asm \".arch_extension crc\\0A" + ins + "\", \"=r,r,r\"(i64 " + v[0] + ", i64 " + v[1] + ")"]), t);
+    }
+    if (op == "crc32c") {
+        return lw_step(g, r, "Int", g.lines.concat([r + "a = and i64 " + v[0] + ", 4294967295", r + " = call i64 asm \"crc32q $2, $0\", \"=r,0,r\"(i64 " + r + "a, i64 " + v[1] + ")"]), t);
+    }
+    if (op == "crc32c8") {
+        List(Str) bl = [r + "a = trunc i64 " + v[0] + " to i32", r + "b = trunc i64 " + v[1] + " to i8", r + "c = call i32 asm \"crc32b $2, $0\", \"=r,0,r\"(i32 " + r + "a, i8 " + r + "b)", r + " = zext i32 " + r + "c to i64"];
+        return lw_step(g, r, "Int", g.lines.concat(bl), t);
+    }
     if (op == "catch") { return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 @e.catch(i64 " + v[0] + ", i64 " + v[1] + ", i64 " + v[2] + ")"]), t); }
     // cpuid(leaf, subleaf): ecx in the high 32 bits, edx in the low.
     // cpuid_ab(leaf, subleaf): eax in the high 32 bits, ebx in the low.

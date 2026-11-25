@@ -472,10 +472,30 @@ Int ba_fill(Int d, Int l, Int i, Int to) {
 @export("resid_crc32c", "i64(ptr,i64,i64,i64)")
 pub Int rt_crc32c(Int l, Int from, Int n, Int state) {
     if (from < 0 || n < 0 || from > lcount(l) - n) { return rt_index_abort(from + n, lcount(l), 0); }
-    Int t = crc_tables();
     Int c = state & 4294967295;
+    if (lbytes(l) && crc_hw()) { return crc_hw_words(lroot(l) + 24 + from, n, c); }
+    Int t = crc_tables();
     if (lbytes(l)) { return crc_words(t, lroot(l) + 24 + from, n, c); }
     return crc_each(t, l, from, from + n, c);
+}
+
+// Whether the CPU has a CRC-32C instruction (SSE4.2, CPUID.1:ECX bit 20;
+// AArch64 HWCAP_CRC32, bit 7), asked once: 0 not yet, 1 no, 2 yes.
+Bool crc_hw() {
+    Int g = resid_raw_global("rt_crc_hw", 8);
+    if (ld64(g) == 0) { _ = st64(g, 1 + if (resid_raw_arch() == 1) { (ld64(hwcap_w()) >> 7) & 1 } else { (resid_raw_cpuid(1, 0) >> 52) & 1 }); }
+    return ld64(g) == 2;
+}
+
+// The CRC by the CPU's instruction: eight bytes a step, then single bytes.
+Int crc_hw_words(Int p, Int n, Int c) {
+    if (n < 8) { return crc_hw_bytes(p, n, c); }
+    return crc_hw_words(p + 8, n - 8, resid_raw_crc32c(c, ld64(p)));
+}
+
+Int crc_hw_bytes(Int p, Int n, Int c) {
+    if (n <= 0) { return c; }
+    return crc_hw_bytes(p + 1, n - 1, resid_raw_crc32c8(c, ld8(p)));
 }
 
 Int crc_tables() {
