@@ -404,6 +404,30 @@ could not exist; they are corrected above.
   `fx_` descriptors test the other verbs against `/dev/zero` and the
   like; a virtio device under QEMU after.
 
+**A PCI device, by its address** (decided 2026-11-25). A descriptor
+with a fixed path serves a fixture; a real device is at an address
+known only when the program runs.
+
+- **The descriptor names what it is for**: the vendor and device ids,
+  which resource, its size. The address is run-time data (a `PciAddr`,
+  as for a PCI attribute). The device host opens the function's
+  directory once and, from that one directory, reads its ids and maps
+  the resource, so the device cannot change between the check and the
+  mapping; ids that are not the descriptor's are refused before the
+  mapping is touched. The provenance record then says which kinds of
+  device a program can map. Rejected: an address alone (a wrong one
+  maps another device's memory); a check by the library (two more
+  hosts an access, and a gap between check and mapping).
+- **Finding it**: one read-only call lists the PCI functions present,
+  in a device host like every other call, and a library function keeps
+  those whose ids match. It tells a program which devices exist, which
+  the attribute calls already do one address at a time. Rejected: an
+  address from configuration only (every driver needs setting up by
+  hand); trying every address (tens of thousands of hosts).
+- A block over such a descriptor, `@registers(size = N, pci = d,
+  pci_write = dw)`, gets the same functions with the address first:
+  `t_read_r(addr)`, `t_write_r(addr, v)`, `t_take_r(addr)`.
+
 First slice to build, before `Region(T)` exists: `@word(N)` types alone,
 with the packing the compiler generates exposed as two functions (a
 record to its word, a word to a record or an error value), the way a
