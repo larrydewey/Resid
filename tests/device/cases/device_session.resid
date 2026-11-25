@@ -1,0 +1,31 @@
+// A session (PLAN-hardware-access.md §11): one device host kept alive
+// for a register block, opened by the scoped function the block gets and
+// ended when it returns. This case touches no device: it asks for
+// sessions that the library or the host refuses. A real device is driven
+// through one by tests/device/virtio_vm.sh; the host's side is
+// tests/runtime/device_session.c.
+import "dev/fx_device_virtio_window.resid";
+
+@word(8) type Status = { Bool acknowledge; Bool driver; Bool driver_ok; Bool features_ok; @reserved(2); DeviceOwned(Bool) needs_reset; Bool failed; };
+
+@registers(size = 0x38, session = fx_rng, session_write = fx_rng_w)
+type Common = { @at(0x14) Status device_status; };
+
+Str got(Result(Result(Status, DeviceError), DeviceError) r) {
+    return match (r) { Ok(x) => match (x) { Ok(s) => "read", Err(e) => "inside: " + device_error_text(e) }, Err(e) => device_error_text(e) };
+}
+
+@requires(device)
+Int main() {
+    // No function is at this address: no session, and the closure never runs.
+    PciAddr gone = PciAddr {.domain = 0xffff, .bus = 255, .device = 31, .function = 7};
+    println(got(common_session_ro(PciWindow {.addr = gone, .resource = 4, .base = 0x1000, .len = 0x38}, lambda(s) { common_read_device_status(s) })));
+    println(got(common_session(PciWindow {.addr = gone, .resource = 4, .base = 0x1000, .len = 0x38}, lambda(s) { common_read_device_status(s) })));
+    // Refused by the library before a host is started.
+    println(got(common_session_ro(PciWindow {.addr = gone, .resource = 6, .base = 0, .len = 0x38}, lambda(s) { common_read_device_status(s) })));
+    println(got(common_session_ro(PciWindow {.addr = gone, .resource = 4, .base = 0x10000, .len = 0x38}, lambda(s) { common_read_device_status(s) })));
+    // A session that is not open: its number names nothing.
+    println(match (common_read_device_status(CommonSession {.id = 12345, .base = 0, .len = 0x38})) { Ok(s) => "read", Err(e) => device_error_text(e) });
+    println(match (common_read_device_status(CommonSession {.id = 12345, .base = 0, .len = 0x14})) { Ok(s) => "read", Err(e) => device_error_text(e) });
+    return 0;
+}

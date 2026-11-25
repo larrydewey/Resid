@@ -23,6 +23,7 @@
 //     device.mmio(Mmio, MmioAccess)                    -> Result(List(DevOut), DeviceError)
 //     device.mmio_pci(MmioPci, PciAddr, MmioAccess)    -> Result(List(DevOut), DeviceError)
 //     device.mmio_win(MmioWin, PciWindow, MmioAccess)  -> Result(List(DevOut), DeviceError)
+//     device.session_open(MmioWin, PciWindow)          -> Result(List(DevOut), DeviceError)
 //     device.pci_list(PciList)                         -> Result(List(DevOut), DeviceError)
 //
 // Each verb is a provider call of the `device` family: @requires(device) or,
@@ -736,6 +737,86 @@ pub Result(List(DevOut), DeviceError) device_engine_mmio_win(MmioWin op, PciWind
     return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call(r.req)));
 }
 
+// -- Sessions ---------------------------------------------------------------
+// A session is one device host kept alive for the window of a PCI
+// function: `device.session_open` starts it, and each access after that
+// is one message to it, not a host of its own. A register block declared
+// `@registers(session = ...)` writes the scoped function that opens one,
+// runs a closure with it and ends it; programs use that, not these.
+
+/// The request that opens a session on the window `w`: the host maps the
+/// resource up to the window's end.
+pub DvReq dv_prep_session(MmioWin op, PciWindow w) {
+    if (!pci_addr_ok(w.addr)) { return dv_bad("the PCI address is out of range"); }
+    if (w.resource < 0 || w.resource > 5) { return dv_bad("a window is in resource 0 to 5"); }
+    if (w.base < 0 || w.len <= 0 || w.base + w.len > op.size) { return dv_bad("the window is not inside the descriptor's size"); }
+    ListBuf(Int) b = dv_u(dv_u(dv_u(dv_u(dv_head(ListBuf(), 11, op.write, op.name, "/sys/bus/pci/devices/" + pci_addr_text(w.addr)), w.base + w.len, 4), 0, 1), 0, 4), 1, 1);
+    return DvReq {.err = "", .req = dv_u(dv_u(dv_u(dv_u(b, 0, 8), w.resource, 1), op.vendor, 2), op.device, 2).finish(), .outs = [DvSlot {.num = true, .max = 8, .secret = false}]};
+}
+
+/// Opens a session that only loads (the compiler's target for
+/// `device.session_open` on a descriptor that does not write). Returns
+/// the session's number as OutNum, or Err as device_engine_mmio_pci.
+@descriptor(engine_session_open)
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_engine_session_open(MmioWin op, PciWindow w) {
+    DvReq r = dv_prep_session(op, w);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_session_answer(op.name, dv_answer(op.name, r, resid_device_call(r.req))));
+}
+
+/// The request for one access to session `id`: `off` from the start of
+/// the resource. `err` is set for an access that is not a word.
+pub DvReq dv_prep_session_access(Int id, Bool store, Int off, Int bytes, UInt(64) value) {
+    if (bytes != 1 && bytes != 2 && bytes != 4 && bytes != 8) { return dv_bad("an access is 1, 2, 4 or 8 bytes wide"); }
+    if (off < 0 || off % bytes != 0) { return dv_bad("the access is not at a multiple of its width"); }
+    ListBuf(Int) none = ListBuf();
+    ListBuf(Int) b = dv_u(dv_u(dv_u(none.push(82).push(68).push(86).push(1).push(12).push(dv_bool(store)), id, 8), off, 4), bytes, 1);
+    List(DvSlot) outs = if (store) { [] } else { [DvSlot {.num = true, .max = 8, .secret = false}] };
+    return DvReq {.err = "", .req = dv_u64(b, value, 8).finish(), .outs = outs};
+}
+
+/// Loads `bytes` bytes at `off` of the window of `len` bytes at `base`
+/// in session `id`: the word as OutNum. Err(BadInput) for an access
+/// outside the window or a session that has ended. `name` labels errors.
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_session_load(Str name, Int id, Int base, Int len, Int off, Int bytes) {
+    if (off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
+    DvReq r = dv_prep_session_access(id, false, base + off, bytes, 0);
+    if (r.err != "") { return Err(BadInput(name, r.err)); }
+    return dv_session_answer(name, dv_answer(name, r, resid_device_call(r.req)));
+}
+
+/// Ends session `id`: its host exits. Err(BadInput) when it has ended
+/// already.
+@requires(device(readonly))
+pub Result(Bool, DeviceError) device_session_end(Str name, Int id) {
+    ListBuf(Int) none = ListBuf();
+    List(Int) req = dv_u(none.push(82).push(68).push(86).push(1).push(13).push(0), id, 8).finish();
+    List(DevOut) o = dv_session_answer(name, dv_reply(name, [], resid_device_call(req)))?;
+    return Ok(o.len() == 0);
+}
+
+/// A session's refusals as what they mean: no such session (it ended, or
+/// belongs to another thread), too many open, an access its host refused.
+pub Result(List(DevOut), DeviceError) dv_session_answer(Str name, Result(List(DevOut), DeviceError) r) {
+    return match (r) {
+        Ok(o) => Ok(o),
+        Err(e) => match (e) {
+            BadInput(n, why) => Err(BadInput(name, dv_session_why(why))),
+            _ => Err(e),
+        },
+    };
+}
+
+Str dv_session_why(Str why) {
+    if (str_ends_with(why, "request (71)")) { return "the session has ended"; }
+    if (str_ends_with(why, "request (70)")) { return "eight sessions are open on this thread already"; }
+    if (str_ends_with(why, "request (72)")) { return "the session's host refused the access"; }
+    return why;
+}
+
 /// Lists the PCI functions present (the compiler's target for
 /// `device.pci_list`): their names as OutBytes, a line each.
 /// Err(TooLong) when they are more than `op.max` bytes.
@@ -904,7 +985,8 @@ Bool dv_fits(Int v, Int width) {
 //   access (0 a load, 1 a store), u32 offset, u8 width in bytes, the 8
 //   bytes to store, 9 mmio of a PCI function: as 8, then u8 resource,
 //   u16 vendor id, u16 device id, its path the function's directory, 10
-//   the PCI functions present: u32 max), write, name, path (u16 length, bytes), then the kind's own
+//   the PCI functions present: u32 max, 11 a session: as 9 with a load of
+//   one byte at 0), write, name, path (u16 length, bytes), then the kind's own
 //   part and the inputs (u8 count; tag 0 + 8-byte integer, or tag 1 + u32
 //   length + bytes). An ioctl's part: u8 request count, each u8 arch + u32
 //   number; u32 size; u8 field count, each field a tag and its words --

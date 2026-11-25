@@ -156,6 +156,7 @@ is built on these builtins.
 | `device.mmio(d, access)` | one load or store in a device's mapped memory (a register); [register blocks](/Resid/reference/layouts/#register-blocks) write these calls | a load under a descriptor that does not write: read; otherwise as the descriptor says |
 | `device.mmio_pci(d, addr, access)` | the same in a PCI function found at run time, whose ids must be the descriptor's | as `device.mmio` |
 | `device.mmio_win(d, window, access)` | the same, in a block the device places at run time | as `device.mmio` |
+| `device.session_open(d, window)` | a device host kept alive for that window (register blocks declared with `session` open and end it for you) | as the descriptor says |
 | `device.pci_list(d)` | the PCI functions present | read |
 | `device.sequence(d, ...)` | a fixed sequence of the operations above | as above |
 

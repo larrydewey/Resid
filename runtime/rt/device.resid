@@ -282,7 +282,7 @@ Int pq_parse_r(Int d, Int r, Int n) {
     Int path = pq_alloc(d, pl + 1);
     _ = mcopy(path, pp, pl);
     _ = dset(d, 4, path) + dset(d, 5, pl);
-    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else if (kind == 6) { pq_tchain(d, r) } else if (kind == 7) { pq_ctaphid(d, r) } else if (kind == 8) { pq_mmio(d, r) } else if (kind == 9) { pq_mmio_pci(d, r) } else if (kind == 10) { pq_attr(d, r) } else { false };
+    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else if (kind == 6) { pq_tchain(d, r) } else if (kind == 7) { pq_ctaphid(d, r) } else if (kind == 8) { pq_mmio(d, r) } else if (kind == 9 || kind == 11) { pq_mmio_pci(d, r) } else if (kind == 10) { pq_attr(d, r) } else { false };
     if (!ok || rd_bad(r)) { return 3; }
     if ((kind == 1 || kind == 5) && !pq_args(d, r)) { return 4; }
     if (rd_bad(r) || ld64(r + 16) != n) { return 5; }
@@ -616,7 +616,9 @@ Int pq_check(Int d) {
     // and a store only under a write.
     // A PCI function's resource: the path is the function's directory,
     // an address under /sys/bus/pci/devices; resource 0 to 5.
-    if (kind == 9) {
+    // A session (kind 11) names its function and resource the same way,
+    // and carries a load of one byte at 0 where an access would be.
+    if (kind == 9 || kind == 11) {
         if (dget(d, 5) <= 21 || c_strncmp(dget(d, 4), pci_root(), 20) != 0 || ld8(dget(d, 4) + 20) != 47 || !pq_pci_addr(dget(d, 4) + 21, dget(d, 5) - 21)) { return 65; }
         if ((dget(d, 39) & 255) > 5) { return 66; }
     }
@@ -626,7 +628,7 @@ Int pq_check(Int d) {
         if (wr != 0) { return 13; }
         if (!pq_max_ok(dget(d, 10))) { return 15; }
     }
-    if (kind == 8 || kind == 9) {
+    if (kind == 8 || kind == 9 || kind == 11) {
         Int w = dget(d, 12);
         if (!pq_max_ok(dget(d, 10))) { return 60; }
         if (w != 1 && w != 2 && w != 4 && w != 8) { return 61; }
@@ -1071,9 +1073,16 @@ Int dp_call(Int req) {
     if (n < 6 || n > dv_req_max()) { return dev_err_reply(de_refused(), 1); }
     Int buf = xmalloc(n);
     if (!dp_bytes(req, buf, 0, n)) { return resid_raw_fill(buf, 0, n) * 0 + c_free(buf) * 0 + dev_err_reply(de_refused(), 1); }
+    // An access to a session, or its end: no descriptor, only the
+    // session's number (ds_access, ds_close).
+    Int k4 = ld8(buf + 4);
+    if (k4 == 12 || k4 == 13) {
+        Int so = if (k4 == 12) { ds_access(buf, n) } else { ds_close(buf, n) };
+        return resid_raw_fill(buf, 0, n) * 0 + c_free(buf) * 0 + so;
+    }
     Int d = pq_parse(buf, n);
     Int why = dget(d, 28);
-    Int out = if (why != 0) { dev_err_reply(de_refused(), why) } else { dp_run(d, buf, n) };
+    Int out = if (why != 0) { dev_err_reply(de_refused(), why) } else if (dget(d, 0) == 11) { ds_open(d, buf, n) } else { dp_run(d, buf, n) };
     _ = pq_free(d);
     // The request carries the program's inputs: wiped before it is freed.
     _ = resid_raw_fill(buf, 0, n);
@@ -1153,6 +1162,133 @@ Int dp_judge(Int d, Int st, Int rb, Int got, Int cap) {
     if (rb == 0 || got < 1 || got > cap) { return dev_err_reply(de_host(), 4 * 256); }
     Int out = dp_reply(d, rb, got);
     return if (out == 0) { dev_err_reply(de_host(), 4 * 256) } else { out };
+}
+
+// ─── Sessions: the program's end ────────────────────────────────────
+// A session is a host kept alive for one PCI function's resource
+// (PLAN-hardware-access.md §11): opened by a request of kind 11, which
+// the host answers once it has mapped the resource, installed its filter
+// and found the function's ids to be the descriptor's; then one message
+// each way for every access (kind 12), until the program ends it (kind
+// 13) or exits (the host sees its socket close and exits). The sessions
+// of a thread are 8 slots of four words -- number (0: free), socket, the
+// host's pid, its pidfd -- and then the last number given out; a session
+// is used on the thread that opened it. A number is never given twice, so
+// one kept past its session's end names nothing.
+Int ds_tab() { return resid_raw_tls("dv_sess", 264); }
+
+Int ds_find(Int id, Int i) {
+    if (i >= 8) { return 0; }
+    Int e = ds_tab() + i * 32;
+    return if (ld64(e) == id) { e } else { ds_find(id, i + 1) };
+}
+
+// An access's wall-clock limit: 5 s, or a test's lower one.
+Int ds_deadline() { return hs_deadline(min(dv_deadline_ms(11), 5000)); }
+
+// [0, one output, a number, v]: a session's number, or a word loaded.
+Int ds_num_reply(Int v) {
+    Int b = xmalloc(16);
+    _ = st8(b, 0) + le_put(b + 1, 1, 4) + st8(b + 5, 0) + le_put(b + 6, v, 8);
+    Int out = dp_list(b, 14);
+    return c_free(b) * 0 + out;
+}
+
+// [0, no outputs]: a store made, a session ended.
+Int ds_done_reply() {
+    Int b = xmalloc(8);
+    _ = st8(b, 0) + le_put(b + 1, 0, 4);
+    Int out = dp_list(b, 5);
+    return c_free(b) * 0 + out;
+}
+
+// Start the host and wait for its word that the device is the
+// descriptor's and mapped: 10 bytes, [0, ...] or an error reply.
+Int ds_open(Int d, Int req, Int n) {
+    Int e = ds_find(0, 0);
+    if (e == 0) { return dev_err_reply(de_refused(), 70); }   // eight sessions on this thread already
+    Int dl = hs_deadline(dv_deadline_ms(11));
+    Int pidp = xmalloc(16);
+    Int a = hs_spawn(1, 0, pidp);
+    Int pid = ld64(pidp);
+    Int pfd = ld64(pidp + 8);
+    _ = c_free(pidp);
+    if (a == 0 - 3) { return dev_err_reply(de_host(), 7 * 256); }
+    if (a < 0) { return dev_err_reply(de_host(), 5 * 256); }
+    Int hdr = xmalloc(8);
+    _ = st64(hdr, n);
+    Bool s1 = hs_answer(a, dl) && hs_send_until(a, hdr, 0, 8, dl) && hs_send_until(a, req, 0, n, dl);
+    _ = c_free(hdr);
+    Int rb = xmalloc(16);
+    Int got = if (s1) { hs_recv_until(a, rb, 0, 10, dl) } else { 0 };
+    if (got == 10 && ld8(rb) == 0) {
+        Int tab = ds_tab();
+        Int id = ld64(tab + 256) + 1;
+        _ = st64(tab + 256, id) + st64(e, id) + st64(e + 8, a) + st64(e + 16, pid) + st64(e + 24, pfd);
+        return c_free(rb) * 0 + ds_num_reply(id);
+    }
+    // No session: the host said why and exits, or it is gone.
+    _ = sys_close(a);
+    Int st = hs_finish(pid, pfd, dl);
+    Int out = dp_judge(d, st, rb, got, 16);
+    return c_free(rb) * 0 + out;
+}
+
+// End session slot e: close its socket (the host exits when it reads the
+// end), reap it, free the slot. The host's exit status, as hs_finish.
+Int ds_drop(Int e) {
+    Int pid = ld64(e + 16);
+    Int pfd = ld64(e + 24);
+    _ = sys_close(ld64(e + 8));
+    _ = st64(e, 0) + st64(e + 8, 0) + st64(e + 16, 0) + st64(e + 24, 0);
+    _ = st64(hs_timeout_w(), 0) + st64(hs_peer_w(), pid);
+    return hs_finish(pid, pfd, hs_deadline(2000));
+}
+
+// A request of kind 12: after the six bytes every request starts with,
+// the session's number (8 bytes), the offset (4), the width (1) and the 8
+// bytes to store. Its write byte says whether it is a store, so the read
+// entry has already refused one.
+Int ds_access(Int buf, Int n) {
+    if (n != 27) { return dev_err_reply(de_refused(), 1); }
+    Int id = le_get(buf + 6, 8);
+    Int e = if (id > 0) { ds_find(id, 0) } else { 0 };
+    if (e == 0) { return dev_err_reply(de_refused(), 71); }   // no such session: ended, or another thread's
+    Int store = ld8(buf + 5);
+    Int m = xmalloc(32);
+    _ = resid_raw_fill(m, 0, 32);
+    _ = st8(m, if (store == 0) { 1 } else { 2 }) + st8(m + 1, ld8(buf + 18)) + le_put(m + 4, le_get(buf + 14, 4), 4) + mcopy(m + 8, buf + 19, 8);
+    Int a = ld64(e + 8);
+    Int dl = ds_deadline();
+    _ = st64(hs_timeout_w(), 0) + st64(hs_peer_w(), ld64(e + 16));
+    Bool ok = hs_send_until(a, m, 0, 16, dl) && hs_recv_until(a, m + 16, 0, 9, dl) == 9;
+    if (!ok) {
+        // The host is gone or silent: the session is over.
+        Bool late = ld64(hs_timeout_w()) != 0;
+        Int st = ds_drop(e);
+        Int sig = if (st >= 0) { st & 127 } else { 0 };
+        _ = c_free(m);
+        if (late) { return dev_err_reply(de_timeout(), 0); }
+        return dev_err_reply(de_host(), if (sig != 0) { 256 + sig } else { 4 * 256 });
+    }
+    Int status = ld8(m + 16);
+    Int v = ld64(m + 17);
+    _ = resid_raw_fill(m, 0, 32) + c_free(m);
+    if (status != 0) { return dev_err_reply(de_refused(), 72); }   // the host refused the access
+    return if (store == 0) { ds_num_reply(v) } else { ds_done_reply() };
+}
+
+// A request of kind 13: the session's number after the first six bytes.
+// Ending a session that is not there is refused, like an access to one.
+Int ds_close(Int buf, Int n) {
+    if (n != 14) { return dev_err_reply(de_refused(), 1); }
+    Int id = le_get(buf + 6, 8);
+    Int e = if (id > 0) { ds_find(id, 0) } else { 0 };
+    if (e == 0) { return dev_err_reply(de_refused(), 71); }
+    Int st = ds_drop(e);
+    if (st == 0) { return ds_done_reply(); }
+    if (st == 0 - 1) { return dev_err_reply(de_timeout(), 0); }
+    return dev_err_reply(de_host(), if (st > 0 && (st & 127) != 0) { 256 + (st & 127) } else { 2 * 256 + ((st >> 8) & 255) });
 }
 
 // The entry name for 16 random bytes: "resid-" and 32 hex digits,
@@ -1338,6 +1474,7 @@ Int dh_main(Int argv, Int envp, Int mode, Int root) {
     if (mode == 29) { _ = dh_fork_rest(); }
     Int h = dh_ctx(mode, root);
     if (h == 0) { return native_child_exit(125); }
+    _ = dset(h, 22, ppid);
     Int hdr = xmalloc(8);
     if (hs_recv_cred(3, hdr, 0, 8, ppid) != 8) { return native_child_exit(125); }
     Int n = ld64(hdr);
@@ -1356,6 +1493,7 @@ Int dh_main(Int argv, Int envp, Int mode, Int root) {
     if (kind == 8) { return dh_mmio(h, d); }
     if (kind == 9) { return dh_mmio_pci(h, d); }
     if (kind == 10) { return dh_pci_list(h, d); }
+    if (kind == 11) { return dh_session(h, d); }
     if (kind == 4) {
         // The entry's name: 16 random bytes from the parent, which removes
         // the entry itself if this host dies before it does.
@@ -1398,7 +1536,7 @@ Bool dh_same_ids() {
 //   13 its length  14 error reply (10 + 256 bytes)  15 filter rules
 //   (4 words each: call, kind, a, b)  16 rules used  18 configfs state
 //   19 the configfs entry's name  20 attribute writes made (configfs)
-//   21 the fake configfs's generation
+//   21 the fake configfs's generation  22 the program's pid (hs_auth)
 Int dh_ctx(Int mode, Int root) {
     Int h = xmalloc(256);
     _ = resid_raw_fill(h, 0, 256);
@@ -2373,6 +2511,75 @@ Int dh_mmio_pci(Int h, Int d) {
     Int v = if (store == 1) { mm_store(at, w, dget(d, 13)) * 0 } else { mm_load(at, w) };
     _ = if (store == 1) { gput(h, 0, 1) + gput(h, 0, 4) } else { gput(h, 0, 1) + gput(h, 1, 4) + gput(h, 0, 1) + gput(h, v, 8) };
     return dh_reply(h);
+}
+
+// ─── A session: the host's end ──────────────────────────────────────
+// Kind 11: as dh_mmio_pci up to the ids, then the host stays. Its filter
+// also lets it read its socket (recvmsg on fd 3, and the two calls that
+// check each message's sender); it tells the program the session is open
+// and serves accesses until the socket closes. Each is 16 bytes -- 1 a
+// load or 2 a store, the width, the offset at 4, the value at 8 -- checked
+// against the block mapped and the session's write flag, and answered
+// with 9: 0 or why not, and the word loaded. Nothing is allocated after
+// the filter: the messages are in one region made before it.
+Int dh_session(Int h, Int d) {
+    Int wr = dget(d, 1);
+    Int size = dget(d, 10);
+    Bool fake = dh_pci_fake(h);
+    Int root = dh_pci_root(h);
+    if (root < 0) { return dh_fail_errno(h, root, false); }
+    Int an = dget(d, 5) - 21;
+    Int name = xmalloc(an + 3);
+    _ = mcopy(name, dget(d, 4) + 21, an) + st8(name + an, 47) + st8(name + an + 1, 46) + st8(name + an + 2, 0);
+    Int dir = dh_open2(root, name, o_path() | o_directory(), 2);
+    if (dir < 0) { return dh_fail_errno(h, dir, false); }
+    Int rn = xmalloc(16);
+    _ = mcopy(rn, resid_raw_addr("resource"), 8) + st8(rn + 8, 48 + (dget(d, 39) & 255)) + st8(rn + 9, 0);
+    Int vfd = dh_open2(dir, resid_raw_addr("vendor"), 0, 14);
+    Int dfd = dh_open2(dir, resid_raw_addr("device"), 0, 14);
+    if (vfd < 0 || dfd < 0) { return dh_fail_errno(h, if (vfd < 0) { vfd } else { dfd }, false); }
+    Int fd = dh_open2(dir, rn, if (wr == 1) { 2 } else { 0 }, 14);
+    if (fd < 0) { return dh_fail_errno(h, fd, false); }
+    Bool kinds = if (fake) { dh_ftype(vfd) == 32768 && dh_ftype(dfd) == 32768 && dh_ftype(fd) == 32768 } else { dh_is_attr(vfd) && dh_is_attr(dfd) && dh_is_mappable(fd) };
+    if (!kinds) { return dh_fail(h, 6, 0); }
+    _ = dset(h, 7, fd);
+    if (dh_fsize(fd) < size) { return dh_fail(h, 6, 0); }
+    Int len = (size + 4095) & (0 - 4096);
+    Int map = resid_raw_syscall(9, 0, len, if (wr == 1) { 3 } else { 1 }, 1, fd, 0);   // MAP_SHARED
+    if (map < 0 && map > 0 - 4096) { return dh_fail_errno(h, map, false); }
+    if (!dh_regions(h, 4)) { return native_child_exit(125); }
+    Int vb = dh_region(h, 32, 0);
+    Int db = dh_region(h, 32, 0);
+    Int msg = dh_region(h, 32, 0);
+    if (vb == 0 || db == 0 || msg == 0 || !dh_bufs(h, d)) { return native_child_exit(125); }
+    _ = dh_rule(h, resid_raw_nr(0), 1, vfd, 0) + dh_rule(h, resid_raw_nr(0), 1, dfd, 0);
+    _ = dh_rule(h, resid_raw_nr(47), 1, 3, 0) + dh_rule(h, resid_raw_nr(102), 0, 0, 0) + dh_rule(h, resid_raw_nr(104), 0, 0, 0);   // recvmsg(3), getuid, getgid
+    if (!dh_lock(h)) { return native_child_exit(126); }
+    Int vr = dh_read_all(vfd, vb, 0, 31);
+    Int dr = dh_read_all(dfd, db, 0, 31);
+    _ = dh_after_op(h);
+    if (vr < 0 || dr < 0) { return dh_fail_errno(h, if (vr < 0) { vr } else { dr }, false); }
+    if (!dh_canaries(h, 0)) { return dh_fail(h, 8, 0); }
+    Int want = dget(d, 39);
+    if (mm_hex_id(vb, vr) != ((want >> 8) & 65535) || mm_hex_id(db, dr) != ((want >> 24) & 65535)) { return dh_fail(h, 6, 0); }
+    _ = resid_raw_fill(msg, 0, 32);
+    if (!native_write(msg, 0, 10)) { return native_child_exit(125); }
+    return ds_serve(map, size, wr, dget(h, 22), msg);
+}
+
+// One access after another, until the program's end of the socket closes
+// (exit 0) or something else than a whole message arrives (exit 125).
+Int ds_serve(Int map, Int size, Int wr, Int ppid, Int m) {
+    Int r = hs_recv_cred(3, m, 0, 16, ppid);
+    if (r != 16) { return native_child_exit(if (r == 0) { 0 } else { 125 }); }
+    Int op = ld8(m);
+    Int w = ld8(m + 1);
+    Int off = le_get(m + 4, 4);
+    Bool ok = (op == 1 || (op == 2 && wr == 1)) && (w == 1 || w == 2 || w == 4 || w == 8) && off >= 0 && off % w == 0 && off + w <= size;
+    Int v = if (!ok) { 0 } else if (op == 2) { mm_store(map + off, w, ld64(m + 8)) * 0 } else { mm_load(map + off, w) };
+    _ = st8(m + 16, if (ok) { 0 } else { 1 }) + st64(m + 17, v);
+    if (!native_write(m + 16, 0, 9)) { return native_child_exit(125); }
+    return ds_serve(map, size, wr, ppid, m);
 }
 
 // The names in the directory of PCI functions, a line each: addresses, as

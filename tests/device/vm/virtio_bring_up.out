@@ -1,4 +1,0 @@
-queues 1
-after reset: ack=false driver=false ok=false needs_reset=false failed=false
-after driver: ack=true driver=true ok=false needs_reset=false failed=false
-version 1: true

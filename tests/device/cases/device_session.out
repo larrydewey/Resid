@@ -1,0 +1,6 @@
+fx.virtio_rng: device absent
+fx.virtio_rng: device absent
+fx.virtio_rng: bad input: a window is in resource 0 to 5
+fx.virtio_rng: bad input: the window is not inside the descriptor's size
+common.device_status: bad input: the session has ended
+common.device_status: bad input: the access is not inside the window
