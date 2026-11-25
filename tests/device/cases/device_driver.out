@@ -1,0 +1,5 @@
+fx.virtio_rng: device absent
+driver: bad input: the session has ended
+driver: bad input: this is not a driver's host
+driver: bad input: this is not a driver's host
+started with 0 numbers

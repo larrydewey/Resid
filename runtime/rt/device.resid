@@ -260,8 +260,8 @@ Int pq_free_at(Int p) {
 
 // The request of n bytes at p, parsed and checked: word 28 says why not.
 pub Int pq_parse(Int p, Int n) {
-    Int d = xmalloc(320);
-    _ = resid_raw_fill(d, 0, 320);
+    Int d = xmalloc(400);
+    _ = resid_raw_fill(d, 0, 400);
     Int r = rd_new(p, n);
     Int why = pq_parse_r(d, r, n);
     _ = c_free(r);
@@ -282,7 +282,7 @@ Int pq_parse_r(Int d, Int r, Int n) {
     Int path = pq_alloc(d, pl + 1);
     _ = mcopy(path, pp, pl);
     _ = dset(d, 4, path) + dset(d, 5, pl);
-    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else if (kind == 6) { pq_tchain(d, r) } else if (kind == 7) { pq_ctaphid(d, r) } else if (kind == 8) { pq_mmio(d, r) } else if (kind == 9) { pq_mmio_pci(d, r) } else if (kind == 11) { pq_session(d, r) } else if (kind == 14) { pq_dma(d, r) } else if (kind == 10) { pq_attr(d, r) } else { false };
+    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else if (kind == 6) { pq_tchain(d, r) } else if (kind == 7) { pq_ctaphid(d, r) } else if (kind == 8) { pq_mmio(d, r) } else if (kind == 9) { pq_mmio_pci(d, r) } else if (kind == 11) { pq_session(d, r) } else if (kind == 14) { pq_dma(d, r) } else if (kind == 19) { pq_driver(d, r) } else if (kind == 10) { pq_attr(d, r) } else { false };
     if (!ok || rd_bad(r)) { return 3; }
     if ((kind == 1 || kind == 5) && !pq_args(d, r)) { return 4; }
     if (rd_bad(r) || ld64(r + 16) != n) { return 5; }
@@ -589,6 +589,22 @@ Bool pq_dma(Int d, Int r) {
     return true;
 }
 
+// A driver session's part (kind 19): a DMA session's, then which of the
+// program's drivers is to run (2), and what it is started with: a length
+// (2, at most 1024) and that many bytes. Kept as words 40, 41 and 42.
+Bool pq_driver(Int d, Int r) {
+    if (!pq_dma(d, r)) { return false; }
+    Int which = rd_u(r, 2);
+    Int an = rd_u(r, 2);
+    if (rd_bad(r) || an > 1024) { return false; }
+    Int ap = rd_take(r, an);
+    if (rd_bad(r)) { return false; }
+    Int keep = pq_alloc(d, an + 8);
+    _ = mcopy(keep, ap, an);
+    _ = dset(d, 40, which) + dset(d, 41, keep) + dset(d, 42, an);
+    return true;
+}
+
 Bool pq_session_maps(Int r, Int ms, Int i, Int n) {
     if (i >= n) { return !rd_bad(r); }
     Int res = rd_u(r, 1);
@@ -656,13 +672,13 @@ Int pq_check(Int d) {
     // an address under /sys/bus/pci/devices; resource 0 to 5.
     // A session (kind 11) names its function and resource the same way,
     // and carries a load of one byte at 0 where an access would be.
-    if (kind == 9 || kind == 11 || kind == 14) {
+    if (kind == 9 || kind == 11 || kind == 14 || kind == 19) {
         if (dget(d, 5) <= 21 || c_strncmp(dget(d, 4), pci_root(), 20) != 0 || ld8(dget(d, 4) + 20) != 47 || !pq_pci_addr(dget(d, 4) + 21, dget(d, 5) - 21)) { return 65; }
         if ((dget(d, 39) & 255) > 5) { return 66; }
         if (kind != 9 && !pq_session_maps_ok(dget(d, 35), 0, dget(d, 36))) { return 67; }
         // Memory for the device: whole pages, at most dv_buf_max, at a
         // page address below 2^39; and such a session writes.
-        if (kind == 14) {
+        if (kind == 14 || kind == 19) {
             Int ds = dget(d, 37);
             Int iv = dget(d, 38);
             if (wr != 1) { return 19; }
@@ -675,7 +691,7 @@ Int pq_check(Int d) {
         if (wr != 0) { return 13; }
         if (!pq_max_ok(dget(d, 10))) { return 15; }
     }
-    if (kind == 8 || kind == 9 || kind == 11 || kind == 14) {
+    if (kind == 8 || kind == 9 || kind == 11 || kind == 14 || kind == 19) {
         Int w = dget(d, 12);
         if (!pq_max_ok(dget(d, 10))) { return 60; }
         if (w != 1 && w != 2 && w != 4 && w != 8) { return 61; }
@@ -1123,13 +1139,19 @@ Int dp_call(Int req) {
     // An access to a session, or its end: no descriptor, only the
     // session's number (ds_access, ds_close).
     Int k4 = ld8(buf + 4);
-    if (k4 == 12 || k4 == 13 || k4 == 15 || k4 == 16 || k4 == 17 || k4 == 18) {
-        Int so = if (k4 == 12) { ds_access(buf, n) } else if (k4 == 13) { ds_close(buf, n) } else if (k4 == 17) { ds_wait_req(buf, n) } else if (k4 == 18) { ds_batch_req(buf, n) } else { ds_bulk(buf, n, k4 == 16) };
+    // In a driver's host the device is this process's own: its accesses
+    // are made here, and it starts no other host.
+    if (ld64(drv_w() + 8) == 1) {
+        Int lo = drv_call(buf, n, k4);
+        return resid_raw_fill(buf, 0, n) * 0 + c_free(buf) * 0 + lo;
+    }
+    if (k4 == 12 || k4 == 13 || k4 == 15 || k4 == 16 || k4 == 17 || k4 == 18 || k4 == 20) {
+        Int so = if (k4 == 12) { ds_access(buf, n) } else if (k4 == 13) { ds_close(buf, n) } else if (k4 == 17) { ds_wait_req(buf, n) } else if (k4 == 18) { ds_batch_req(buf, n) } else if (k4 == 20) { ds_drv_call(buf, n) } else { ds_bulk(buf, n, k4 == 16) };
         return resid_raw_fill(buf, 0, n) * 0 + c_free(buf) * 0 + so;
     }
     Int d = pq_parse(buf, n);
     Int why = dget(d, 28);
-    Int out = if (why != 0) { dev_err_reply(de_refused(), why) } else if (dget(d, 0) == 11 || dget(d, 0) == 14) { ds_open(d, buf, n) } else { dp_run(d, buf, n) };
+    Int out = if (why != 0) { dev_err_reply(de_refused(), why) } else if (dget(d, 0) == 11 || dget(d, 0) == 14 || dget(d, 0) == 19) { ds_open(d, buf, n) } else { dp_run(d, buf, n) };
     _ = pq_free(d);
     // The request carries the program's inputs: wiped before it is freed.
     _ = resid_raw_fill(buf, 0, n);
@@ -1495,6 +1517,186 @@ Int ds_batch_outs(Int body, Int blen, Int pos, Int rb, Int rp, Int ob, Int at) {
     return ds_batch_outs(body, blen, next, rb, rp, ob, at);
 }
 
+// A request of kind 20: a message to the driver that runs in a session's
+// host, and its reply. After the six bytes: the session's number (8) and
+// the message, at most 64 KiB. The driver has a minute to answer.
+Int ds_drv_call(Int buf, Int n) {
+    Int len = n - 14;
+    if (len < 0 || len > 65536) { return dev_err_reply(de_refused(), 79); }
+    Int id = le_get(buf + 6, 8);
+    Int e = if (id > 0) { ds_find(id, 0) } else { 0 };
+    if (e == 0) { return dev_err_reply(de_refused(), 71); }
+    Int m = xmalloc(32);
+    _ = resid_raw_fill(m, 0, 32);
+    _ = st8(m, 7) + le_put(m + 8, len, 8);
+    Int a = ld64(e + 8);
+    Int dl = hs_deadline(min(dv_deadline_ms(19) * 2, 60000));
+    _ = st64(hs_timeout_w(), 0) + st64(hs_peer_w(), ld64(e + 16));
+    Bool ok = hs_send_until(a, m, 0, 16, dl) && hs_send_until(a, buf + 14, 0, len, dl) && hs_recv_until(a, m + 16, 0, 9, dl) == 9;
+    Int status = if (ok) { ld8(m + 16) } else { 1 };
+    Int rlen = ld64(m + 17);
+    Bool sized = ok && status == 0 && rlen >= 0 && rlen <= 65536;
+    Int rb = if (sized) { xmalloc(rlen + 16) } else { 0 };
+    Bool got = rb != 0 && hs_recv_until(a, rb + 10, 0, rlen, dl) == rlen;
+    _ = c_free(m);
+    if (!ok || !sized || !got) {
+        // No answer, or one that is no answer: the session is over.
+        Bool late = ld64(hs_timeout_w()) != 0;
+        Int st = ds_drop(e);
+        Int sig = if (st >= 0) { st & 127 } else { 0 };
+        _ = if (rb != 0) { c_free(rb) } else { 0 };
+        if (late) { return dev_err_reply(de_timeout(), 0); }
+        return dev_err_reply(de_host(), if (sig != 0) { 256 + sig } else { 4 * 256 });
+    }
+    _ = st8(rb, 0) + le_put(rb + 1, 1, 4) + st8(rb + 5, 1) + le_put(rb + 6, rlen, 4);
+    Int out = dp_list(rb, 10 + rlen);
+    return resid_raw_fill(rb, 0, rlen + 16) * 0 + c_free(rb) * 0 + out;
+}
+
+// ─── A driver: the program's code in the host ───────────────────────
+// A session of kind 19 does not serve accesses: once its host has the
+// device, its memory and its filter, it calls the program's driver, a
+// function the program registered first thing in main (the compiler puts
+// the call there; PLAN-hardware-access.md §11). The driver reads and
+// writes the device with the calls a program makes, which are made in
+// place here (drv_call), and exchanges messages with the program: it
+// takes the next (kind 21, which also wakes for the device's interrupt
+// or a time), and answers it (kind 22). When the program ends the session
+// its end of the socket closes and the host exits.
+//
+// The words: 0 the driver's entry, 1 whether this process is a driver's
+// host, 2 the resources mapped, 3 how many, 4 which is the device's
+// memory, 5 the interrupt's event, 6 the message room, 7 the program's
+// pid, 8 what the driver was started with, 9 its length.
+Int drv_w() { return resid_raw_global("dv_drv", 96); }
+
+@export("resid_driver_register", "void(ptr)")
+pub Int rt_driver_register(Int f) { return st64(drv_w(), f); }
+
+// The host becomes the driver: never returns.
+Int drv_enter(Int d, Int tab, Int maps, Int dmai, Int efd, Int msg, Int ppid) {
+    Int g = drv_w();
+    _ = st64(g + 8, 1) + st64(g + 16, tab) + st64(g + 24, maps) + st64(g + 32, dmai) + st64(g + 40, efd) + st64(g + 48, msg) + st64(g + 56, ppid);
+    _ = st64(g + 64, dget(d, 41)) + st64(g + 72, dget(d, 42));
+    _ = resid_raw_call2(ld64(g), dget(d, 40), 0);
+    return native_child_exit(0);
+}
+
+// What a driver's host may do besides a session's: free and trim memory
+// its allocator took, take it the way regions do (no reserve), and lock
+// it in memory.
+Int drv_rules(Int h) {
+    _ = dh_rule(h, resid_raw_nr(11), 0, 0, 0) + dh_rule(h, resid_raw_nr(28), 0, 0, 0) + dh_rule(h, resid_raw_nr(9), 4, 16418, 0);   // munmap, madvise, mmap NORESERVE
+    // In secret mode the allocator keeps what it takes out of swap.
+    _ = dh_rule(h, resid_raw_nr(325), 0, 0, 0) + dh_rule(h, resid_raw_nr(149), 0, 0, 0) + dh_rule(h, resid_raw_nr(150), 0, 0, 0);   // mlock2, mlock, munlock
+    // A big block grown in place or moved (runtime/rt/malloc.resid).
+    return dh_rule(h, resid_raw_nr(25), 0, 0, 0);   // mremap
+}
+
+// A device call made inside a driver's host.
+Int drv_call(Int buf, Int n, Int k4) {
+    if (k4 == 21) { return drv_next(buf, n); }
+    if (k4 == 22) { return drv_reply(buf, n); }
+    if (k4 == 23) {
+        Int g = drv_w();
+        Int an = ld64(g + 72);
+        Int ob = xmalloc(an + 16);
+        _ = st8(ob, 0) + le_put(ob + 1, 1, 4) + st8(ob + 5, 1) + le_put(ob + 6, an, 4) + mcopy(ob + 10, ld64(g + 64), an);
+        Int out = dp_list(ob, 10 + an);
+        return c_free(ob) * 0 + out;
+    }
+    if (k4 != 12 && k4 != 15 && k4 != 16 && k4 != 17 && k4 != 18) { return dev_err_reply(de_refused(), 78); }   // a driver reaches its own device only
+    // One operation as a batch of one, or the batch itself.
+    Int one = xmalloc(32);
+    _ = resid_raw_fill(one, 0, 32);
+    Bool shaped = if (k4 == 12) { n == 28 } else if (k4 == 15) { n == 23 } else if (k4 == 16) { n >= 23 && n == 23 + le_get(buf + 19, 4) } else if (k4 == 17) { n == 18 } else { n > 14 };
+    if (!shaped) { return c_free(one) * 0 + dev_err_reply(de_refused(), 1); }
+    _ = if (k4 == 12) { st8(one, if (ld8(buf + 5) == 0) { 1 } else { 2 }) + st8(one + 1, ld8(buf + 18)) + st8(one + 2, ld8(buf + 27)) + le_put(one + 4, le_get(buf + 14, 4), 4) + mcopy(one + 8, buf + 19, 8) } else { 0 };
+    _ = if (k4 == 15 || k4 == 16) { st8(one, if (k4 == 15) { 3 } else { 4 }) + st8(one + 2, ld8(buf + 14)) + le_put(one + 4, le_get(buf + 15, 4), 4) + le_put(one + 8, le_get(buf + 19, 4), 8) } else { 0 };
+    _ = if (k4 == 17) { st8(one, 5) + le_put(one + 8, le_get(buf + 14, 4), 8) } else { 0 };
+    // A write's bytes follow its record: a body of its own.
+    Int wl = if (k4 == 16) { le_get(buf + 19, 4) } else { 0 };
+    Int wb = if (k4 == 16) { xmalloc(16 + wl + 8) } else { 0 };
+    _ = if (k4 == 16) { mcopy(wb, one, 16) + mcopy(wb + 16, buf + 23, wl) } else { 0 };
+    Int body = if (k4 == 18) { buf + 14 } else if (k4 == 16) { wb } else { one };
+    Int blen = if (k4 == 18) { n - 14 } else if (k4 == 16) { 16 + wl } else { 16 };
+    Int out = drv_ops(body, blen, k4 == 18);
+    _ = c_free(one) + (if (wb != 0) { c_free(wb) } else { 0 });
+    return out;
+}
+
+// The operations of `body` made on this host's own device; the engine's
+// reply. `batch`: a refusal names the operation.
+Int drv_ops(Int body, Int blen, Bool batch) {
+    Int g = drv_w();
+    Int acc = xmalloc(32);
+    _ = resid_raw_fill(acc, 0, 32);
+    Bool shaped = blen >= 16 && blen <= 65536 && ds_batch_shape(body, blen, 0, 0, acc);
+    Int rlen = ld64(acc);
+    Int outs = ld64(acc + 8);
+    _ = c_free(acc);
+    if (!shaped || rlen > 65536) { return dev_err_reply(de_refused(), 76); }
+    Int m = ld64(g + 48);
+    Int rr = m + 128 + 65536;
+    Int done = ds_batch(ld64(g + 16), ld64(g + 24), 1, ld64(g + 32), ld64(g + 40), m, body, blen, 0, rr, 0, 0);
+    if (done < 0) { return dev_err_reply(de_refused(), if (batch) { 1000 + (0 - 1 - done) } else { 72 }); }
+    Int ob = xmalloc(5 + outs * 9 + rlen + 16);
+    _ = st8(ob, 0) + le_put(ob + 1, outs, 4);
+    Int end = ds_batch_outs(body, blen, 0, rr, 0, ob, 5);
+    Int out = dp_list(ob, end);
+    return c_free(ob) * 0 + out;
+}
+
+// Kind 21: what happens next, waiting at most the time after the six
+// bytes (4, milliseconds, at most 60000). Three outputs: what (0 the
+// time passed, 1 a message from the program, 2 the device's interrupt),
+// how many interrupts, and the message. The socket closed: the program
+// has ended the session, and so does this.
+Int drv_next(Int buf, Int n) {
+    if (n != 10) { return dev_err_reply(de_refused(), 1); }
+    Int ms = le_get(buf + 6, 4);
+    if (ms < 0 || ms > 60000) { return dev_err_reply(de_refused(), 74); }
+    Int g = drv_w();
+    Int m = ld64(g + 48);
+    Int efd = ld64(g + 40);
+    // Two poll records at m + 32, the time at m + 48, a count at m + 64.
+    _ = st32(m + 32, 3) + st32(m + 36, 1) + st32(m + 40, efd) + st32(m + 44, 1);
+    _ = st64(m + 48, ms / 1000) + st64(m + 56, (ms % 1000) * 1000000) + st64(m + 64, 0);
+    Int r = resid_raw_syscall(271, m + 32, if (efd >= 0) { 2 } else { 1 }, m + 48, 0, 8, 0);   // ppoll
+    Int sock = if (r > 0) { (ld32(m + 36) >> 16) & 65535 } else { 0 };
+    Int irq = if (r > 0 && efd >= 0) { (ld32(m + 44) >> 16) & 1 } else { 0 };
+    Int what = if (sock != 0) { 1 } else if (irq != 0) { 2 } else { 0 };
+    Int count = if (what == 2 && resid_raw_syscall(0, efd, m + 64, 8, 0, 0, 0) == 8) { ld64(m + 64) } else { 0 };
+    Int len = if (what == 1) { drv_take(m, ld64(g + 56)) } else { 0 };
+    Int ob = xmalloc(5 + 18 + 5 + len + 16);
+    _ = st8(ob, 0) + le_put(ob + 1, 3, 4) + st8(ob + 5, 0) + le_put(ob + 6, what, 8) + st8(ob + 14, 0) + le_put(ob + 15, count, 8);
+    _ = st8(ob + 23, 1) + le_put(ob + 24, len, 4) + mcopy(ob + 28, m + 128, len);
+    Int out = dp_list(ob, 28 + len);
+    return resid_raw_fill(ob, 0, 28 + len) * 0 + c_free(ob) * 0 + out;
+}
+
+// The program's message into m + 128: its length. Anything but a whole
+// message ends the host (0 when the program closed its end).
+Int drv_take(Int m, Int ppid) {
+    Int r = hs_recv_cred(3, m, 0, 16, ppid);
+    if (r != 16) { return native_child_exit(if (r == 0) { 0 } else { 125 }); }
+    Int len = le_get(m + 8, 4);
+    if (ld8(m) != 7 || len < 0 || len > 65536) { return native_child_exit(125); }
+    if (hs_recv_cred(3, m + 128, 0, len, ppid) != len) { return native_child_exit(125); }
+    return len;
+}
+
+// Kind 22: the driver's answer to the message it took, the bytes after
+// the first six, at most 64 KiB.
+Int drv_reply(Int buf, Int n) {
+    Int len = n - 6;
+    if (len < 0 || len > 65536) { return dev_err_reply(de_refused(), 79); }
+    Int m = ld64(drv_w() + 48);
+    _ = st8(m + 16, 0) + st64(m + 17, len);
+    if (!native_write(m + 16, 0, 9) || !native_write(buf + 6, 0, len)) { return native_child_exit(125); }
+    return ds_done_reply();
+}
+
 // A request of kind 13: the session's number after the first six bytes.
 // Ending a session that is not there is refused, like an access to one.
 Int ds_close(Int buf, Int n) {
@@ -1713,7 +1915,7 @@ Int dh_main(Int argv, Int envp, Int mode, Int root) {
     if (kind == 11) { return dh_session(h, d); }
     // Memory for the device needs an IOMMU, so VFIO; self-test 30 gives it
     // files for resources and plain memory, to test what follows.
-    if (kind == 14) { return if (dh_pci_fake(h)) { dh_session(h, d) } else { dh_vfio(h, d) }; }
+    if (kind == 14 || kind == 19) { return if (dh_pci_fake(h)) { dh_session(h, d) } else { dh_vfio(h, d) }; }
     if (kind == 4) {
         // The entry's name: 16 random bytes from the parent, which removes
         // the entry itself if this host dies before it does.
@@ -2049,7 +2251,7 @@ Int bf_rule(Int p, Int i, Int nr, Int kind, Int a, Int b) {
     _ = bpf(p, i, 32, 0, 0, 0) + bpf(p, i + 1, 21, 0, end - i - 2, nr);   // ld nr; jeq nr
     if (kind == 4) {
         _ = bpf(p, i + 2, 32, 0, 0, 32) + bpf(p, i + 3, 69, end - i - 4, 0, 4);   // prot & PROT_EXEC: the next rule
-        Int at = bf_eq(p, i + 4, end, 40, 34);                                      // flags
+        Int at = bf_eq(p, i + 4, end, 40, if (a != 0) { a } else { 34 });           // flags
         _ = bpf(p, at, 32, 0, 0, 48) + bpf(p, at + 1, 21, 0, end - at - 2, 4294967295);   // fd's low word
         return bpf(p, at + 2, 6, 0, 0, allow) * 0 + end;
     }
@@ -2775,7 +2977,9 @@ Int dh_session(Int h, Int d) {
     Int mo = ds_map_more(h, dir, rn, wr, fake, dget(d, 35), tab, 0, more);
     if (mo != 0) { return if (mo > 0) { dh_fail(h, mo, 0) } else { dh_fail_errno(h, mo, false) }; }
     // Self-test of a DMA session: plain memory where the device's would be.
-    Bool dma = dget(d, 0) == 14;
+    Bool dma = dget(d, 0) == 14 || dget(d, 0) == 19;
+    Bool drv = dget(d, 0) == 19;
+    if (drv && ld64(drv_w()) == 0) { return dh_fail(h, 6, 0); }   // this program has no driver
     Int dmem = if (dma) { dv_map(dget(d, 37)) } else { 0 };
     if (dma && dmem == 0) { return native_child_exit(125); }
     _ = if (dma) { st64(tab + (more + 1) * 16, dmem) + st64(tab + (more + 1) * 16 + 8, dget(d, 37)) } else { 0 };
@@ -2788,7 +2992,7 @@ Int dh_session(Int h, Int d) {
     if (vb == 0 || db == 0 || msg == 0 || !dh_bufs(h, d)) { return native_child_exit(125); }
     _ = dh_rule(h, resid_raw_nr(0), 1, vfd, 0) + dh_rule(h, resid_raw_nr(0), 1, dfd, 0);
     _ = dh_rule(h, resid_raw_nr(47), 1, 3, 0) + dh_rule(h, resid_raw_nr(102), 0, 0, 0) + dh_rule(h, resid_raw_nr(104), 0, 0, 0);   // recvmsg(3), getuid, getgid
-    _ = ds_wait_rules(h, efd);
+    _ = ds_wait_rules(h, efd) + (if (drv) { drv_rules(h) } else { 0 });
     if (!dh_lock(h)) { return native_child_exit(126); }
     Int vr = dh_read_all(vfd, vb, 0, 31);
     Int dr = dh_read_all(dfd, db, 0, 31);
@@ -2799,6 +3003,7 @@ Int dh_session(Int h, Int d) {
     if (mm_hex_id(vb, vr) != ((want >> 8) & 65535) || mm_hex_id(db, dr) != ((want >> 24) & 65535)) { return dh_fail(h, 6, 0); }
     _ = resid_raw_fill(msg, 0, 32);
     if (!native_write(msg, 0, 10)) { return native_child_exit(125); }
+    if (drv) { return drv_enter(d, tab, more + 2, more + 1, efd, msg, dget(h, 22)); }
     return ds_serve(tab, if (dma) { more + 2 } else { more + 1 }, wr, dget(h, 22), msg, if (dma) { more + 1 } else { 0 - 1 }, efd);
 }
 
@@ -2876,6 +3081,8 @@ Int vf_map_more(Int dev, Int ri, Int ms, Int tab, Int i, Int n) {
 }
 
 Int dh_vfio(Int h, Int d) {
+    Bool drv = dget(d, 0) == 19;
+    if (drv && ld64(drv_w()) == 0) { return dh_fail(h, 6, 0); }   // this program has no driver
     Int root = dh_pci_root(h);
     if (root < 0) { return dh_fail_errno(h, root, false); }
     Int an = dget(d, 5) - 21;
@@ -2930,10 +3137,11 @@ Int dh_vfio(Int h, Int d) {
     Int msg = dh_region(h, ds_msg_room(), 0);
     if (msg == 0 || !dh_bufs(h, d)) { return native_child_exit(125); }
     _ = dh_rule(h, resid_raw_nr(47), 1, 3, 0) + dh_rule(h, resid_raw_nr(102), 0, 0, 0) + dh_rule(h, resid_raw_nr(104), 0, 0, 0);   // recvmsg(3), getuid, getgid
-    _ = ds_wait_rules(h, efd);
+    _ = ds_wait_rules(h, efd) + (if (drv) { drv_rules(h) } else { 0 });
     if (!dh_lock(h)) { return native_child_exit(126); }
     _ = resid_raw_fill(msg, 0, 128);
     if (!native_write(msg, 0, 10)) { return native_child_exit(125); }
+    if (drv) { return drv_enter(d, tab, more + 2, more + 1, efd, msg, dget(h, 22)); }
     return ds_serve(tab, more + 2, 1, dget(h, 22), msg, more + 1, efd);
 }
 

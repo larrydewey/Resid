@@ -527,6 +527,12 @@ and touches the registers and the device's memory directly.
   rest run in place, with no message: driver code reads as the tests'
   code does today.
 
+Built as stage O. The host stays a fresh start of the program's binary
+(no memory shared with the program); the program registers its driver
+entry at start, and a host asked to run a driver calls it once it is
+confined. What the filter gained for a driver is its own allocator's
+calls, nothing that reaches outside the process.
+
 Built as stage I, and a virtio entropy device read through it in a
 virtual machine with an emulated IOMMU. Every privileged call the host
 makes (the VFIO descriptors, the mappings) comes before its filter, so

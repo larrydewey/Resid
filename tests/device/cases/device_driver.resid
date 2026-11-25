@@ -1,0 +1,47 @@
+// A driver in its device's host (PLAN-hardware-access.md §11):
+// `@device(dma = ..., driver = f)` makes `f` the function a session's
+// host runs after its filter, and gives the program `t_driver(w, g)`,
+// which starts that host and hands `g` a link to send it messages on.
+// This case touches no device: the function it asks for is not there, so
+// no host runs the driver, and the driver's calls outside a host say so.
+// A real driver runs in tests/device/virtio_vm.sh; the host's side is
+// tests/runtime/device_session.c.
+import "dev/fx_device_virtio_window.resid";
+
+@word(16) type Half = { UInt(16) v; };
+
+@registers(size = 0x38, session = device)
+type Common = { @at(0x16) Half queue_select; };
+
+// The driver: it would answer each message with the register's value.
+@requires(device)
+Int echo_driver(CardSession s) {
+    return match (driver_next(1000)) {
+        Ok(ev) => match (ev) {
+            DrvRequest(msg) => match (driver_reply(msg)) { Ok(b) => echo_driver(s), Err(e) => 1 },
+            DrvInterrupt(n) => echo_driver(s),
+            DrvIdle => echo_driver(s),
+        },
+        Err(e) => 2,
+    };
+}
+
+@device(dma = fx_rng_dma, driver = echo_driver)
+type Card = { Common common; };
+
+Str got(Result(Result(List(UInt(8)), DeviceError), DeviceError) r) {
+    return match (r) { Ok(x) => match (x) { Ok(b) => f"answered {b.len()} bytes", Err(e) => "inside: " + device_error_text(e) }, Err(e) => device_error_text(e) };
+}
+
+@requires(device)
+Int main() {
+    // No function is at this address: no host, and the closure never runs.
+    PciAddr gone = PciAddr {.domain = 0xffff, .bus = 255, .device = 31, .function = 7};
+    println(got(card_driver(CardWindows {.common = PciWindow {.addr = gone, .resource = 4, .base = 0, .len = 0x38}}, lambda(d) { driver_call(d, [1, 2, 3]) })));
+    // A link to no session; a driver's calls where there is no driver's host.
+    println(match (driver_call(DriverLink {.id = 12345}, [1])) { Ok(b) => "answered", Err(e) => device_error_text(e) });
+    println(match (driver_next(10)) { Ok(ev) => "an event", Err(e) => device_error_text(e) });
+    println(match (driver_reply([1])) { Ok(b) => "replied", Err(e) => device_error_text(e) });
+    println(f"started with {driver_started_with().len()} numbers");
+    return 0;
+}

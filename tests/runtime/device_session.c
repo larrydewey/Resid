@@ -23,6 +23,7 @@ void* resid_list_get(void* l, int64_t i);
 void* resid_device_call(void* req);
 void* resid_device_call_w(void* req);
 void resid_device_host_test(int64_t argc, char** argv, char** envp, int64_t mode, const char* root);
+void resid_driver_register(void* f);
 
 static char exe[4096];
 
@@ -146,6 +147,80 @@ static uint64_t number(Rep* r) {
     return v;
 }
 
+/* A session whose host runs a driver (kind 19): the DMA session's
+ * request, then which driver and what it is started with. */
+static void req_drv(Req* r, const char* addr, uint32_t size, int ven, int dev, int which, const char* args) {
+    req_dma(r, addr, size, 0, ven, dev, 8192, 0x100000);
+    r->b[4] = 19;
+    u(r, which, 2); u(r, strlen(args), 2);
+    memcpy(r->b + r->n, args, strlen(args)); r->n += strlen(args);
+}
+/* A message to that driver (kind 20). */
+static void req_msg(Req* r, uint64_t id, const uint8_t* data, int len) {
+    r->n = 0;
+    u(r, 'R', 1); u(r, 'D', 1); u(r, 'V', 1); u(r, 1, 1); u(r, 20, 1); u(r, 1, 1);
+    u(r, id, 8);
+    memcpy(r->b + r->n, data, len); r->n += len;
+}
+
+/* The driver: run by the device host, after its filter, in place of the
+ * loop that serves accesses. Every device call it makes is made in this
+ * process. It takes the program's messages and answers each:
+ *   'L' off(4)   the 4-byte register at `off`, loaded
+ *   'D' bytes    the bytes written to the device's memory at 100, read back
+ *   'A'          what it was started with, and which driver it is
+ *   'X'          the error a call for some other device gets
+ *   'B'          a batch: a store and a load of the device's memory */
+static int64_t driver(int64_t which, int64_t unused) {
+    static Req q;
+    static Rep r;
+    if (which == 9) return 0;   /* a driver that ends at once */
+    for (;;) {
+        q.n = 0;
+        u(&q, 'R', 1); u(&q, 'D', 1); u(&q, 'V', 1); u(&q, 1, 1); u(&q, 21, 1); u(&q, 0, 1); u(&q, 1000, 4);
+        r = call(&q, 0);
+        if (r.n < 28 || r.b[0] != 0 || r.b[1] != 3) return 1;
+        if (r.b[6] != 1) continue;   /* the time passed, or an interrupt */
+        int len = r.b[24] | (r.b[25] << 8) | (r.b[26] << 16);
+        uint8_t msg[4096], out[4096];
+        int on = 0;
+        if (len > 4000) len = 4000;
+        memcpy(msg, r.b + 28, len);
+        if (len >= 5 && msg[0] == 'L') {
+            uint32_t off; memcpy(&off, msg + 1, 4);
+            req_access(&q, 1, 0, off, 4, 0);
+            r = call(&q, 0);
+            if (r.n == 14) { memcpy(out, r.b + 6, 4); on = 4; }
+        } else if (len >= 2 && msg[0] == 'D') {
+            req_bulk(&q, 1, 1, 100, len - 1, msg + 1);
+            r = call(&q, 1);
+            req_bulk(&q, 1, 1, 100, len - 1, NULL);
+            r = call(&q, 0);
+            if (r.n == 10 + len - 1) { memcpy(out, r.b + 10, len - 1); on = len - 1; }
+        } else if (len >= 1 && msg[0] == 'A') {
+            q.n = 0;
+            u(&q, 'R', 1); u(&q, 'D', 1); u(&q, 'V', 1); u(&q, 1, 1); u(&q, 23, 1); u(&q, 0, 1);
+            r = call(&q, 0);
+            if (r.n >= 10) { on = r.n - 10; memcpy(out, r.b + 10, on); out[on++] = (uint8_t)which; }
+        } else if (len >= 1 && msg[0] == 'X') {
+            head(&q, 3, 0, "fx.other", "/sys/kernel/notes");
+            u(&q, 64, 4);
+            r = call(&q, 0);
+            out[0] = code(&r); out[1] = (uint8_t)value(&r); on = 2;
+        } else if (len >= 1 && msg[0] == 'B') {
+            batch_begin(&q, 1, 1);
+            batch_op(&q, 2, 4, 1, 2000, 0x0badcafe, NULL);
+            batch_op(&q, 1, 4, 1, 2000, 0, NULL);
+            r = call(&q, 1);
+            if (r.n == 14) { memcpy(out, r.b + 6, 4); on = 4; }
+        }
+        q.n = 0;
+        u(&q, 'R', 1); u(&q, 'D', 1); u(&q, 'V', 1); u(&q, 1, 1); u(&q, 22, 1); u(&q, 0, 1);
+        memcpy(q.b + q.n, out, on); q.n += on;
+        r = call(&q, 0);
+    }
+}
+
 static int bad = 0;
 static void check(const char* name, int ok) {
     printf("%s %s\n", ok ? "PASS" : "FAIL", name);
@@ -181,6 +256,7 @@ int main(int argc, char** argv, char** envp) {
         root[0] = 0;
         FILE* f = fopen(p, "r");
         if (f) { if (fscanf(f, "%d %4000s", &mode, root) != 2) mode = 0; fclose(f); }
+        resid_driver_register(driver);
         resid_device_host_test(argc, argv, envp, mode, (mode != 0 && strcmp(root, "-")) ? root : NULL);
         return 125;   /* not a host after all */
     }
@@ -497,6 +573,75 @@ int main(int argc, char** argv, char** envp) {
     req_dma(&q, "0000:00:05.0", 4096, 0, 0x1af4, 0x1041, 8192, 0x100000);
     r = call(&q, 1);
     check("dma_wrong_ids", code(&r) == 6);
+
+    /* A driver in the host: the program sends it messages, and it reads
+     * and writes the device in its own process. */
+    req_drv(&q, "0000:00:04.0", 4096, 0x1af4, 0x1041, 2, "hello");
+    r = call(&q, 1);
+    uint64_t dv = number(&r);
+    check("driver_open", dv > 0);
+    uint8_t mm[64];
+    uint32_t off16 = 16;
+    mm[0] = 'L'; memcpy(mm + 1, &off16, 4);
+    req_msg(&q, dv, mm, 5);
+    r = call(&q, 1);
+    check("driver_loads_register", bytes_are(&r, blk + 16, 4));
+    mm[0] = 'D'; memcpy(mm + 1, "device memory", 13);
+    req_msg(&q, dv, mm, 14);
+    r = call(&q, 1);
+    check("driver_writes_memory", bytes_are(&r, (const uint8_t*)"device memory", 13));
+    mm[0] = 'A';
+    req_msg(&q, dv, mm, 1);
+    r = call(&q, 1);
+    check("driver_started_with", bytes_are(&r, (const uint8_t*)"hello\x02", 6));
+    mm[0] = 'B';
+    req_msg(&q, dv, mm, 1);
+    r = call(&q, 1);
+    uint32_t cafe = 0x0badcafe;
+    check("driver_batch", bytes_are(&r, (const uint8_t*)&cafe, 4));
+    /* A driver reaches its own device only: any other device call is
+     * refused in its host (78). */
+    mm[0] = 'X';
+    req_msg(&q, dv, mm, 1);
+    r = call(&q, 1);
+    uint8_t refused[2] = {10, 78};
+    check("driver_reaches_nothing_else", bytes_are(&r, refused, 2));
+    /* Many messages, timed: the best of five passes. */
+    double dus = 1e9;
+    int dsame = 1;
+    mm[0] = 'L'; memcpy(mm + 1, &off16, 4);
+    for (int pass = 0; pass < 5; pass++) {
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < 1000; i++) {
+            req_msg(&q, dv, mm, 5);
+            r = call(&q, 1);
+            if (!bytes_are(&r, blk + 16, 4)) dsame = 0;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        double one = ((t1.tv_sec - t0.tv_sec) * 1e9 + (t1.tv_nsec - t0.tv_nsec)) / 1000.0 / 1000.0;
+        if (one < dus) dus = one;
+    }
+    check("driver_1000_messages", dsame);
+    fprintf(stderr, "note: %.1f microseconds a message to a driver and its answer (best of five)\n", dus);
+    req_msg(&q, dv, mm, 5);
+    r = call(&q, 0);
+    check("driver_message_needs_write_grant", code(&r) == 2);
+    req_close(&q, dv);
+    r = call(&q, 0);
+    check("driver_close", stored(&r));
+    req_msg(&q, dv, mm, 5);
+    r = call(&q, 1);
+    check("driver_ended_is_refused", code(&r) == 10 && value(&r) == 71);
+    /* A driver that returns: its host exits, and a message finds no one. */
+    req_drv(&q, "0000:00:04.0", 4096, 0x1af4, 0x1041, 9, "");
+    r = call(&q, 1);
+    uint64_t gone = number(&r);
+    req_msg(&q, gone, mm, 5);
+    r = call(&q, 1);
+    check("driver_that_returned", gone > 0 && code(&r) == 11);
+    req_drv(&q, "0000:00:05.0", 4096, 0x1af4, 0x1041, 2, "");
+    r = call(&q, 1);
+    check("driver_wrong_ids", code(&r) == 6);
 
     /* Eight at once on a thread, and no ninth; all end. */
     uint64_t ids[9];

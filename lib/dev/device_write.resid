@@ -192,3 +192,29 @@ pub Result(List(DevOut), DeviceError) device_batch(Int id, List(DevOp) ops) {
     if (r.err != "") { return Err(BadInput("batch", r.err)); }
     return dv_session_answer("batch", dv_answer("batch", r, if (dv_ops_write(ops, 0)) { resid_device_call_w(r.req) } else { resid_device_call(r.req) }));
 }
+
+/// Opens a session whose host runs driver number `which` of the program
+/// (the compiler's target for `device.driver_open`). Returns the
+/// session's number as OutNum. Compiler-generated calls only.
+@descriptor(engine_driver_open_w)
+@requires(device)
+pub Result(List(DevOut), DeviceError) device_engine_driver_open_w(DmaDev op, List(PciWindow) ws, Int which) {
+    DvReq r = dv_prep_driver(op, ws, which);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_session_answer(op.name, dv_answer(op.name, r, resid_device_call_w(r.req))));
+}
+
+/// Sends `request` (at most 64 KiB) to the driver `d` and waits for its
+/// answer, at most a minute. Err(BadInput) after the session's end;
+/// BadReply or Timeout when the driver's host is gone or silent, which
+/// also ends the session.
+@requires(device)
+pub Result(List(UInt(8)), DeviceError) driver_call(DriverLink d, List(UInt(8)) request) {
+    if (request.len() > 65536) { return Err(BadInput("driver", "a message is at most 65536 bytes")); }
+    ListBuf(Int) none = ListBuf();
+    List(Int) req = dma_bytes(dv_u(none.push(82).push(68).push(86).push(1).push(20).push(1), d.id, 8), request, 0, request.len()).finish();
+    List(DevOut) o = dv_driver_answer(dv_answer("driver", DvReq {.err = "", .req = [], .outs = [DvSlot {.num = false, .max = 65536, .secret = false}]}, resid_device_call_w(req)))?;
+    List(UInt(8)) empty = [];
+    return Ok(match (dv_out_bytes(o, 0)) { Some(b) => b, None => empty });
+}

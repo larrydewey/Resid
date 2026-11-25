@@ -1,0 +1,236 @@
+// A virtio entropy driver that runs in its device's host: run only by
+// tests/device/virtio_vm.sh, in a virtual machine with an IOMMU, as root,
+// on a device bound to vfio-pci. It RESETS the device it finds.
+//
+// virtio_rng.resid drives the device from the program, a message to the
+// host for each access or batch. Here the driver is a function that runs
+// inside the host, after its filter (`@device(dma = ..., driver = ...)`,
+// PLAN-hardware-access.md §11): it sets the device up once, then loops,
+// taking a request from the program (how many random bytes), getting them
+// from the device with accesses made in its own process, and answering.
+// The program holds no session: only a link to send messages on.
+import "dev/pci.resid";
+import "dev/virtio_pci.resid";
+import "dev/fx_device_virtio_window.resid";
+
+@word(16) type Half = { UInt(16) v; };
+@word(32) type Word = { UInt(32) v; };
+@word(64) type Wide = { UInt(64) v; };
+
+@word(8)
+type Status = {
+    Bool acknowledge;
+    Bool driver;
+    Bool driver_ok;
+    Bool features_ok;
+    @reserved(2);
+    DeviceOwned(Bool) needs_reset;
+    Bool failed;
+};
+
+// The common configuration (§4.1.4.3).
+@registers(size = 0x38, session = device)
+type Common = {
+    @at(0x00) Word   device_feature_select;
+    @at(0x04) Word   device_feature;
+    @at(0x08) Word   driver_feature_select;
+    @at(0x0c) Word   driver_feature;
+    @at(0x10) Half   config_msix_vector;
+    @at(0x14) Status device_status;
+    @at(0x16) Half   queue_select;
+    @at(0x18) Half   queue_size;
+    @at(0x1a) Half   queue_msix_vector;
+    @at(0x1c) Half   queue_enable;
+    @at(0x1e) Half   queue_notify_off;
+    @at(0x20) Wide   queue_desc;
+    @at(0x28) Wide   queue_driver;
+    @at(0x30) Wide   queue_device;
+};
+
+// Where a queue is notified: its number, written.
+@registers(size = 2, session = device)
+type Notify = { @at(0) Half queue; };
+
+// The queue's parts, placed in the device's memory (§2.7): a descriptor,
+// the head of the available ring, the head of the used ring.
+@registers(size = 16, session = device)
+type Desc = { @at(0) Wide addr; @at(8) Word len; @at(12) Half flags; @at(14) Half next; };
+
+@registers(size = 6, session = device)
+type Avail = { @at(0) Half flags; @at(2) Half idx; @at(4) Half ring0; };
+
+@registers(size = 12, session = device)
+type Used = { @at(0) Half flags; @at(2) Half idx; @at(4) Word id0; @at(8) Word len0; };
+
+@device(dma = fx_rng_dma, driver = entropy_driver)
+type Rng = { Common common; Notify notify; };
+
+Status status(Bool ack, Bool drv, Bool feat, Bool ok) { return Status {.acknowledge = ack, .driver = drv, .driver_ok = ok, .features_ok = feat, .failed = false}; }
+
+// ─── In the host ────────────────────────────────────────────────────
+
+// The device made ready: features agreed, queue 0 of 8 entries in the
+// first three pages of the memory, interrupts on vector 0. Returns where
+// the queue is notified from.
+@requires(device)
+Result(Int, DeviceError) bring_up(RngSession s) {
+    CommonSession c = s.common;
+    Int io = s.dma.iova;
+    Bool a0 = common_write_device_status(c, status(false, false, false, false))?;
+    Bool a1 = common_write_device_status(c, status(true, false, false, false))?;
+    Bool a2 = common_write_device_status(c, status(true, true, false, false))?;
+    Bool b0 = common_write_device_feature_select(c, Word {.v = 1})?;
+    Word f1 = common_read_device_feature(c)?;
+    Bool b1 = common_write_driver_feature_select(c, Word {.v = 0})?;
+    Bool b2 = common_write_driver_feature(c, Word {.v = 0})?;
+    Bool b3 = common_write_driver_feature_select(c, Word {.v = 1})?;
+    Bool b4 = common_write_driver_feature(c, Word {.v = f1.v & 3})?;
+    Bool b5 = common_write_device_status(c, status(true, true, true, false))?;
+    Bool q0 = common_write_queue_select(c, Half {.v = 0})?;
+    Half offered = common_read_queue_size(c)?;
+    Bool q1 = if (offered.v > 8) { common_write_queue_size(c, Half {.v = 8})? } else { true };
+    Bool m0 = common_write_config_msix_vector(c, Half {.v = 65535})?;
+    Bool m1 = common_write_queue_msix_vector(c, Half {.v = 0})?;
+    Bool q2 = common_write_queue_desc(c, Wide {.v = (UInt(64)) io})?;
+    Bool q3 = common_write_queue_driver(c, Wide {.v = (UInt(64)) (io + 4096)})?;
+    Bool q4 = common_write_queue_device(c, Wide {.v = (UInt(64)) (io + 8192)})?;
+    Half noff = common_read_queue_notify_off(c)?;
+    Bool q5 = common_write_queue_enable(c, Half {.v = 1})?;
+    Bool q6 = common_write_device_status(c, status(true, true, true, true))?;
+    // The one descriptor never changes: a buffer of 256 bytes at the
+    // fourth page, for the device to write.
+    DescSession d0 = desc_in(s.dma, 0);
+    Bool d1 = desc_write_addr(d0, Wide {.v = (UInt(64)) (io + 12288)})?;
+    Bool d2 = desc_write_len(d0, Word {.v = 256})?;
+    Bool d3 = desc_write_flags(d0, Half {.v = 2})?;
+    Bool d4 = desc_write_next(d0, Half {.v = 0})?;
+    return Ok((Int) noff.v);
+}
+
+// Sleep for the device's interrupt until the used index is `want`. A
+// message from the program meanwhile is not taken: driver_next is not
+// called here, only the device's own wait.
+@requires(device)
+Result(Bool, DeviceError) filled(RngSession s, Int want, Int left) {
+    Half i = used_read_idx(used_in(s.dma, 8192))?;
+    if ((Int) i.v == want % 65536) { return Ok(true); }
+    if (left <= 0) { return Ok(false); }
+    Int irqs = dma_wait(s.dma, 1000)?;
+    return filled(s, want, left - 1);
+}
+
+// Request number `n` of the device: the buffer offered again, the device
+// told, its interrupt slept for. The bytes it wrote, `count` of them at
+// most.
+@requires(device)
+Result(List(UInt(8)), DeviceError) fetch(RngSession s, NotifySession bell, Int n, Int count) {
+    Bool v1 = avail_write_ring0(avail_in(s.dma, 4096), Half {.v = 0})?;
+    Bool v0 = slot_put(s, n)?;
+    Bool v2 = avail_write_idx(avail_in(s.dma, 4096), Half {.v = (UInt(16)) ((n + 1) % 65536)})?;
+    Bool n1 = notify_write_queue(bell, Half {.v = 0})?;
+    Bool done = filled(s, n + 1, 20)?;
+    List(UInt(8)) none = [];
+    if (!done) { return Ok(none); }
+    return dma_read(s.dma, 12288, if (count > 256) { 256 } else { count });
+}
+
+// Ring slot n mod 8 names descriptor 0 (the ring's entries follow its
+// two-byte flags and index).
+@requires(device)
+Result(Bool, DeviceError) slot_put(RngSession s, Int n) { return dma_write(s.dma, 4096 + 4 + 2 * (n % 8), [0, 0]); }
+
+// The driver's loop: what it carries is how many requests the device has
+// had. A request from the program is one byte, how many random bytes it
+// wants; the answer is those bytes. Anything else is answered with none.
+@requires(device)
+Int serve(RngSession s, NotifySession bell, Int n) {
+    List(UInt(8)) none = [];
+    return match (driver_next(60000)) {
+        Err(e) => 1,
+        Ok(ev) => match (ev) {
+            DrvRequest(msg) => serve_one(s, bell, n, if (msg.len() == 1) { (Int) msg[0] } else { 0 }),
+            DrvInterrupt(k) => serve(s, bell, n),
+            DrvIdle => serve(s, bell, n),
+        },
+    };
+}
+
+@requires(device)
+Int serve_one(RngSession s, NotifySession bell, Int n, Int count) {
+    List(UInt(8)) none = [];
+    List(UInt(8)) bytes = if (count < 1) { none } else { match (fetch(s, bell, n, count)) { Ok(b) => b, Err(e) => none } };
+    return match (driver_reply(bytes)) { Ok(b) => serve(s, bell, if (count < 1) { n } else { n + 1 }), Err(e) => 2 };
+}
+
+// The driver: what the host runs. `step` is not known here, so the
+// program sends it in its first message (four bytes).
+@requires(device)
+Int entropy_driver(RngSession s) {
+    Int noff = match (bring_up(s)) { Ok(v) => v, Err(e) => 0 - 1 };
+    if (noff < 0) { return 3; }
+    return match (driver_next(60000)) {
+        Ok(ev) => match (ev) {
+            DrvRequest(msg) => start(s, noff, msg),
+            DrvInterrupt(k) => 4,
+            DrvIdle => 4,
+        },
+        Err(e) => 4,
+    };
+}
+
+@requires(device)
+Int start(RngSession s, Int noff, List(UInt(8)) msg) {
+    if (msg.len() != 4) { return 5; }
+    Int step = (Int) msg[0] | ((Int) msg[1] << 8) | ((Int) msg[2] << 16) | ((Int) msg[3] << 24);
+    NotifySession bell = NotifySession {.id = s.notify.id, .map = s.notify.map, .base = s.notify.base + noff * step, .len = 2};
+    return match (driver_reply([1])) { Ok(b) => serve(s, bell, 0), Err(e) => 6 };
+}
+
+// ─── In the program ─────────────────────────────────────────────────
+
+Int distinct(List(UInt(8)) b, Int i, List(Int) seen) {
+    if (i >= b.len()) { return seen.len(); }
+    return distinct(b, i + 1, if (seen.contains((Int) b[i])) { seen } else { seen.concat([(Int) b[i]]) });
+}
+
+Bool same(List(UInt(8)) a, List(UInt(8)) b, Int i) { return a.len() == b.len() && (i >= a.len() || (a[i] == b[i] && same(a, b, i + 1))); }
+
+List(UInt(8)) le(Int v, Int n, List(UInt(8)) acc) { return if (n <= 0) { acc } else { le(v >> 8, n - 1, acc.concat([(UInt(8)) (v & 255)])) }; }
+
+// `left` requests for 64 bytes each; how many brought 64.
+@requires(device)
+Result(Int, DeviceError) ask(DriverLink d, Int left, Int good) {
+    if (left <= 0) { return Ok(good); }
+    List(UInt(8)) b = driver_call(d, [64])?;
+    return ask(d, left - 1, if (b.len() == 64) { good + 1 } else { good });
+}
+
+@requires(device)
+Result(Str, DeviceError) talk(DriverLink d, Int step) {
+    List(UInt(8)) none = [];
+    List(UInt(8)) ready = driver_call(d, le(step, 4, none))?;
+    List(UInt(8)) a = driver_call(d, [32])?;
+    List(UInt(8)) b = driver_call(d, [32])?;
+    List(UInt(8)) odd = driver_call(d, [1, 2, 3])?;
+    Int good = ask(d, 50, 0)?;
+    List(Int) seen = [];
+    return Ok(f"the driver is ready: {ready.len() == 1}\nasked for 32 bytes: got {a.len()}, more than 8 distinct values: {distinct(a, 0, seen) > 8}\nasked again: got {b.len()}, the same bytes: {same(a, b, 0)}\na message that is no request: {odd.len()} bytes back\n{good} of 50 more requests brought 64 bytes");
+}
+
+@requires(device)
+Result(Str, DeviceError) run(PciAddr a) {
+    PciWindow wc = virtio_pci_window(a, virtio_cfg_common())?;
+    PciWindow wn = virtio_pci_window(a, virtio_cfg_notify())?;
+    Int step = virtio_pci_notify_step(a)?;
+    Result(Str, DeviceError) done = rng_driver(RngWindows {.common = wc, .notify = wn}, lambda(d) { talk(d, step) })?;
+    return done;
+}
+
+@requires(device)
+Int main() {
+    List(PciAddr) none = [];
+    List(PciAddr) found = match (pci_find(virtio_pci_vendor(), virtio_pci_device_id(4))) { Ok(fs) => fs, Err(e) => none };
+    if (found.len() == 0) { println("no virtio entropy device here"); return 0; }
+    println(match (run(found[0])) { Ok(t) => t, Err(e) => device_error_text(e) });
+    return 0;
+}

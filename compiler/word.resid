@@ -806,6 +806,8 @@ WdS wd_ddecl(Str s, Int k, WdS st) {
     Str arg = str_trim(str_slice(s, k + 8, e - 1));
     List(Str) args = str_split(arg, ",");
     Str dma = wd_arg(args, "dma", 0);
+    Str drv = wd_arg(args, "driver", 0);
+    if (drv != "" && dma == "") { return wd_rbad(st, "@device with `driver = f` is a device that is given memory: `@device(dma = dev, driver = f)`", k); }
     Str dev = wd_arg(args, "session", 0);
     Str devw = wd_arg(args, "session_write", 0);
     Bool one = (dma != "") != (dev != "" || devw != "");
@@ -823,14 +825,14 @@ WdS wd_ddecl(Str s, Int k, WdS st) {
     if (b.err != "") { return wd_rbad(st, b.err, k); }
     if (b.ms.len() == 0 || b.ms.len() > 16) { return wd_rbad(st, "device " + name + " has 1 to 16 register blocks", k); }
     if (dma != "" && wd_dhas(b.ms, "dma", 0)) { return wd_rbad(st, "device " + name + ": `dma` is the name of the memory a `@device(dma = ...)` session carries; call the block something else", k); }
-    return WdS {.out = wd_copy(wd_blank(st.out, s, k, e), s, e, cb), .i = cb, .gen = st.gen + (if (dma != "") { wd_dgen_dma(name, b.ms, dma) } else { wd_dgen(name, b.ms, dev, devw) }), .ts = st.ts, .code = "", .err = "", .at = -1};
+    return WdS {.out = wd_copy(wd_blank(st.out, s, k, e), s, e, cb), .i = cb, .gen = st.gen + (if (dma != "") { wd_dgen_dma(name, b.ms, dma) + (if (drv != "") { wd_dgen_driver(name, b.ms, dma, drv, wd_count(st.gen, "\nInt __wd_drv_", 0, 0)) } else { "" }) } else { wd_dgen(name, b.ms, dev, devw) }), .ts = st.ts, .code = "", .err = "", .at = -1};
 }
 
 Bool wd_dargs_known(List(Str) args, Int i) {
     if (i >= args.len()) { return true; }
     Int eq = wd_char(args[i], 61, 0, str_len(args[i]));
     Str key = if (eq > 0) { str_trim(str_slice(args[i], 0, eq)) } else { "" };
-    Bool ok = (key == "session" || key == "session_write" || key == "dma") && str_trim(str_slice(args[i], eq + 1, str_len(args[i]))) != "";
+    Bool ok = (key == "session" || key == "session_write" || key == "dma" || key == "driver") && str_trim(str_slice(args[i], eq + 1, str_len(args[i]))) != "";
     return ok && wd_dargs_known(args, i + 1);
 }
 
@@ -873,6 +875,60 @@ Str wd_dgen_dma(Str name, List(WdDM) ms, Str dev) {
         "    T __wd_r = __wd_f(" + name + "Session {" + wd_dinits(ms, 0, StrBuf()) + ", .dma = DmaRegion {.id = __wd_id, .map = dv_session_res(__wd_ws, 0, __wd_n).len(), .iova = " + dev + "().iova, .len = " + dev + "().dma}});\n" +
         "    Result(Bool, DeviceError) __wd_e = device_session_end(\"" + sn + "\", __wd_id);\n" +
         "    return match (__wd_e) { Ok(__wd_b) => Ok(__wd_r), Err(__wd_x) => Ok(__wd_r) };\n}\n";
+}
+
+// How many times `pat` is in `s` from i on.
+Int wd_count(Str s, Str pat, Int i, Int n) {
+    Int k = ly_find_pub(s, pat, i);
+    return if (k < 0) { n } else { wd_count(s, pat, k + str_len(pat), n + 1) };
+}
+
+// `@device(dma = d, driver = f)`: `f` is the device's driver, a function
+// `Int f(TSession s)` that runs in the session's host (lib/dev/device.resid,
+// "Drivers"). Driver number k of the program gets
+//
+//   Int __wd_drv_k()          in the host: the session from what the driver
+//                             was started with, then f
+//   Result(T, DeviceError) t_driver(TWindows w, T closure(DriverLink) g)
+//                             in the program: start the host with driver k,
+//                             call g with the link, end the session
+//
+// and wd_driver_main writes the one function the host calls, which picks
+// the driver by its number.
+Str wd_dgen_driver(Str name, List(WdDM) ms, Str dev, Str drv, Int k) {
+    Str sn = wd_snake(name);
+    Str kn = f"{k}";
+    Str entry = "\n@requires(device)\nInt __wd_drv_" + kn + "() {\n    List(Int) __wd_a = driver_started_with();\n    if (__wd_a.len() != " + f"{ms.len() * 3 + 1}" + ") { return 0 - 1; }\n    return " + drv + "(" + name + "Session {" + wd_dhost(ms, 0, StrBuf()) + ", .dma = DmaRegion {.id = 1, .map = __wd_a[" + f"{ms.len() * 3}" + "], .iova = " + dev + "().iova, .len = " + dev + "().dma}});\n}\n";
+    Str open = wd_scope_mark() + "\n@requires(device)\npub Result(T, DeviceError) " + sn + "_driver(" + name + "Windows __wd_w, T closure(DriverLink) __wd_f) {\n" +
+        "    List(PciWindow) __wd_ws = [" + wd_dwins(ms, 0, StrBuf()) + "];\n" +
+        "    List(DevOut) __wd_o = device.driver_open(" + dev + "(), __wd_ws, " + kn + ")?;\n" +
+        "    Int __wd_id = match (dv_out_num(__wd_o, 0)) { Some(__wd_v) => __wd_v, None => 0 };\n" +
+        "    T __wd_r = __wd_f(DriverLink {.id = __wd_id});\n" +
+        "    Result(Bool, DeviceError) __wd_e = device_session_end(\"" + sn + "\", __wd_id);\n" +
+        "    return match (__wd_e) { Ok(__wd_b) => Ok(__wd_r), Err(__wd_x) => Ok(__wd_r) };\n}\n";
+    return entry + open;
+}
+
+// In the host a block's session is read from what the driver was started
+// with: three numbers a block, its resource, base and length.
+Str wd_dhost(List(WdDM) ms, Int i, StrBuf acc) {
+    if (i >= ms.len()) { return acc.finish(); }
+    Str at = f"{3 * i}";
+    Str b1 = f"{3 * i + 1}";
+    Str b2 = f"{3 * i + 2}";
+    return wd_dhost(ms, i + 1, acc.push((if (i > 0) { ", " } else { "" }) + "." + ms[i].name + " = " + ms[i].ty + "Session {.id = 1, .map = __wd_a[" + at + "], .base = __wd_a[" + b1 + "], .len = __wd_a[" + b2 + "]}"));
+}
+
+// The function a device host calls to run driver `k` of the program
+// (runtime/rt/device.resid's drv_enter; its second argument is unused).
+Str wd_driver_main(Int n) {
+    if (n == 0) { return ""; }
+    return "\n// generated: the program's drivers, by number\n@requires(device)\npub Int __wd_driver_main(Int __wd_k, Int __wd_z) {\n" + wd_driver_cases(n, 0, StrBuf()) + "    return 0 - 1;\n}\n";
+}
+
+Str wd_driver_cases(Int n, Int i, StrBuf acc) {
+    if (i >= n) { return acc.finish(); }
+    return wd_driver_cases(n, i + 1, acc.push("    if (__wd_k == " + f"{i}" + ") { return __wd_drv_" + f"{i}" + "(); }\n"));
 }
 
 Str wd_dfields(List(WdDM) ms, Str ty, Bool sess, Int i, StrBuf acc) {
@@ -921,6 +977,6 @@ pub LyR wd_expand(Str src) {
     if (ds.err != "") { return LyR {.text = src, .code = ds.code, .err = ds.err, .at = ds.at}; }
     LyR lits = wd_lits_all(str_join(ds.out, ""), st.ts, 0);
     if (lits.err != "") { return lits; }
-    Str rgen = if (ds.gen == "") { "" } else { wd_reg_type() + ds.gen };
+    Str rgen = if (ds.gen == "") { "" } else { wd_reg_type() + ds.gen + wd_driver_main(wd_count(ds.gen, "\nInt __wd_drv_", 0, 0)) };
     return LyR {.text = lits.text + st.gen + rgen, .code = "", .err = "", .at = -1};
 }

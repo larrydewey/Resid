@@ -25,7 +25,9 @@
 # written by requests of three descriptors, one at a time and sixteen in
 # flight. Then tests/device/vm/virtio_net.resid drives a virtio network
 # device on QEMU's own network: an ARP request sent on one queue, and the
-# gateway's reply received on the other.
+# gateway's reply received on the other. Last,
+# tests/device/vm/virtio_rng_driver.resid runs the entropy device's driver
+# inside the device host: the program only sends it messages.
 #
 # KERNEL_IMAGE defaults to $RESID_VM_KERNEL, then the newest readable
 # /boot/vmlinuz-*. Exit 0 on a pass or a skip (a tool is missing), 1 on a
@@ -68,7 +70,7 @@ mkdir -p "$HOME_DIR"
 cp -r "$ROOT/lib" "$HOME_DIR/lib"
 ln -s "$ROOT/build/boot/rt.ll" "$HOME_DIR/rt.ll"
 cp "$CASES/device_virtio_window.dev" "$HOME_DIR/lib/dev/fx_device_virtio_window.resid"
-for prog in virtio_bring_up virtio_session virtio_rng virtio_blk virtio_net; do
+for prog in virtio_bring_up virtio_session virtio_rng virtio_blk virtio_net virtio_rng_driver; do
     if ! RESID_HOME="$HOME_DIR" "$COMPILER" "$ROOT/tests/device/vm/$prog.resid" -o "$WORK/$prog" > "$WORK/compile.log" 2>&1; then
         echo "FAIL virtio_vm: $prog: compile failed"; grep -v '^OK ' "$WORK/compile.log" | head -20; exit 1
     fi
@@ -126,7 +128,7 @@ if [ -z "$MODULES" ] || [ ! -d "$MODULES" ]; then
 fi
 mkdir -p "$R/ko"
 cp "$MODULES"/*.ko "$R/ko/" 2>/dev/null
-cp "$WORK/virtio_rng" "$WORK/virtio_blk" "$WORK/virtio_net" "$R/"
+cp "$WORK/virtio_rng" "$WORK/virtio_blk" "$WORK/virtio_net" "$WORK/virtio_rng_driver" "$R/"
 # A disk of 2048 sectors, a line of text at the start of sector 3.
 dd if=/dev/zero of="$WORK/disk.img" bs=512 count=2048 2>/dev/null
 printf 'RESID-SECTOR-THREE' | dd of="$WORK/disk.img" bs=512 seek=3 conv=notrunc 2>/dev/null
@@ -152,7 +154,9 @@ echo "-- a disk"
 /virtio_blk; b=$?
 echo "-- a network"
 /virtio_net; c=$?
-echo "VM-END $((a + b + c))"
+echo "-- a driver in its host"
+/virtio_rng_driver; d=$?
+echo "VM-END $((a + b + c + d))"
 poweroff -f
 INIT
 chmod +x "$R/init"

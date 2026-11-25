@@ -662,7 +662,17 @@ pub List(Str) nt_hook_main(List(Str) ls, Int n) { return nt_hook_at(ls, 0, "  ca
 // first the same way (runtime/rt/device.resid's resid_device_host).
 pub List(Str) dv_hook_main(List(Str) ls) {
     if (!dv_calls_host(ls, 0)) { return ls; }
-    return nt_hook_at(ls.concat(["declare void @resid_device_host()"]), 0, "  call void @resid_device_host()", false, ListBuf());
+    List(Str) hosted = nt_hook_at(ls.concat(["declare void @resid_device_host()"]), 0, "  call void @resid_device_host()", false, ListBuf());
+    // A program with a driver (compiler/word.resid's __wd_driver_main)
+    // tells the runtime where it is before the host starts, so that a
+    // host started to run it can.
+    if (!dv_defines_driver(ls, 0)) { return hosted; }
+    return nt_hook_at(hosted.concat(["declare void @resid_driver_register(ptr)"]), 0, "  call void @resid_driver_register(ptr @__wd_driver_main)", false, ListBuf());
+}
+
+Bool dv_defines_driver(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return false; }
+    return (str_starts_with(ls[i], "define ") && str_contains(ls[i], " @__wd_driver_main(")) || dv_defines_driver(ls, i + 1);
 }
 
 // A program that reads its transcript (lib/transcript.resid's

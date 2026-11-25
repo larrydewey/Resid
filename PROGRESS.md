@@ -331,6 +331,27 @@ region, with no diagnostic.
   reads the reply QEMU's network sent (10.0.2.2 at 52:55:0a:00:02:02).
   The first device here with traffic both ways. Not yet: more than one
   frame; checksums or anything above Ethernet.
+- **Stage O: the driver in the host.** `@device(dma = d, driver = f)`:
+  `f`, an `Int f(TSession)`, runs in the session's host after its
+  filter. Request kind 19 is kind 14's with which driver and what it is
+  started with (each block's resource, base and length). The host maps
+  and locks itself down as before, with the allocator's own calls also
+  allowed (munmap, madvise, mremap, mlock2, mlock, munlock, mmap
+  without reserve: `drv_rules`), then calls the entry the program
+  registered first thing in main (`resid_driver_register`; the hook is
+  `compiler/native.resid`'s, the entry `__wd_driver_main`, written by
+  `word.resid` and kept as a program entry). In that process every
+  device call is made in place (`drv_call`: one operation is a batch of
+  one) and no other host can be started (78). Messages: kind 20 from
+  the program (`driver_call`), kinds 21 and 22 in the driver
+  (`driver_next`, which also wakes for the interrupt or a time, and
+  `driver_reply`), kind 23 what it was started with. `device_session.c`
+  has 77 checks, with a driver written in C. Cases `device_driver`,
+  `driver_holds_only_device` (E0219 for a driver that wants a file).
+  `tests/device/vm/virtio_rng_driver.resid`: the entropy device's driver
+  in its host, 53 requests answered. Not yet: typed messages; a driver
+  for the disk or the network; accesses as direct loads and stores
+  (they still build and read a request, in process).
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

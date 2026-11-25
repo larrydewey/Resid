@@ -17,3 +17,9 @@ read it back: status 0, the same bytes: true
 address 52:54:00:12:34:56
 sent an ARP request for 10.0.2.2
 received an ARP reply: 10.0.2.2 is at 52:55:0a:00:02:02
+-- a driver in its host
+the driver is ready: true
+asked for 32 bytes: got 32, more than 8 distinct values: true
+asked again: got 32, the same bytes: false
+a message that is no request: 0 bytes back
+50 of 50 more requests brought 64 bytes

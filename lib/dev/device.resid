@@ -25,6 +25,7 @@
 //     device.mmio_win(MmioWin, PciWindow, MmioAccess)  -> Result(List(DevOut), DeviceError)
 //     device.session_open(MmioWin, List(PciWindow))    -> Result(List(DevOut), DeviceError)
 //     device.dma_open(DmaDev, List(PciWindow))         -> Result(List(DevOut), DeviceError)
+//     device.driver_open(DmaDev, List(PciWindow), Int) -> Result(List(DevOut), DeviceError)
 //     device.pci_list(PciList)                         -> Result(List(DevOut), DeviceError)
 //
 // Each verb is a provider call of the `device` family: @requires(device) or,
@@ -827,17 +828,121 @@ pub Result(List(DevOut), DeviceError) device_engine_session_open(MmioWin op, Lis
     return dv_tr_out(op.name, 0 - 1, dv_session_answer(op.name, dv_answer(op.name, r, resid_device_call(r.req))));
 }
 
+// The start of a request of kind `kind` (14 a session with memory for
+// the device, 19 one whose host runs a driver): a session's, then the
+// memory's size and address. "" in `err`, or why not.
+type DvDma = { Str err; List(Int) b; };
+
+DvDma dv_dma_head(DmaDev op, List(PciWindow) ws, Int kind) {
+    List(Int) none = [];
+    if (ws.len() == 0 || ws.len() > 16) { return DvDma {.err = "a session has 1 to 16 windows", .b = none}; }
+    Str bad = dv_session_bad(op.size, ws, 0);
+    if (bad != "") { return DvDma {.err = bad, .b = none}; }
+    List(Int) rs = dv_session_res(ws, 0, none);
+    ListBuf(Int) b = dv_u(dv_u(dv_u(dv_u(dv_head(ListBuf(), kind, true, op.name, "/sys/bus/pci/devices/" + pci_addr_text(ws[0].addr)), dv_session_size(ws, rs[0], 0, 0), 4), 0, 1), 0, 4), 1, 1);
+    ListBuf(Int) b1 = dv_u(dv_u(dv_u(dv_u(dv_u(b, 0, 8), rs[0], 1), op.vendor, 2), op.device, 2), rs.len() - 1, 1);
+    return DvDma {.err = "", .b = dv_u(dv_u(dv_session_more(b1, ws, rs, 1), op.dma, 4), op.iova, 8).finish()};
+}
+
 /// The request that opens a session with memory for the device: as
 /// dv_prep_session, then the memory's size and address.
 pub DvReq dv_prep_dma(DmaDev op, List(PciWindow) ws) {
-    if (ws.len() == 0 || ws.len() > 16) { return dv_bad("a session has 1 to 16 windows"); }
-    Str bad = dv_session_bad(op.size, ws, 0);
-    if (bad != "") { return dv_bad(bad); }
+    DvDma h = dv_dma_head(op, ws, 14);
+    if (h.err != "") { return dv_bad(h.err); }
+    return DvReq {.err = "", .req = h.b, .outs = [DvSlot {.num = true, .max = 8, .secret = false}]};
+}
+
+/// The request that opens a session whose host runs driver number
+/// `which` of the program: as dv_prep_dma, then the number and what the
+/// driver is started with -- for each window its resource's number among
+/// the session's, its base and its length, then the number of the
+/// device's memory, four bytes each.
+pub DvReq dv_prep_driver(DmaDev op, List(PciWindow) ws, Int which) {
+    DvDma h = dv_dma_head(op, ws, 19);
+    if (h.err != "") { return dv_bad(h.err); }
+    if (which < 0 || which > 65535) { return dv_bad("no such driver"); }
     List(Int) none = [];
-    List(Int) rs = dv_session_res(ws, 0, none);
-    ListBuf(Int) b = dv_u(dv_u(dv_u(dv_u(dv_head(ListBuf(), 14, true, op.name, "/sys/bus/pci/devices/" + pci_addr_text(ws[0].addr)), dv_session_size(ws, rs[0], 0, 0), 4), 0, 1), 0, 4), 1, 1);
-    ListBuf(Int) b1 = dv_u(dv_u(dv_u(dv_u(dv_u(b, 0, 8), rs[0], 1), op.vendor, 2), op.device, 2), rs.len() - 1, 1);
-    return DvReq {.err = "", .req = dv_u(dv_u(dv_session_more(b1, ws, rs, 1), op.dma, 4), op.iova, 8).finish(), .outs = [DvSlot {.num = true, .max = 8, .secret = false}]};
+    ListBuf(Int) b = dv_u(dv_u(ListBuf(), which, 2), ws.len() * 12 + 4, 2);
+    return DvReq {.err = "", .req = h.b.concat(dv_u(dv_driver_args(b, ws, 0), dv_session_res(ws, 0, none).len(), 4).finish()), .outs = [DvSlot {.num = true, .max = 8, .secret = false}]};
+}
+
+ListBuf(Int) dv_driver_args(ListBuf(Int) b, List(PciWindow) ws, Int i) {
+    if (i >= ws.len()) { return b; }
+    return dv_driver_args(dv_u(dv_u(dv_u(b, dv_session_map(ws, i), 4), ws[i].base, 4), ws[i].len, 4), ws, i + 1);
+}
+
+// -- Drivers ------------------------------------------------------------------
+// A driver is a function of the program that runs in a session's device
+// host, after its filter: `@device(dma = d, driver = f)` (compiler/
+// word.resid). There it reads and writes the device with the calls any
+// session's code makes, which are made in place, with no message. It
+// talks with the program in messages of bytes: the program sends one and
+// waits for the answer (driver_call); the driver takes what happens next
+// (driver_next) and answers a message (driver_reply). A driver holds no
+// capability but its device.
+
+/// A driver running in a session's host, as the program holds it.
+pub type DriverLink = { Int id; };
+
+/// What a driver is told happened: nothing within the time, a message
+/// from the program (to be answered with driver_reply), or the device's
+/// interrupt, with how many came.
+pub type DriverEvent = DrvIdle | DrvRequest(List(UInt(8))) | DrvInterrupt(Int);
+
+/// In a driver: waits at most `timeout_ms` milliseconds (0 to 60000) for
+/// a message from the program or the device's interrupt. When the program
+/// ends the session this call does not return: the driver's process ends.
+/// Err(BadInput) outside a driver's host.
+@requires(device(readonly))
+pub Result(DriverEvent, DeviceError) driver_next(Int timeout_ms) {
+    if (timeout_ms < 0 || timeout_ms > 60000) { return Err(BadInput("driver", "a wait is at most 60000 milliseconds")); }
+    ListBuf(Int) none = ListBuf();
+    List(Int) req = dv_u(none.push(82).push(68).push(86).push(1).push(21).push(0), timeout_ms, 4).finish();
+    List(DevOut) o = dv_driver_answer(dv_reply("driver", [DvSlot {.num = true, .max = 8, .secret = false}, DvSlot {.num = true, .max = 8, .secret = false}, DvSlot {.num = false, .max = 65536, .secret = false}], resid_device_call(req)))?;
+    Int what = match (dv_out_num(o, 0)) { Some(v) => v, None => 0 };
+    Int count = match (dv_out_num(o, 1)) { Some(v) => v, None => 0 };
+    if (what == 2) { return Ok(DrvInterrupt(count)); }
+    if (what != 1) { return Ok(DrvIdle); }
+    List(UInt(8)) empty = [];
+    return Ok(DrvRequest(match (dv_out_bytes(o, 2)) { Some(b) => b, None => empty }));
+}
+
+/// In a driver: answers the message driver_next gave, with at most 64 KiB.
+@requires(device(readonly))
+pub Result(Bool, DeviceError) driver_reply(List(UInt(8)) bytes) {
+    if (bytes.len() > 65536) { return Err(BadInput("driver", "a message is at most 65536 bytes")); }
+    ListBuf(Int) none = ListBuf();
+    List(DevOut) o = dv_driver_answer(dv_reply("driver", [], resid_device_call(dv_op_bytes(none.push(82).push(68).push(86).push(1).push(22).push(0), bytes, 0).finish())))?;
+    return Ok(true);
+}
+
+/// In a driver: what it was started with, as numbers of four bytes (the
+/// generated entry reads its session from them). Empty outside a host.
+@requires(device(readonly))
+pub List(Int) driver_started_with() {
+    ListBuf(Int) none = ListBuf();
+    List(Int) no = [];
+    List(UInt(8)) empty = [];
+    return match (dv_reply("driver", [DvSlot {.num = false, .max = 1024, .secret = false}], resid_device_call(none.push(82).push(68).push(86).push(1).push(23).push(0).finish()))) {
+        Ok(o) => dv_u32s(match (dv_out_bytes(o, 0)) { Some(b) => b, None => empty }, 0, no),
+        Err(e) => no,
+    };
+}
+
+List(Int) dv_u32s(List(UInt(8)) b, Int i, List(Int) acc) {
+    if (i + 4 > b.len()) { return acc; }
+    return dv_u32s(b, i + 4, acc.concat([(Int) b[i] | ((Int) b[i + 1] << 8) | ((Int) b[i + 2] << 16) | ((Int) b[i + 3] << 24)]));
+}
+
+/// A driver call's refusals as what they mean.
+pub Result(List(DevOut), DeviceError) dv_driver_answer(Result(List(DevOut), DeviceError) r) {
+    return match (r) {
+        Ok(o) => Ok(o),
+        Err(e) => match (e) {
+            BadInput(n, why) => Err(BadInput("driver", if (str_ends_with(why, "request (1)") || str_ends_with(why, "request (2)") || str_ends_with(why, "request (3)")) { "this is not a driver's host" } else if (str_ends_with(why, "request (78)")) { "a driver reaches its own device only" } else if (str_ends_with(why, "request (79)")) { "a message is at most 65536 bytes" } else { dv_session_why(why) })),
+            _ => Err(e),
+        },
+    };
 }
 
 /// Reads `n` bytes at `off` of a DMA session's memory, at most 65536 a

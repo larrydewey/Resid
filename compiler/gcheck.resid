@@ -5519,10 +5519,14 @@ List(Int) sh_zeros(Int n, Int i, ListBuf(Int) acc) {
 // function (the runtime or the host calls them by name).
 pub List(Str) sec_entries(Kg g) { return sh_entries(g, 0, ["resid_user_main"]); }
 
+// The function the device host calls to run one of the program's drivers
+// (compiler/word.resid writes it; runtime/rt/device.resid's drv_enter).
+pub Str dv_driver_main() { return "__wd_driver_main"; }
+
 List(Str) sh_entries(Kg g, Int i, List(Str) acc) {
     if (i >= g.ns.len()) { return acc; }
     KN nd = g.ns[i];
-    Bool e = nd.kind == "fn" && (str_contains(nd.aux, "@export") || str_contains(nd.aux, "@link"));
+    Bool e = nd.kind == "fn" && (str_contains(nd.aux, "@export") || str_contains(nd.aux, "@link") || nd.text == dv_driver_main());
     return sh_entries(g, i + 1, if (e) { acc.concat([nd.text]) } else { acc });
 }
 
@@ -6183,16 +6187,16 @@ Str dv_role_at(Kg g, Str tag, Int i) {
 
 // device.<m>(...): the descriptor of its kind, then the inputs.
 GKT dv_gk_verb(GK k, Int id, Str m) {
-    if (!dev_verb(m)) { return gterr(k, "unknown provider method device." + m + " (the device verbs are ioctl, transact, transact_chain, configfs_report, read_attr, read_pci_attr, sequence, ctaphid, mmio, mmio_pci, mmio_win, session_open, dma_open and pci_list)", id); }
+    if (!dev_verb(m)) { return gterr(k, "unknown provider method device." + m + " (the device verbs are ioctl, transact, transact_chain, configfs_report, read_attr, read_pci_attr, sequence, ctaphid, mmio, mmio_pci, mmio_win, session_open, dma_open, driver_open and pci_list)", id); }
     // A session is opened under the descriptor of a block the device places.
-    Str dt = dv_role_ty(k.g, if (m == "transact_chain") { "transact" } else if (m == "session_open") { "mmio_win" } else if (m == "dma_open") { "dma_dev" } else { m });
+    Str dt = dv_role_ty(k.g, if (m == "transact_chain") { "transact" } else if (m == "session_open") { "mmio_win" } else if (m == "dma_open" || m == "driver_open") { "dma_dev" } else { m });
     Str outt = dv_role_ty(k.g, "out");
     Str errt = dv_role_ty(k.g, "error");
     if (dt == "" || outt == "" || errt == "") { return gterr(k, "E0260: device." + m + " takes a descriptor from lib/dev/: import a device module (for example dev/sev_guest.resid)", id); }
-    Int want = if (m == "read_attr" || m == "pci_list") { 1 } else if (m == "transact_chain" || m == "mmio_pci" || m == "mmio_win") { 3 } else { 2 };
+    Int want = if (m == "read_attr" || m == "pci_list") { 1 } else if (m == "transact_chain" || m == "mmio_pci" || m == "mmio_win" || m == "driver_open") { 3 } else { 2 };
     Int na = k.g.ns[id].nk - 1;
     if (na != want) { return gterr(k, f"device.{m} takes {want} argument(s), got {na}", id); }
-    Str second = if (m == "ioctl" || m == "sequence") { "List(" + dv_role_ty(k.g, "in") + ")" } else if (m == "transact" || m == "ctaphid") { "List(UInt(8))" } else if (m == "transact_chain") { "List(List(UInt(8)))" } else if (m == "configfs_report") { dv_role_ty(k.g, "report_req") } else if (m == "read_pci_attr" || m == "mmio_pci") { dv_role_ty(k.g, "pci_addr") } else if (m == "mmio_win") { dv_role_ty(k.g, "pci_window") } else if (m == "session_open" || m == "dma_open") { "List(" + dv_role_ty(k.g, "pci_window") + ")" } else if (m == "mmio") { dv_role_ty(k.g, "mmio_access") } else { "" };
+    Str second = if (m == "ioctl" || m == "sequence") { "List(" + dv_role_ty(k.g, "in") + ")" } else if (m == "transact" || m == "ctaphid") { "List(UInt(8))" } else if (m == "transact_chain") { "List(List(UInt(8)))" } else if (m == "configfs_report") { dv_role_ty(k.g, "report_req") } else if (m == "read_pci_attr" || m == "mmio_pci") { dv_role_ty(k.g, "pci_addr") } else if (m == "mmio_win") { dv_role_ty(k.g, "pci_window") } else if (m == "session_open" || m == "dma_open" || m == "driver_open") { "List(" + dv_role_ty(k.g, "pci_window") + ")" } else if (m == "mmio") { dv_role_ty(k.g, "mmio_access") } else { "" };
     GKT d = gk_expr(k, gk_kid(k, id, 1), dt);
     if (d.err != "") { return d; }
     if (!ty_same(d.ty, dt)) { return gterr(d.k, "E0260: device." + m + " takes a descriptor of type " + dt + " from lib/dev/, got " + d.ty, id); }
@@ -6204,11 +6208,11 @@ GKT dv_gk_verb(GK k, Int id, Str m) {
     if (want == 2) { return gt(a.k, "Result(List(" + outt + "), " + errt + ")", id); }
     // The third input: a chain's links, or the access to a PCI function's
     // memory.
-    Str third = if (m == "mmio_pci" || m == "mmio_win") { dv_role_ty(k.g, "mmio_access") } else { "List(Int)" };
+    Str third = if (m == "mmio_pci" || m == "mmio_win") { dv_role_ty(k.g, "mmio_access") } else if (m == "driver_open") { "Int" } else { "List(Int)" };
     GKT l = gk_expr(a.k, gk_kid(a.k, id, 3), third);
     if (l.err != "") { return l; }
     if (str_contains(l.ty, "Secret(")) { return gterr(l.k, "E0255: device." + m + " takes public inputs, got " + l.ty + "; declassify the secret first", id); }
-    if (!ty_same(l.ty, third)) { return gterr(l.k, "device." + m + " takes its " + (if (m != "transact_chain") { "access" } else { "links" }) + " as " + third + ", got " + l.ty, id); }
+    if (!ty_same(l.ty, third)) { return gterr(l.k, "device." + m + " takes its " + (if (m == "driver_open") { "driver's number" } else if (m != "transact_chain") { "access" } else { "links" }) + " as " + third + ", got " + l.ty, id); }
     return gt(l.k, "Result(List(" + outt + "), " + errt + ")", id);
 }
 
@@ -6348,7 +6352,7 @@ Bool dv_scan(GK k, Int id, List(Int) nls, Str src, Str smap, Str stddev, Bool ac
 // included, would be a session with no end but the program's. The opens
 // under the marked functions are collected, and any other is E0260.
 Bool dv_is_open(Kg g, Int id) {
-    if (g.ns[id].kind != "mcall" || (g.ns[id].text != "session_open" && g.ns[id].text != "dma_open") || g.ns[id].nk < 1) { return false; }
+    if (g.ns[id].kind != "mcall" || (g.ns[id].text != "session_open" && g.ns[id].text != "dma_open" && g.ns[id].text != "driver_open") || g.ns[id].nk < 1) { return false; }
     Int r = kg_kid(g, id, 0);
     return g.ns[r].kind == "ref" && g.ns[r].text == "device";
 }

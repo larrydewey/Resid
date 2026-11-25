@@ -1,0 +1,20 @@
+// A driver holds no capability but its device: one that reads a file is
+// refused where the compiler writes its entry (E0219), and the host's
+// filter would stop it too.
+import "dev/fx_device_virtio_window.resid";
+
+@word(16) type Half = { UInt(16) v; };
+
+@registers(size = 0x38, session = device)
+type Common = { @at(0x16) Half queue_select; };
+
+@requires(device, filesystem)
+Int nosy_driver(CardSession s) {
+    return if (filesystem.exists("/etc/passwd")) { 1 } else { 0 };
+}
+
+@device(dma = fx_rng_dma, driver = nosy_driver)
+type Card = { Common common; };
+
+@requires(device, filesystem)
+Int main() { return 0; }

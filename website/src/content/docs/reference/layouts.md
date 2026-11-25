@@ -330,6 +330,56 @@ vector 0, which the host turns into an event before its filter is
 installed; the driver points its queues at that vector. A device
 without MSI-X has none to wait for (`BadInput`), and its driver polls.
 
+#### A driver in the host
+
+With `driver = f`, the device's driver is a function of yours that runs
+inside the session's host, after its filter. There the register
+accessors, `dma_read`, `dma_write`, `dma_wait` and batches are made in
+place, in the driver's own process, with no message; the program holds
+no session, only a link to send the driver messages on.
+
+```resid
+@device(dma = virtio_rng_dma, driver = entropy_driver)
+type Rng = { Common common; Notify notify; };
+
+// In the host: set the device up, then loop.
+@requires(device)
+Int entropy_driver(RngSession s) { ... return serve(s, 0); }
+
+@requires(device)
+Int serve(RngSession s, Int n) {
+    return match (driver_next(60000)) {
+        Ok(ev) => match (ev) {
+            DrvRequest(msg) => ...,          // do it, driver_reply(bytes), serve(s, n + 1)
+            DrvInterrupt(count) => ...,      // the device's interrupt
+            DrvIdle => serve(s, n),          // the time passed
+        },
+        Err(e) => 1,
+    };
+}
+
+// In the program: start the host with the driver, talk to it.
+Result(List(UInt(8)), DeviceError) r = rng_driver(w, lambda(d) { driver_call(d, [32]) })?;
+```
+
+| | |
+|---|---|
+| `t_driver(w, g)` | generated: starts the host running the driver, calls `g` with a `DriverLink`, ends the session (`device`) |
+| `driver_call(d, bytes)` | in the program: a message to the driver and its answer, 64 KiB each at most, a minute at most |
+| `driver_next(timeout_ms)` | in the driver: a `DrvRequest(bytes)` from the program, `DrvInterrupt(count)` from the device, or `DrvIdle` |
+| `driver_reply(bytes)` | in the driver: the answer to the request it took |
+
+The driver is `Int f(TSession s)`: a function with its own tail loop,
+whose state is what the loop carries. Messages are bytes; give them
+structure with [layout types](#layout-types). A driver holds no
+capability but `device`: one that asks for another is `E0219` where the
+compiler writes its entry, and the host's filter allows a driver only
+its device, its socket and its own memory. When the program ends the
+session, `driver_next` does not return and the driver's process ends;
+a driver that returns ends its host, and the program's next
+`driver_call` fails. The host is a fresh start of the program's own
+binary, so the driver shares no memory with the program.
+
 #### Batches
 
 Every access of a session is a message to its host and its answer. A
