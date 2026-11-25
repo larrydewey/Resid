@@ -1116,6 +1116,21 @@ pub Result(List(DevOut), DeviceError) device_session_load(Str name, Int id, Int 
     return dv_session_answer(name, dv_answer(name, r, resid_device_call(r.req)));
 }
 
+/// The same load as a number: what a register block's accessor calls.
+/// In a driver's host it is one checked load of the device's memory, with
+/// nothing built for the answer; elsewhere a message, as
+/// device_session_load.
+@requires(device(readonly))
+pub Result(Int, DeviceError) device_session_word(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes) {
+    if (off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
+    if (resid_device_drv_can(map, base + off, bytes, 1) == 1) { return Ok(resid_device_drv_load(map, base + off, bytes)); }
+    if (resid_device_drv_can(0, 0, 0, 0) == 1) { return Err(BadInput(name, "the session's host refused the access")); }
+    DvReq r = dv_prep_session_access(id, map, false, base + off, bytes, 0);
+    if (r.err != "") { return Err(BadInput(name, r.err)); }
+    List(DevOut) o = dv_session_answer(name, dv_answer(name, r, resid_device_call(r.req)))?;
+    return match (dv_out_num(o, 0)) { Some(v) => Ok(v), None => Err(BadReply(name, "no word")) };
+}
+
 /// Ends session `id`: its host exits. Err(BadInput) when it has ended
 /// already.
 @requires(device(readonly))

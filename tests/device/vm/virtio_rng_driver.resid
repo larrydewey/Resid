@@ -148,7 +148,7 @@ Int serve(RngSession s, NotifySession bell, Int n) {
     return match (driver_next(60000)) {
         Err(e) => 1,
         Ok(ev) => match (ev) {
-            DrvRequest(msg) => if (msg.len() == 2 && (Int) msg[0] == 255) { serve_reads(s, bell, n, (Int) msg[1] * 1000) } else { serve_one(s, bell, n, if (msg.len() == 1) { (Int) msg[0] } else { 0 }) },
+            DrvRequest(msg) => if (msg.len() == 2 && (Int) msg[0] == 254) { serve_memory(s, bell, n, (Int) msg[1] * 1000) } else if (msg.len() == 2 && (Int) msg[0] == 255) { serve_reads(s, bell, n, (Int) msg[1] * 1000) } else { serve_one(s, bell, n, if (msg.len() == 1) { (Int) msg[0] } else { 0 }) },
             DrvInterrupt(k) => serve(s, bell, n),
             DrvIdle => serve(s, bell, n),
         },
@@ -175,6 +175,23 @@ Int reads(CommonSession c, Int left, Int good) {
 Int serve_reads(RngSession s, NotifySession bell, Int n, Int count) {
     Int good = reads(s.common, count, 0);
     return match (driver_reply([if (good == count) { 1 } else { 0 }])) { Ok(b) => serve(s, bell, n), Err(e) => 7 };
+}
+
+// `left` reads of a word of the device's memory (the used ring's index):
+// ordinary memory, so the time is the accessor's and not the device's.
+@requires(device)
+Int memory_reads(UsedSession u, Int left, Int sum) {
+    if (left <= 0) { return sum; }
+    Int v = match (used_read_idx(u)) { Ok(h) => (Int) h.v, Err(e) => 100000 };
+    return memory_reads(u, left - 1, sum + v);
+}
+
+@requires(device)
+Int serve_memory(RngSession s, NotifySession bell, Int n, Int count) {
+    Int sum = memory_reads(used_in(s.dma, 8192), count, 0);
+    // Every read gave the same index, below 65536.
+    Bool ok = count == 0 || (sum % count == 0 && sum / count < 65536);
+    return match (driver_reply([if (ok) { 1 } else { 0 }])) { Ok(b) => serve(s, bell, n), Err(e) => 8 };
 }
 
 // The driver: what the host runs. `step` is not known here, so the
@@ -231,7 +248,10 @@ Result(Bool, DeviceError) timed(DriverLink d) {
     List(UInt(8)) many = driver_call(d, [255, 20])?;
     Int t2 = clock.monotonic_ns();
     println(f"note: {((t2 - t1) - (t1 - t0)) / 20000} nanoseconds a register read in the driver");
-    return Ok(many.len() == 1 && (Int) many[0] == 1 && none.len() == 1);
+    List(UInt(8)) mem = driver_call(d, [254, 200])?;
+    Int t3 = clock.monotonic_ns();
+    println(f"note: {((t3 - t2) - (t1 - t0)) / 200000} nanoseconds a read of the device's memory in the driver");
+    return Ok(many.len() == 1 && (Int) many[0] == 1 && none.len() == 1 && mem.len() == 1 && (Int) mem[0] == 1);
 }
 
 @requires(device, clock(readonly))
@@ -244,7 +264,7 @@ Result(Str, DeviceError) talk(DriverLink d, Int step) {
     Int good = ask(d, 50, 0)?;
     Bool read_all = timed(d)?;
     List(Int) seen = [];
-    return Ok(f"the driver is ready: {ready.len() == 1}\nasked for 32 bytes: got {a.len()}, more than 8 distinct values: {distinct(a, 0, seen) > 8}\nasked again: got {b.len()}, the same bytes: {same(a, b, 0)}\na message that is no request: {odd.len()} bytes back\n{good} of 50 more requests brought 64 bytes\n20000 register reads in the driver, all as expected: {read_all}");
+    return Ok(f"the driver is ready: {ready.len() == 1}\nasked for 32 bytes: got {a.len()}, more than 8 distinct values: {distinct(a, 0, seen) > 8}\nasked again: got {b.len()}, the same bytes: {same(a, b, 0)}\na message that is no request: {odd.len()} bytes back\n{good} of 50 more requests brought 64 bytes\n20000 register reads and 200000 of its memory in the driver, all as expected: {read_all}");
 }
 
 @requires(device, clock(readonly))

@@ -223,3 +223,17 @@ pub Result(List(UInt(8)), DeviceError) driver_call(DriverLink d, List(UInt(8)) r
     List(UInt(8)) empty = [];
     return Ok(match (dv_out_bytes(o, 0)) { Some(b) => b, None => empty });
 }
+
+/// The same store, answered with whether it was made: what a register
+/// block's accessor calls. In a driver's host it is one checked store;
+/// elsewhere a message, as device_session_store.
+@requires(device)
+pub Result(Bool, DeviceError) device_session_put(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes, UInt(64) value) {
+    if (off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
+    if (resid_device_drv_store(map, base + off, bytes, value) == 1) { return Ok(true); }
+    if (resid_device_drv_can(0, 0, 0, 0) == 1) { return Err(BadInput(name, "the session's host refused the access")); }
+    DvReq r = dv_prep_session_access(id, map, true, base + off, bytes, value);
+    if (r.err != "") { return Err(BadInput(name, r.err)); }
+    List(DevOut) o = dv_session_answer(name, dv_answer(name, r, resid_device_call_w(r.req)))?;
+    return Ok(o.len() == 0);
+}

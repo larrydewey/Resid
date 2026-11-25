@@ -381,6 +381,15 @@ region, with no diagnostic.
   against 1.8 ms for the program-driven read as one batch and 8.3 ms
   with 22 messages. Not yet: a hardware number; more than one request
   in flight from the driver.
+- **Stage R: the accessor trimmed.** A register block's accessor over a
+  session now calls `device_session_word` (a number back) or
+  `device_session_put` (whether it was made): in a driver's host one
+  `resid_device_drv_can` and the load, or the one store, with no list
+  built for the answer; elsewhere the message as before. Measured in
+  the emulated machine on a block placed in the device's memory (no
+  device emulation in the way): 0.9 to 1.0 µs a read through the
+  accessor, from 1.4 to 1.8 µs. What is left is the typed value the
+  accessor returns (its record and its Result), not the access.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

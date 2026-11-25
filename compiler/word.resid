@@ -751,14 +751,15 @@ Str wd_sacc_regs(Str name, Str sn, List(WdR) rs, List(WdT) ts, Bool writes, Int 
     Str label = "\"" + sn + "." + r.name + "\"";
     Str at = "__wd_s.id, __wd_s.map, __wd_s.base, __wd_s.len, " + f"{r.off}" + ", " + f"{r.bytes}";
     Str word = if (t.width == 64) { "wrapping_u64(__wd_v)" } else { "(UInt(" + f"{t.width}" + "))(wrapping_u64(__wd_v) & " + wd_mask(t.width) + ")" };
-    Str got = "    return match (dv_out_num(__wd_o, 0)) {\n        Some(__wd_v) => Ok(" + tsn + "_from_word(" + word + ")),\n        None => Err(BadReply(" + label + ", \"no word\")),\n    };\n}\n";
-    Str load = "    List(DevOut) __wd_o = device_session_load(" + label + ", " + at + ")?;\n" + got;
+    // The word as a number from lib/dev's device_session_word: one checked
+    // load in a driver's host, a message elsewhere.
+    Str load = "    Int __wd_v = device_session_word(" + label + ", " + at + ")?;\n    return Ok(" + tsn + "_from_word(" + word + "));\n}\n";
     Str rd = if (!wd_readable(t.fs, 0) || t.clears) { "" } else {
         "@requires(device(readonly))\npub Result(" + r.ty + ", DeviceError) " + sn + "_read_" + r.name + "(" + name + "Session __wd_s) {\n" + load };
     Str tk = if (!wd_readable(t.fs, 0) || !t.clears || !writes) { "" } else {
         "@requires(device)\npub Result(" + r.ty + ", DeviceError) " + sn + "_take_" + r.name + "(" + name + "Session __wd_s) {\n" + load };
     Str wr = if (!wd_writable(t.fs, 0) || !writes) { "" } else {
-        "@requires(device)\npub Result(Bool, DeviceError) " + sn + "_write_" + r.name + "(" + name + "Session __wd_s, " + r.ty + " __wd_x) {\n    UInt(64) __wd_w = " + tsn + "_word(__wd_x);\n    List(DevOut) __wd_o = device_session_store(" + label + ", " + at + ", __wd_w)?;\n    return Ok(__wd_o.len() == 0);\n}\n" };
+        "@requires(device)\npub Result(Bool, DeviceError) " + sn + "_write_" + r.name + "(" + name + "Session __wd_s, " + r.ty + " __wd_x) {\n    UInt(64) __wd_w = " + tsn + "_word(__wd_x);\n    return device_session_put(" + label + ", " + at + ", __wd_w);\n}\n" };
     // The same accesses as operations of a batch (lib/dev/device.resid's
     // DevOp), and the reader of a load's answer among a batch's outputs.
     Str opat = "__wd_s.map, __wd_s.base, __wd_s.len, " + f"{r.off}" + ", " + f"{r.bytes}";
