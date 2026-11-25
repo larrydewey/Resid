@@ -189,6 +189,22 @@ Int marks_grow() {
     return as_(9, cap);
 }
 
+// Room for n records on the scope stack (region.resid, Generations: a
+// loop's region moves up a depth when it gains an old one).
+pub Int marks_room(Int n) {
+    if (n <= ag(9)) { return 0; }
+    _ = marks_grow();
+    return marks_room(n);
+}
+
+// The region at depth d - 1 made the current one, d the depth: its bump
+// words loaded (region.resid, Generations).
+pub Int scope_top(Int d) {
+    Int r = rec_at(d - 1);
+    _ = as_(10, r) + as_(4, d);
+    return rec_load(r) + yid_sync() + due_sync(d);
+}
+
 // The record of the region at depth index d (region.resid).
 pub Int rec_at(Int d) { return ag(8) + d * 64; }
 

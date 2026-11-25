@@ -403,6 +403,19 @@ pub Int mv_done(Int v) {
 // take pages, copies the result out. Values older than L never move:
 // they cannot point into L.
 //
+// Generations. A loop that carries a structure that keeps growing (a
+// session doing ten thousand inserts) would copy all of it at every
+// compaction. So the first compaction moves what is live into an old
+// region O, which takes L's place at the loop's depth, and L starts again
+// above it, empty: depth l + 2 means the loop has O. Later compactions
+// move only what L holds that is live into O (a minor one), and leave O
+// alone; once O holds more than twice what it held after its last full
+// compaction (and rg_old_slack() pages more), both move into a fresh O
+// (a full one). O is older than L, as every region below another is:
+// nothing in O points into L, because what moves into O is all that is
+// reachable from L. An exit hands O's pages to the caller (or, at depth
+// 0, copies the result out of both).
+//
 // L is lazy: while the caller's region R is not due for compaction (by
 // rt_loop_due's measure, so R keeps its bound), the loop runs in R and
 // pushes L only at a back edge that finds R due (nothing points into a
@@ -424,7 +437,12 @@ Int loop_push() { return rt_scope_push(); }
 // Pages a loop region may grow past twice its live size before it is
 // compacted: a loop carrying a structure that keeps growing copies it
 // again at every compaction, so a small live set is copied less often.
-Int rg_slack() { return 8; }
+Int rg_slack() { return 4; }
+
+// Pages O may hold past twice its live size before a full compaction.
+Int rg_old_slack() { return 8; }
+
+Bool old_full(Int o) { return ld64(o + 32) > 2 * ld64(o + 40) + rg_old_slack(); }
 
 Bool lazy_full(Int r) { return ld64(r + 32) > 2 * ld64(r + 40) + rg_slack(); }
 
@@ -448,8 +466,7 @@ pub Bool rt_loop_due(Int l) {
 @noinline
 Bool loop_due_full(Int l) {
     if (ag_scope_depth() == l) { return lazy_full(rec_at(l - 1)) && lazy_push(); }
-    Int r = rec_at(l);
-    return ld64(r + 32) > 2 * ld64(r + 40) + rg_slack();
+    return lazy_full(rec_at(ag_scope_depth() - 1));
 }
 
 // rt_loop_due, telling a lazy push apart: 0 nothing, 1 a compaction is
@@ -465,8 +482,7 @@ pub Int rt_loop_due2(Int l) {
 @noinline
 Int loop_due2_full(Int l) {
     if (ag_scope_depth() == l) { return if (lazy_full(rec_at(l - 1)) && !lazy_push()) { 2 } else { 0 }; }
-    Int r = rec_at(l);
-    return if (ld64(r + 32) > 2 * ld64(r + 40) + rg_slack()) { 1 } else { 0 };
+    return if (lazy_full(rec_at(ag_scope_depth() - 1))) { 1 } else { 0 };
 }
 
 // A carried owned record the loop writes in place without a young test
@@ -492,10 +508,20 @@ Int own_copy_here(Int p, Int size, Int hdr) {
 @noinline
 Bool lazy_push() { return rt_scope_push() < 0; }
 
-// Step 1: the context moving L's values into a new detached region;
-// step 2: L's pages freed and the new region in its place.
+// Step 1: the context of the compaction (see Generations): the first
+// moves L's values into a new detached region that becomes O; a minor one
+// moves them into O; a full one moves O's and L's into a new detached
+// region that becomes O. Step 2: the regions moved out of are freed, O
+// takes the loop's depth, and L starts again, empty, above it.
+// The kind of move under way is kept between the steps: 1 first, 2 full,
+// 3 minor.
+Int gen_word() { return resid_raw_tls("rg_gen", 8); }
+
 @export("resid_loop_move", "ptr(i64,i64)")
 pub Int rt_loop_move(Int l, Int step) {
+    // Steps 11 and 12: the same with an old generation (a loop the compiler
+    // found carries no builder: see Generations).
+    if (step > 10) { return gen_move(l, step - 10); }
     Int nr = resid_raw_tls("rg_next", 64);
     Int r = rec_at(l);
     if (step == 1) {
@@ -515,6 +541,46 @@ pub Int rt_loop_move(Int l, Int step) {
     return str_index_scope_popped() * 0;
 }
 
+Int gen_move(Int l, Int step) {
+    Int nr = resid_raw_tls("rg_next", 64);
+    Int d = ag_scope_depth();
+    Int y = rec_at(d - 1);
+    Bool has_old = d == l + 2;
+    if (step == 1) {
+        _ = rec_save(y);
+        // The carried values move now (list_move adopts transient lists).
+        _ = st64(resid_raw_tls("rg_compact", 8), 1) + fwd_reset();
+        Int c = resid_raw_tls("rg_mv_loop", 24);
+        if (!has_old) {
+            _ = rec_init(nr, new_region_id()) + st64(gen_word(), 1);
+            return mv_ctx(c, ld64(y), ld64(y), nr);
+        }
+        Int o = rec_at(l);
+        if (old_full(o)) {
+            _ = rec_init(nr, new_region_id()) + st64(gen_word(), 2);
+            return mv_ctx(c, ld64(o), ld64(y), nr);
+        }
+        _ = st64(gen_word(), 3);
+        return mv_ctx(c, ld64(y), ld64(y), o);
+    }
+    _ = st64(resid_raw_tls("rg_compact", 8), 0) + fwd_reset();
+    Int mode = ld64(gen_word());
+    Bool failed = mv_failed();
+    // What was moved out of is freed; a closure that could not move still
+    // points into it, and then its pages join where the rest went.
+    Int dst = if (mode == 3) { rec_at(l) } else { nr };
+    _ = if (failed) { region_merge(y, dst) } else { pages_free(ld64(y + 8), 0, rec_bump(y)) + lg_free(ld64(y + 56), 0) };
+    _ = if (mode == 2) { (if (failed) { region_merge(rec_at(l), nr) } else { pages_free(ld64(rec_at(l) + 8), 0, ld64(rec_at(l) + 16)) + lg_free(ld64(rec_at(l) + 56), 0) }) } else { 0 };
+    // The first compaction takes a depth more: L moves up one, O below it
+    // (the records may move when the stack grows: taken again after).
+    _ = marks_room(l + 2);
+    Int o2 = rec_at(l);
+    _ = if (mode != 3) { mcopy(o2, nr, 64) + st64(o2 + 40, ld64(o2 + 32)) + st64(o2 + 48, 0) } else { 0 };
+    _ = rec_init(rec_at(l + 1), new_region_id());
+    _ = scope_top(l + 2);
+    return str_index_scope_popped() * 0;
+}
+
 // Step 1: L's pages handed to the caller's region, with an empty move
 // context (nothing left to copy); for a small L, or at depth 0, the
 // context copying the result over. Step 2: L popped. A loop that never
@@ -530,11 +596,16 @@ pub Int rt_loop_exit(Int l, Int step) {
 @noinline
 Int loop_exit_slow(Int l, Int step) {
     if (step == 2) { return fwd_reset() + (if (mv_failed()) { region_keep(l) } else { 0 }) + rt_scope_pop(l) * 0; }
-    Int r = rec_at(l);
+    Int d = ag_scope_depth();
+    Int r = rec_at(d - 1);
+    Bool has_old = d == l + 2;
     _ = fwd_reset();
     _ = rec_save(r);
     Int c = resid_raw_tls("rg_mv_loop", 24);
-    if (l == 0) { return mv_ctx(c, ld64(r), ld64(r), 0); }
+    if (l == 0) { return mv_ctx(c, ld64(rec_at(l)), ld64(r), 0); }
+    // O's pages go to the caller's region whatever L does: the result may
+    // point into it, and it holds what the loop kept.
+    _ = if (has_old) { region_merge(rec_at(l), rec_at(l - 1)) } else { 0 };
     // L is the current region: its use is the bump past its top page.
     Bool small = ld64(r + 32) <= 1 && ld64(r + 16) - ld64(r + 8) < rg_page() / 4;
     if (small) { return mv_ctx(c, ld64(r), ld64(r), rec_at(l - 1)); }
@@ -556,9 +627,17 @@ pub Bool mv_failed() {
 // region, or at depth 0 are left to the program (owned by no region, as
 // heap memory is), before L is popped.
 Int region_keep(Int l) {
-    Int r = rec_at(l);
-    _ = if (l > 0) { region_merge(r, rec_at(l - 1)) } else { region_abandon(r) };
+    _ = keep_from(l, ag_scope_depth() - 1);
     return top_clear();
+}
+
+// Regions l..i (L, and O below it when the loop has one) given to the
+// caller's region, or at depth 0 left to the program.
+Int keep_from(Int l, Int i) {
+    if (i < l) { return 0; }
+    Int r = rec_at(i);
+    _ = if (l > 0) { region_merge(r, rec_at(l - 1)) } else { region_abandon(r) };
+    return keep_from(l, i - 1);
 }
 
 Int region_abandon(Int r) {
