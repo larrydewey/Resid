@@ -261,19 +261,25 @@ int main(int argc, char** argv, char** envp) {
     check("session_store_reached_file", fd >= 0 && pread(fd, &got, 4, 0x70) == 4 && got == 0xdeadbeefu);
     if (fd >= 0) close(fd);
 
-    /* Many accesses through one host. */
+    /* Many accesses through one host. Timed as the best of five passes:
+     * one pass is at the mercy of whatever else the machine is doing. */
     struct timespec t0, t1;
     int same = 1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
-    for (int i = 0; i < 2000; i++) {
-        req_access(&q, ro, 0, 16, 4, 0);
-        r = call(&q, 0);
-        if (!loaded(&r, w32)) same = 0;
+    double us = 1e9;
+    for (int pass = 0; pass < 5; pass++) {
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < 2000; i++) {
+            req_access(&q, ro, 0, 16, 4, 0);
+            r = call(&q, 0);
+            if (!loaded(&r, w32)) same = 0;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        double one = ((t1.tv_sec - t0.tv_sec) * 1e9 + (t1.tv_nsec - t0.tv_nsec)) / 2000.0 / 1000.0;
+        fprintf(stderr, "note: pass %d: %.1f microseconds a load through a session\n", pass + 1, one);
+        if (one < us) us = one;
     }
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    double us = ((t1.tv_sec - t0.tv_sec) * 1e9 + (t1.tv_nsec - t0.tv_nsec)) / 2000.0 / 1000.0;
     check("session_2000_loads", same);
-    fprintf(stderr, "note: %.1f microseconds a load through a session\n", us);
+    fprintf(stderr, "note: %.1f microseconds a load through a session (best of five)\n", us);
 
     /* Ended: its number names nothing, and ending it again is refused. */
     req_close(&q, ro);
@@ -437,18 +443,23 @@ int main(int argc, char** argv, char** envp) {
     batch_op(&q, 9, 0, 0, 0, 0, NULL);
     r = call(&q, 0);
     check("batch_unknown_operation", code(&r) == 10 && value(&r) == 76);
-    /* Many loads in one message, timed. */
-    clock_gettime(CLOCK_MONOTONIC, &t0);
+    /* Many loads in one message, timed: the best of five passes. */
     int bsame = 1;
-    for (int k = 0; k < 200; k++) {
-        batch_begin(&q, dm, 0);
-        for (int i = 0; i < 10; i++) batch_op(&q, 1, 4, 0, 16, 0, NULL);
-        r = call(&q, 0);
-        if (r.n != 5 + 90 || memcmp(r.b + 6, &w32, 4) != 0) bsame = 0;
+    double bus = 1e9;
+    for (int pass = 0; pass < 5; pass++) {
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int k = 0; k < 200; k++) {
+            batch_begin(&q, dm, 0);
+            for (int i = 0; i < 10; i++) batch_op(&q, 1, 4, 0, 16, 0, NULL);
+            r = call(&q, 0);
+            if (r.n != 5 + 90 || memcmp(r.b + 6, &w32, 4) != 0) bsame = 0;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        double one = ((t1.tv_sec - t0.tv_sec) * 1e9 + (t1.tv_nsec - t0.tv_nsec)) / 2000.0 / 1000.0;
+        if (one < bus) bus = one;
     }
-    clock_gettime(CLOCK_MONOTONIC, &t1);
     check("batch_2000_loads", bsame);
-    fprintf(stderr, "note: %.1f microseconds a load in a batch of ten\n", ((t1.tv_sec - t0.tv_sec) * 1e9 + (t1.tv_nsec - t0.tv_nsec)) / 2000.0 / 1000.0);
+    fprintf(stderr, "note: %.1f microseconds a load in a batch of ten (best of five)\n", bus);
 
     /* Waiting for an interrupt: none comes here, so the time passes; a
      * plain session has none to wait for. */
