@@ -1633,7 +1633,15 @@ Int sb_elems_t(Int sb, Int ks, Int i, Int n, Int k, Int clo) {
 // ek: the element mover, 0 for elem_move (words and strings), else a
 // compiled function that moves one element (a record) with the context.
 // ek 1: raw slots (lraw), which are values and stay as they are.
-Int keep_elem(Int it, Int ek, Int ctx) { return if (ek == 0) { elem_move(it, ctx) } else { if (ek == 1) { it } else { resid_raw_call2(ek, it, ctx) } }; }
+Int keep_elem(Int it, Int ek, Int ctx) {
+    if (ek == 0) { return elem_move(it, ctx); }
+    if (ek == 1) { return it; }
+    // An element list of bytes whose header and buffer both lie outside
+    // the regions moving stays (what bl_move would decide, without the
+    // call): most of a young list of byte lists is older byte lists.
+    if (ek == resid_raw_fn("resid_mv_list") && it != 0 && lbytes(it) && !mv_src(ctx, it) && !mv_src(ctx, lroot(it))) { return it; }
+    return resid_raw_call2(ek, it, ctx);
+}
 
 // A list element (a scalar box or a string).
 Int elem_move(Int p, Int ctx) {

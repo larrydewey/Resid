@@ -383,13 +383,15 @@ pub Int bl_buf_grow(Int l, Int f, Int n, Int need) {
 // ─── Moves out of a region ─────────────────────────────────────────────
 
 // list_move for a byte list: the bytes are values, so only the buffer and
-// header move (a transient adopted by a loop's compaction too).
+// header move, and only when they lie in a region that moves.
 @noinline
 pub Int bl_move(Int l, Int ctx) {
     Int root = lroot(l);
     Int n = lcount(l);
-    Bool adopt = root != 0 && ltransient(l) && ld64(resid_raw_tls("rg_compact", 8)) != 0 && !mv_src(ctx, root);
-    Int nroot = if (root != 0 && (adopt || mv_src(ctx, root))) { bl_copy_to(root, n, ctx) } else { root };
+    // A transient byte list is not adopted (map.resid, list_move): its
+    // buffer holds no pointers, so a store into it never needs a move,
+    // and an older buffer stays where it is.
+    Int nroot = if (root != 0 && mv_src(ctx, root)) { bl_copy_to(root, n, ctx) } else { root };
     if (nroot == root && !mv_src(ctx, l)) { return l; }
     Int out = mv_alloc(ctx, 32);
     _ = mcopy(out, l, 32);
