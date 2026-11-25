@@ -27,7 +27,9 @@
 # device on QEMU's own network: an ARP request sent on one queue, and the
 # gateway's reply received on the other. Last,
 # tests/device/vm/virtio_rng_driver.resid runs the entropy device's driver
-# inside the device host: the program only sends it messages.
+# inside the device host: the program only sends it messages; and
+# tests/device/vm/virtio_blk_driver.resid does the same for the disk,
+# whose driver takes requests to read and write sectors.
 #
 # KERNEL_IMAGE defaults to $RESID_VM_KERNEL, then the newest readable
 # /boot/vmlinuz-*. Exit 0 on a pass or a skip (a tool is missing), 1 on a
@@ -70,7 +72,7 @@ mkdir -p "$HOME_DIR"
 cp -r "$ROOT/lib" "$HOME_DIR/lib"
 ln -s "$ROOT/build/boot/rt.ll" "$HOME_DIR/rt.ll"
 cp "$CASES/device_virtio_window.dev" "$HOME_DIR/lib/dev/fx_device_virtio_window.resid"
-for prog in virtio_bring_up virtio_session virtio_rng virtio_blk virtio_net virtio_rng_driver; do
+for prog in virtio_bring_up virtio_session virtio_rng virtio_blk virtio_net virtio_rng_driver virtio_blk_driver; do
     if ! RESID_HOME="$HOME_DIR" "$COMPILER" "$ROOT/tests/device/vm/$prog.resid" -o "$WORK/$prog" > "$WORK/compile.log" 2>&1; then
         echo "FAIL virtio_vm: $prog: compile failed"; grep -v '^OK ' "$WORK/compile.log" | head -20; exit 1
     fi
@@ -128,7 +130,7 @@ if [ -z "$MODULES" ] || [ ! -d "$MODULES" ]; then
 fi
 mkdir -p "$R/ko"
 cp "$MODULES"/*.ko "$R/ko/" 2>/dev/null
-cp "$WORK/virtio_rng" "$WORK/virtio_blk" "$WORK/virtio_net" "$WORK/virtio_rng_driver" "$R/"
+cp "$WORK/virtio_rng" "$WORK/virtio_blk" "$WORK/virtio_net" "$WORK/virtio_rng_driver" "$WORK/virtio_blk_driver" "$R/"
 # A disk of 2048 sectors, a line of text at the start of sector 3.
 dd if=/dev/zero of="$WORK/disk.img" bs=512 count=2048 2>/dev/null
 printf 'RESID-SECTOR-THREE' | dd of="$WORK/disk.img" bs=512 seek=3 conv=notrunc 2>/dev/null
@@ -156,7 +158,9 @@ echo "-- a network"
 /virtio_net; c=$?
 echo "-- a driver in its host"
 /virtio_rng_driver; d=$?
-echo "VM-END $((a + b + c + d))"
+echo "-- a disk's driver in its host"
+/virtio_blk_driver; e=$?
+echo "VM-END $((a + b + c + d + e))"
 poweroff -f
 INIT
 chmod +x "$R/init"
@@ -184,6 +188,12 @@ fi
 SECTOR12="$(dd if="$WORK/disk.img" bs=512 skip=12 count=1 2>/dev/null | od -An -tu1 -N4 | tr -s ' ' | sed 's/^ //')"
 if [ "$SECTOR12" != "156 157 158 159" ]; then
     echo "FAIL virtio_vm queue: sector 12 of the disk starts '$SECTOR12', not '156 157 158 159'"; sed 's/^/    /' "$WORK/out2.txt"; exit 1
+fi
+# And sector 6, written by the disk's driver in its host: byte i is
+# (5 i + 11) mod 251.
+SECTOR6="$(dd if="$WORK/disk.img" bs=512 skip=6 count=1 2>/dev/null | od -An -tu1 -N4 | tr -s ' ' | sed 's/^ //')"
+if [ "$SECTOR6" != "11 16 21 26" ]; then
+    echo "FAIL virtio_vm queue: sector 6 of the disk starts '$SECTOR6', not '11 16 21 26'"; sed 's/^/    /' "$WORK/out2.txt"; exit 1
 fi
 if cmp -s "$WORK/out2.txt" "$ROOT/tests/device/vm/virtio_rng.out"; then
     echo "PASS virtio_vm queue"; cat "$WORK/out2.txt" | sed 's/^/    /'

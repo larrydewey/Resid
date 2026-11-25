@@ -1,0 +1,328 @@
+// A virtio block driver that runs in its device's host: run only by
+// tests/device/virtio_vm.sh, in a virtual machine with an IOMMU, as root,
+// on a device bound to vfio-pci. It RESETS the device it finds and WRITES
+// sector 6 of its disk.
+//
+// virtio_blk.resid drives the disk from the program, a message or a batch
+// to the device host for each step. Here the driver is the host's own
+// code (`@device(dma = ..., driver = ...)`, PLAN-hardware-access.md §11):
+// its register and queue accesses are loads and stores in its own
+// process, and the program sends it requests -- read a sector, write a
+// sector, the capacity -- as messages of bytes:
+//
+//   1, sector (8)              -> status, the sector's 512 bytes
+//   2, sector (8), 512 bytes   -> status
+//   3                          -> the capacity in sectors (8)
+//   4, count (2)               -> how many of `count` reads of sector 3
+//                                 the driver made by itself succeeded (2)
+import "dev/pci.resid";
+import "dev/virtio_pci.resid";
+import "dev/fx_device_virtio_window.resid";
+
+@word(16) type Half = { UInt(16) v; };
+@word(32) type Word = { UInt(32) v; };
+@word(64) type Wide = { UInt(64) v; };
+
+@word(8)
+type Status = {
+    Bool acknowledge;
+    Bool driver;
+    Bool driver_ok;
+    Bool features_ok;
+    @reserved(2);
+    DeviceOwned(Bool) needs_reset;
+    Bool failed;
+};
+
+// The common configuration (§4.1.4.3).
+@registers(size = 0x38, session = device)
+type Common = {
+    @at(0x00) Word   device_feature_select;
+    @at(0x04) Word   device_feature;
+    @at(0x08) Word   driver_feature_select;
+    @at(0x0c) Word   driver_feature;
+    @at(0x10) Half   config_msix_vector;
+    @at(0x14) Status device_status;
+    @at(0x16) Half   queue_select;
+    @at(0x18) Half   queue_size;
+    @at(0x1a) Half   queue_msix_vector;
+    @at(0x1c) Half   queue_enable;
+    @at(0x1e) Half   queue_notify_off;
+    @at(0x20) Wide   queue_desc;
+    @at(0x28) Wide   queue_driver;
+    @at(0x30) Wide   queue_device;
+};
+
+// Where a queue is notified: its number, written.
+@registers(size = 2, session = device)
+type Notify = { @at(0) Half queue; };
+
+// The device's own configuration (§5.2.4): its capacity in sectors.
+@registers(size = 8, session = device)
+type BlkConfig = { @at(0) Wide capacity; };
+
+// The queue's parts, placed in the device's memory (§2.7).
+@registers(size = 16, session = device)
+type Desc = { @at(0) Wide addr; @at(8) Word len; @at(12) Half flags; @at(14) Half next; };
+
+@registers(size = 4, session = device)
+type RingHead = { @at(0) Half flags; @at(2) Half idx; };
+
+@registers(size = 2, session = device)
+type Slot = { @at(0) Half head; };
+
+// A request's header and status byte, placed in the device's memory
+// (§5.2.6): what to do and to which sector; what the device made of it.
+@word(8) type Octet = { UInt(8) v; };
+
+@registers(size = 16, session = device)
+type ReqHeader = { @at(0) Word kind; @at(8) Wide sector; };
+
+@registers(size = 1, session = device)
+type ReqStatus = { @at(0) Octet code; };
+
+@device(dma = fx_blk_dma, driver = disk_driver)
+type Blk = { Common common; Notify notify; BlkConfig config; };
+
+// The memory: descriptors at 0, the available ring at one page, the used
+// ring at two, and at three the header, the sector and the status byte.
+Int at_avail() { return 4096; }
+Int at_used() { return 8192; }
+Int at_header() { return 12288; }
+Int at_data() { return 12800; }
+Int at_status() { return 13312; }
+
+Status status(Bool ack, Bool drv, Bool feat, Bool ok) { return Status {.acknowledge = ack, .driver = drv, .driver_ok = ok, .features_ok = feat, .failed = false}; }
+
+List(UInt(8)) le(Int v, Int n, List(UInt(8)) acc) { return if (n <= 0) { acc } else { le(v >> 8, n - 1, acc.concat([(UInt(8)) (v & 255)])) }; }
+
+Int from_le(List(UInt(8)) b, Int at, Int n) { return if (n <= 0) { 0 } else { (Int) b[at] | (from_le(b, at + 1, n - 1) << 8) }; }
+
+// ─── In the host ────────────────────────────────────────────────────
+
+// What the driver's loop keeps beside its count of requests.
+type Disk = { BlkSession s; NotifySession bell; };
+
+@requires(device)
+Result(Bool, DeviceError) describe(DmaRegion m, Int i, Int addr, Int len, Int flags, Int next) {
+    DescSession d = desc_in(m, 16 * i);
+    Bool a = desc_write_addr(d, Wide {.v = (UInt(64)) addr})?;
+    Bool b = desc_write_len(d, Word {.v = (UInt(32)) len})?;
+    Bool c = desc_write_flags(d, Half {.v = (UInt(16)) flags})?;
+    return desc_write_next(d, Half {.v = (UInt(16)) next});
+}
+
+// The device made ready and the one chain of descriptors laid down:
+// header, sector, status. Returns the queue's notify offset.
+@requires(device)
+Result(Int, DeviceError) bring_up(BlkSession s) {
+    CommonSession c = s.common;
+    Int io = s.dma.iova;
+    Bool a0 = common_write_device_status(c, status(false, false, false, false))?;
+    Bool a1 = common_write_device_status(c, status(true, false, false, false))?;
+    Bool a2 = common_write_device_status(c, status(true, true, false, false))?;
+    Bool b0 = common_write_device_feature_select(c, Word {.v = 1})?;
+    Word f1 = common_read_device_feature(c)?;
+    Bool b1 = common_write_driver_feature_select(c, Word {.v = 0})?;
+    Bool b2 = common_write_driver_feature(c, Word {.v = 0})?;
+    Bool b3 = common_write_driver_feature_select(c, Word {.v = 1})?;
+    Bool b4 = common_write_driver_feature(c, Word {.v = f1.v & 3})?;
+    Bool b5 = common_write_device_status(c, status(true, true, true, false))?;
+    Bool q0 = common_write_queue_select(c, Half {.v = 0})?;
+    Half offered = common_read_queue_size(c)?;
+    Bool q1 = if (offered.v > 8) { common_write_queue_size(c, Half {.v = 8})? } else { true };
+    Bool m0 = common_write_config_msix_vector(c, Half {.v = 65535})?;
+    Bool m1 = common_write_queue_msix_vector(c, Half {.v = 0})?;
+    Bool q2 = common_write_queue_desc(c, Wide {.v = (UInt(64)) io})?;
+    Bool q3 = common_write_queue_driver(c, Wide {.v = (UInt(64)) (io + at_avail())})?;
+    Bool q4 = common_write_queue_device(c, Wide {.v = (UInt(64)) (io + at_used())})?;
+    Half noff = common_read_queue_notify_off(c)?;
+    Bool q5 = common_write_queue_enable(c, Half {.v = 1})?;
+    Bool q6 = common_write_device_status(c, status(true, true, true, true))?;
+    Bool d0 = describe(s.dma, 0, io + at_header(), 16, 1, 1)?;
+    Bool d1 = describe(s.dma, 1, io + at_data(), 512, 3, 2)?;
+    Bool d2 = describe(s.dma, 2, io + at_status(), 1, 2, 0)?;
+    return Ok((Int) noff.v);
+}
+
+// Asleep for the device's interrupt until the used index is `want`.
+@requires(device)
+Result(Bool, DeviceError) finished(Disk k, Int want, Int left) {
+    Half i = ring_head_read_idx(ring_head_in(k.s.dma, at_used()))?;
+    if ((Int) i.v == want % 65536) { return Ok(true); }
+    if (left <= 0) { return Ok(false); }
+    Int irqs = dma_wait(k.s.dma, 1000)?;
+    return finished(k, want, left - 1);
+}
+
+// Request number `n` of the device: sector `sector` read into, or
+// written from, the bytes at at_data(). The status byte: 0 is success.
+@requires(device)
+Result(Int, DeviceError) transfer(Disk k, Int n, Bool out, Int sector) {
+    DmaRegion m = k.s.dma;
+    ReqHeaderSession h = req_header_in(m, at_header());
+    Bool h0 = req_header_write_kind(h, Word {.v = if (out) { 1 } else { 0 }})?;
+    Bool h1 = req_header_write_sector(h, Wide {.v = (UInt(64)) sector})?;
+    Bool s0 = req_status_write_code(req_status_in(m, at_status()), Octet {.v = 255})?;
+    // The sector is the device's to write on a read (flag 2).
+    Bool f0 = desc_write_flags(desc_in(m, 16), Half {.v = if (out) { 1 } else { 3 }})?;
+    Bool v0 = slot_write_head(slot_in(m, at_avail() + 4 + 2 * (n % 8)), Half {.v = 0})?;
+    Bool v1 = ring_head_write_idx(ring_head_in(m, at_avail()), Half {.v = (UInt(16)) ((n + 1) % 65536)})?;
+    Bool bell = notify_write_queue(k.bell, Half {.v = 0})?;
+    Bool done = finished(k, n + 1, 50)?;
+    if (!done) { return Ok(254); }
+    Octet code = req_status_read_code(req_status_in(m, at_status()))?;
+    return Ok((Int) code.v);
+}
+
+// `left` reads of sector 3 with no one asking: how many succeeded.
+@requires(device)
+Result(Int, DeviceError) alone(Disk k, Int n, Int left, Int good) {
+    if (left <= 0) { return Ok(good); }
+    Int st = transfer(k, n, false, 3)?;
+    return alone(k, n + 1, left - 1, if (st == 0) { good + 1 } else { good });
+}
+
+// One message from the program, done and answered: the count of the
+// device's requests afterwards.
+@requires(device)
+Result(Int, DeviceError) handle(Disk k, Int n, List(UInt(8)) msg) {
+    Int op = if (msg.len() >= 1) { (Int) msg[0] } else { 0 };
+    if (op == 1 && msg.len() == 9) {
+        Int st = transfer(k, n, false, from_le(msg, 1, 8))?;
+        List(UInt(8)) data = dma_read(k.s.dma, at_data(), 512)?;
+        List(UInt(8)) head = [(UInt(8)) st];
+        Bool r = driver_reply(head.concat(data))?;
+        return Ok(n + 1);
+    }
+    if (op == 2 && msg.len() == 521) {
+        Bool w = dma_write(k.s.dma, at_data(), msg[9..521])?;
+        Int st = transfer(k, n, true, from_le(msg, 1, 8))?;
+        Bool r = driver_reply([(UInt(8)) st])?;
+        return Ok(n + 1);
+    }
+    if (op == 3) {
+        Wide cap = blk_config_read_capacity(k.s.config)?;
+        List(UInt(8)) none = [];
+        Bool r = driver_reply(le((Int) cap.v, 8, none))?;
+        return Ok(n);
+    }
+    if (op == 4 && msg.len() == 3) {
+        Int count = from_le(msg, 1, 2);
+        Int good = alone(k, n, count, 0)?;
+        List(UInt(8)) none = [];
+        Bool r = driver_reply(le(good, 2, none))?;
+        return Ok(n + count);
+    }
+    // Not a request: answered with nothing.
+    List(UInt(8)) empty = [];
+    Bool r = driver_reply(empty)?;
+    return Ok(n);
+}
+
+// The driver's loop: it carries how many requests the device has had.
+@requires(device)
+Int serve(Disk k, Int n) {
+    return match (driver_next(60000)) {
+        Err(e) => 1,
+        Ok(ev) => match (ev) {
+            DrvRequest(msg) => match (handle(k, n, msg)) { Ok(n2) => serve(k, n2), Err(e) => 2 },
+            DrvInterrupt(c) => serve(k, n),
+            DrvIdle => serve(k, n),
+        },
+    };
+}
+
+// The driver: what the host runs. The program's first message is the
+// notification step (four bytes), which only it can read.
+@requires(device)
+Int disk_driver(BlkSession s) {
+    Int noff = match (bring_up(s)) { Ok(v) => v, Err(e) => 0 - 1 };
+    if (noff < 0) { return 3; }
+    return match (driver_next(60000)) {
+        Ok(ev) => match (ev) {
+            DrvRequest(msg) => start(s, noff, msg),
+            DrvInterrupt(c) => 4,
+            DrvIdle => 4,
+        },
+        Err(e) => 4,
+    };
+}
+
+@requires(device)
+Int start(BlkSession s, Int noff, List(UInt(8)) msg) {
+    if (msg.len() != 4) { return 5; }
+    NotifySession bell = NotifySession {.id = s.notify.id, .map = s.notify.map, .base = s.notify.base + noff * from_le(msg, 0, 4), .len = 2};
+    return match (driver_reply([1])) { Ok(b) => serve(Disk {.s = s, .bell = bell}, 0), Err(e) => 6 };
+}
+
+// ─── In the program ─────────────────────────────────────────────────
+
+Str text(List(UInt(8)) b, Int i, Int end, Str acc) { return if (i >= end) { acc } else { text(b, i + 1, end, acc + str_from_code((Int) b[i])) }; }
+
+// What sector 6 is written with: byte i is (5 i + 11) mod 251.
+List(UInt(8)) pattern(Int i, List(UInt(8)) acc) { return if (i >= 512) { acc } else { pattern(i + 1, acc.concat([(UInt(8)) ((i * 5 + 11) % 251)])) }; }
+
+Bool same(List(UInt(8)) a, Int from, List(UInt(8)) b, Int i) { return i >= b.len() || (from + i < a.len() && a[from + i] == b[i] && same(a, from, b, i + 1)); }
+
+List(UInt(8)) ask(Int op, Int sector) {
+    List(UInt(8)) head = [(UInt(8)) op];
+    return le(sector, 8, head);
+}
+
+// `left` reads of sector 3 by message; how many came back whole.
+@requires(device)
+Result(Int, DeviceError) reads(DriverLink d, Int left, Int good) {
+    if (left <= 0) { return Ok(good); }
+    List(UInt(8)) r = driver_call(d, ask(1, 3))?;
+    return reads(d, left - 1, if (r.len() == 513 && (Int) r[0] == 0) { good + 1 } else { good });
+}
+
+// Times on lines that start "note:", which the test's script shows and
+// does not compare: a read asked for by message, and a read the driver
+// makes with no one asking (2000 of them in one message).
+@requires(device, clock(readonly))
+Result(Str, DeviceError) timed(DriverLink d) {
+    Int t0 = clock.monotonic_ns();
+    Int by_message = reads(d, 200, 0)?;
+    Int t1 = clock.monotonic_ns();
+    List(UInt(8)) none = [];
+    List(UInt(8)) four = [4];
+    List(UInt(8)) r = driver_call(d, le(2000, 2, four))?;
+    Int t2 = clock.monotonic_ns();
+    println(f"note: {(t1 - t0) / 200000} microseconds a read asked of the driver by message, {(t2 - t1) / 2000000} with no message");
+    return Ok(f"{by_message} of 200 reads by message, {from_le(r, 0, 2)} of 2000 by the driver alone");
+}
+
+@requires(device, clock(readonly))
+Result(Str, DeviceError) talk(DriverLink d, Int step) {
+    List(UInt(8)) none = [];
+    List(UInt(8)) ready = driver_call(d, le(step, 4, none))?;
+    List(UInt(8)) cap = driver_call(d, [3])?;
+    List(UInt(8)) three = driver_call(d, ask(1, 3))?;
+    List(UInt(8)) pat = pattern(0, none);
+    List(UInt(8)) wrote = driver_call(d, ask(2, 6).concat(pat))?;
+    List(UInt(8)) six = driver_call(d, ask(1, 6))?;
+    List(UInt(8)) odd = driver_call(d, [9, 9])?;
+    Str rate = timed(d)?;
+    return Ok(f"the driver is ready: {ready.len() == 1}\ncapacity {from_le(cap, 0, 8)} sectors\nread sector 3: status {three[0]}, text: " + text(three, 1, 19, "") + f"\nwrote sector 6: status {wrote[0]}\nread it back: status {six[0]}, the same bytes: {six.len() == 513 && same(six, 1, pat, 0)}\na message that is no request: {odd.len()} bytes back\n" + rate);
+}
+
+@requires(device, clock(readonly))
+Result(Str, DeviceError) run(PciAddr a) {
+    PciWindow wc = virtio_pci_window(a, virtio_cfg_common())?;
+    PciWindow wn = virtio_pci_window(a, virtio_cfg_notify())?;
+    PciWindow wd = virtio_pci_window(a, virtio_cfg_device())?;
+    Int step = virtio_pci_notify_step(a)?;
+    Result(Str, DeviceError) done = blk_driver(BlkWindows {.common = wc, .notify = wn, .config = wd}, lambda(d) { talk(d, step) })?;
+    return done;
+}
+
+@requires(device, clock(readonly))
+Int main() {
+    List(PciAddr) none = [];
+    List(PciAddr) found = match (pci_find(virtio_pci_vendor(), virtio_pci_device_id(2))) { Ok(fs) => fs, Err(e) => none };
+    if (found.len() == 0) { println("no virtio block device here"); return 0; }
+    println(match (run(found[0])) { Ok(t) => t, Err(e) => device_error_text(e) });
+    return 0;
+}

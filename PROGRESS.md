@@ -368,6 +368,19 @@ region, with no diagnostic.
   accessor in the Resid driver 1.8 µs against about 280 µs as a message
   from the program. Not yet: the accessor's own overhead measured on
   hardware (it still makes a one-element list for its answer).
+- **Stage Q: the disk's driver in its host.**
+  `tests/device/vm/virtio_blk_driver.resid`, with no change to compiler
+  or runtime: the driver brings the device up and lays its one chain of
+  descriptors down once, then takes requests as messages (read a
+  sector, write a sector, the capacity) and makes each with loads and
+  stores in its own process, the header and status byte being register
+  blocks placed in the device's memory. The script finds the sector it
+  wrote in the disk image. Measured in the emulated machine: 191 µs a
+  read the driver makes with no one asking (2000 of them in one
+  message), 2.0 ms a read asked for by message (513 bytes back each),
+  against 1.8 ms for the program-driven read as one batch and 8.3 ms
+  with 22 messages. Not yet: a hardware number; more than one request
+  in flight from the driver.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.
