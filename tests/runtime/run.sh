@@ -446,6 +446,15 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/list_grow.resid -o "$W/list_grow
 else
     fail=$((fail + 1)); echo "FAIL grow in a loop: $(tail -1 "$W/list_grow.out" "$W/list_grow.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# CBOR encoding appends packed bytes (lib/cbor.resid): 2 MB encoded in
+# 54 MB. The encoder that kept a cons cell per output byte took 486 MB.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/cbor_bytes.resid -o "$W/cbor_bytes") > "$W/cbor_bytes.log" 2>&1 \
+    && RESID_MEM_LIMIT=96 timeout 120 "$W/cbor_bytes" > "$W/cbor_bytes.out" 2>&1 \
+    && [ "$(cat "$W/cbor_bytes.out")" = "2000005 90 128 0 31 995216952 [162, 97, 97, 131, 1, 33, 98, 195, 188, 97, 98, 66, 0, 255]" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL CBOR encoding of a large byte string: $(tail -1 "$W/cbor_bytes.out" "$W/cbor_bytes.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # Volatile raw loads and stores (lower.resid): two processes pass a counter
 # through a shared page, each polling with resid_raw_loadv64; a plain load
 # is hoisted out of the loop and the program never ends. Built from its own
