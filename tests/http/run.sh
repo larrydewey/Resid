@@ -16,6 +16,13 @@ if (cd "$ROOT" && "$COMPILER" tests/http/roundtrip.resid -o "$W/rt") > "$W/rt.lo
     && timeout 60 "$W/rt" > "$W/rt.out" 2>&1 && cmp -s "$W/rt.out" roundtrip.out; then ok
 else bad "roundtrip: $(grep -m1 -i error "$W/rt.log") $(diff "$W/rt.out" roundtrip.out 2>/dev/null | head -4 | tr '\n' ' ')"; fi
 
+# Header injection (RB-6): caller data never writes a header line of its
+# own, in a reply (http_with_header, HttpReply.headers) or a request
+# (http_build_request).
+if (cd "$ROOT" && "$COMPILER" tests/http/inject.resid -o "$W/inj") > "$W/inj.log" 2>&1 \
+    && timeout 60 "$W/inj" > "$W/inj.out" 2>&1 && cmp -s "$W/inj.out" inject.out; then ok
+else bad "inject: $(grep -m1 -i error "$W/inj.log") $(diff "$W/inj.out" inject.out 2>/dev/null | head -4 | tr '\n' ' ')"; fi
+
 # Streamed replies: ticks, chunking, HTTP/1.0, HEAD, a client leaving.
 if (cd "$ROOT" && "$COMPILER" tests/http/stream.resid -o "$W/st") > "$W/st.log" 2>&1 \
     && timeout 60 "$W/st" > "$W/st.out" 2>&1 && cmp -s "$W/st.out" stream.out; then ok
