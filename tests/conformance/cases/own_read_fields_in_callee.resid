@@ -1,0 +1,46 @@
+// A record passed to a function that reads only its scalar fields, and
+// returns a record of scalars, is still written in place afterwards: the
+// result holds none of it (resid-gui's raster ops copied the whole canvas
+// per op after `canvas_bounds(c)`).
+type Canvas = { Int w; Int h; List(Int) px; };
+type Rect = { Int x; Int y; Int w; Int h; };
+
+Rect bounds(Canvas c) { return Rect { .x = 0, .y = 0, .w = c.w, .h = c.h }; }
+Int area(Rect r) { return r.w * r.h; }
+
+List(Int) fill_rows(List(Int) px, Int ww, Int x0, Int n, Int y, Int y1, Int v) {
+    if (y >= y1) { return px; }
+    return fill_rows(px.fill(y * ww + x0, n, v), ww, x0, n, y + 1, y1, v);
+}
+
+Canvas fill(Canvas c, Int v) {
+    Int ww = c.w;
+    Int hh = c.h;
+    if (area(bounds(c)) == 0) { return c; }
+    return Canvas { .w = ww, .h = hh, .px = fill_rows(c.px, ww, v % 20, 10, 0, 10, v) };
+}
+
+Canvas ops(Canvas c, Int i, Int n) { return if (i >= n) { c } else { ops(fill(c, i), i + 1, n) }; }
+
+@requires(filesystem(readonly))
+Int peak_kb() {
+    Str s = filesystem.read_all("/proc/self/status");
+    Int at = str_index_of(s, "VmHWM:", 0);
+    if (at < 0) { return 0; }
+    Int end = str_index_of(s, " kB", at);
+    return str_parse_int(str_trim(str_slice(s, at + 6, end)));
+}
+
+@requires(filesystem(readonly))
+Int main() {
+    Int n = 600 + rt(0);
+    List(Int) e = [];
+    Canvas c = Canvas { .w = n, .h = n, .px = e.grow(n * n, 0) };
+    Int p0 = peak_kb();
+    // a copy per op would be 200 x 2.9 MB
+    Canvas b = ops(c, 0, 200);
+    Int grew = (peak_kb() - p0) / 1024;
+    Str how = if (grew < 64) { "in place" } else { "copied: " + f"{grew}" + " MB" };
+    println(f"{b.px[5]} {b.px[n * 9 + 19]} " + how);
+    return 0;
+}

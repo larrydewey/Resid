@@ -10351,6 +10351,9 @@ Int cf_expr(Kg g, Int id, Map(Str, Int) al, Funcs fs, Map(Str, Str) cm) {
     }
     if (k == "ifx") { return cf_kids(g, id, 1, al, fs, cm); }
     if (k == "bexpr") { return cf_bexpr(g, id, 0, al, fs, cm); }
+    // A record literal holds a copy of each scalar field's value, never
+    // part of what it was read from (`Rect { .w = c.w }` holds none of c).
+    if (k == "struct") { return cf_fields(g, id, 0, al, fs, cm); }
     if (k == "call") {
         Str m = cm.get(t) else { "\x01" };
         if (m != "\x01") { return cf_args(g, id, 0, m, al, fs, cm); }
@@ -10358,6 +10361,23 @@ Int cf_expr(Kg g, Int id, Map(Str, Int) al, Funcs fs, Map(Str, Str) cm) {
         if (fn_index(fs, t) >= 0) { return 0; }
     }
     return cf_kids(g, id, 0, al, fs, cm);
+}
+
+Int cf_fields(Kg g, Int id, Int i, Map(Str, Int) al, Funcs fs, Map(Str, Str) cm) {
+    if (i >= g.ns[id].nk) { return 0; }
+    Int fi = kg_kid(g, id, i);
+    Str ft = if (g.ns[fi].kind == "finit") { cf_ftype(fs, g.ns[id].text, g.ns[fi].text) } else { "" };
+    Bool sc = ft != "" && scal_ll(ll_ty(ct_base_of(fs.ctn, fs.ctb, ft)));
+    Int here = if (sc) { 0 } else { cf_expr(g, fi, al, fs, cm) };
+    return here | cf_fields(g, id, i + 1, al, fs, cm);
+}
+
+// The declared type of field f of record type st, or "" when unknown.
+Str cf_ftype(Funcs fs, Str st, Str f) {
+    Int k = lr_index(fs.stn, st, 0);
+    if (k < 0 || k >= fs.stf.len()) { return ""; }
+    Map(Str, Str) m = lo_ftypes_of(fs, st, fs.stf[k], 0, lo_nomap());
+    return m.get(st + "." + f) else { "" };
 }
 
 // A block expression: its bindings extend the aliases its value sees.
