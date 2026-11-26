@@ -89,10 +89,19 @@ List(List(CgMsg)) cgh_outs7(List(PsDone) ss, Int i, ListBuf(List(CgMsg)) acc) {
 
 // ─── Identifiable abort of the Delta check ─────────────────────
 
-Result(List(PsAb1), CgFail) cgh_ab1(List(Ps5) ss, Int i, ListBuf(PsAb1) acc) {
+// A party whose own Delta check passed opens nothing (ps_abort1 refuses);
+// the others then blame it for a missing abort-1 broadcast.
+Result(List(PsAb1), CgFail) cgh_ab1(List(Ps5) ss, List(CgMsg) in, Int i, ListBuf(PsAb1) acc) {
     if (i >= ss.len()) { return Ok(acc.finish()); }
-    PsAb1 a = ps_abort1(ss[i])?;
-    return cgh_ab1(ss, i + 1, acc.push(a));
+    return match ps_abort1(ss[i], in) {
+        Ok(a) => cgh_ab1(ss, in, i + 1, acc.push(a)),
+        Err(e) => if (e.why == "the Delta shares add up; abort 1 opens nothing") { cgh_ab1(ss, in, i + 1, acc) } else { cgh_ab1_fail(acc, e) }
+    };
+}
+
+Result(List(PsAb1), CgFail) cgh_ab1_fail(ListBuf(PsAb1) acc, CgFail e) {
+    _ = acc.finish();
+    return Err(e);
 }
 
 List(List(CgMsg)) cgh_outs_ab1(List(PsAb1) ss, Int i, ListBuf(List(CgMsg)) acc) {
@@ -118,8 +127,8 @@ Bool cgh_has(List(Int) xs, Int v, Int i) {
     return cgh_has(xs, v, i + 1);
 }
 
-CgFail cgh_blame1(List(Ps5) ss) {
-    return match cgh_ab1(ss, 0, ListBuf()) {
+CgFail cgh_blame1(List(Ps5) ss, List(CgMsg) in) {
+    return match cgh_ab1(ss, in, 0, ListBuf()) {
         Err(e) => e,
         Ok(abs) => cg_fail("Delta shares are inconsistent", cgh_merge(abs, cgh_flat(cgh_outs_ab1(abs, 0, ListBuf()), 0, ListBuf()), 0, []))
     };
@@ -129,7 +138,7 @@ CgFail cgh_blame1(List(Ps5) ss) {
 Result(List(Ps6), CgFail) cgh_r6b(List(Ps5) ss, List(CgMsg) in) {
     return match cgh_r6(ss, in, 0, ListBuf()) {
         Ok(v) => Ok(v),
-        Err(e) => if (e.culprits.len() == 0 && e.why == "Delta shares are inconsistent") { Err(cgh_blame1(ss)) } else { Err(e) }
+        Err(e) => if (e.culprits.len() == 0 && e.why == "Delta shares are inconsistent") { Err(cgh_blame1(ss, in)) } else { Err(e) }
     };
 }
 

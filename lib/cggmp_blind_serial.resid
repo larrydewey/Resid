@@ -2,7 +2,7 @@
 import "cggmp_blind.resid";
 import "./serial.resid";
 
-// ── BlTwMsg (line 32)
+// ── BlTwMsg (line 35)
 /// The serialized field names of `BlTwMsg`, in declaration order.
 pub List(Str) derive_bl_tw_msg_names() { return ["from", "to", "t", "d", "f", "proof"]; }
 /// Encodes a `BlTwMsg` through the encoder `s`.
@@ -54,3 +54,47 @@ Result(Parsed(BlTwMsg, F), SerialError) derive_bl_tw_msg_done(F s, Option(Int) f
     return parsed(BlTwMsg {.from = d_from, .to = d_to, .t = d_t, .d = d_d, .f = d_f, .proof = d_proof}, s);
 }
 Decode(BlTwMsg, F) = derive_bl_tw_msg_decode;
+
+// ── BlVerdict (line 184)
+/// The serialized field names of `BlVerdict`, in declaration order.
+pub List(Str) derive_bl_verdict_names() { return ["from", "to", "ok"]; }
+/// Encodes a `BlVerdict` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_bl_verdict_encode(BlVerdict v, F s) {
+    Int n = 3;
+    F s0 = write_struct_begin(s, "BlVerdict", n)?;
+    F s1 = write_named(s0, "from", v.from)?;
+    F s2 = write_named(s1, "to", v.to)?;
+    F s3 = write_named(s2, "ok", v.ok)?;
+    return write_struct_end(s3);
+}
+Encode(BlVerdict, F) = derive_bl_verdict_encode;
+/// Decodes a `BlVerdict` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(BlVerdict, F), SerialError) derive_bl_verdict_decode(F s) {
+    F s0 = read_struct_begin(s, "BlVerdict", derive_bl_verdict_names())?;
+    return derive_bl_verdict_fields(s0, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(BlVerdict, F), SerialError) derive_bl_verdict_fields(F s, Option(Int) f_from, Option(Int) f_to, Option(Bool) f_ok) {
+    Parsed(FieldKey, F) k = read_field(s, derive_bl_verdict_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_bl_verdict_field(k.rest, i, f_from, f_to, f_ok),
+        UnknownField(name) => derive_bl_verdict_fields(skip_unknown(k.rest, name, derive_bl_verdict_names(), false)?, f_from, f_to, f_ok),
+        EndOfFields => derive_bl_verdict_done(k.rest, f_from, f_to, f_ok)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(BlVerdict, F), SerialError) derive_bl_verdict_field(F s, Int i, Option(Int) f_from, Option(Int) f_to, Option(Bool) f_ok) {
+    if (i == 0) { Parsed(Option(Int), F) p = read_slot(s, f_from, "from")?; return derive_bl_verdict_fields(p.rest, p.value, f_to, f_ok); }
+    if (i == 1) { Parsed(Option(Int), F) p = read_slot(s, f_to, "to")?; return derive_bl_verdict_fields(p.rest, f_from, p.value, f_ok); }
+    Parsed(Option(Bool), F) p = read_slot(s, f_ok, "ok")?; return derive_bl_verdict_fields(p.rest, f_from, f_to, p.value);
+}
+Result(Parsed(BlVerdict, F), SerialError) derive_bl_verdict_done(F s, Option(Int) f_from, Option(Int) f_to, Option(Bool) f_ok) {
+    Int d_from = require(f_from, "from")?;
+    Int d_to = require(f_to, "to")?;
+    Bool d_ok = require(f_ok, "ok")?;
+    return parsed(BlVerdict {.from = d_from, .to = d_to, .ok = d_ok}, s);
+}
+Decode(BlVerdict, F) = derive_bl_verdict_decode;
