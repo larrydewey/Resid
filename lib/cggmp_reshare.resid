@@ -277,9 +277,19 @@ pub Option(RshAnn) rsh_announce(Int id, PaillierSec sec, Pedersen ped, List(UInt
     return Some(RshAnn {.id = id, .pail = pail, .ped = ped, .modp = md, .prm = pr});
 }
 
-/// Verifies both proofs in a new party's announcement.
+/// Verifies a new party's announcement as key generation checks a party's
+/// round-3 reveal: a 2048-bit odd Paillier modulus whose public key is
+/// consistent (N^2 = N N), Pedersen parameters over that same modulus, and
+/// both proofs. A small modulus would let the party's encrypted shares and
+/// MtA ranges wrap; Pedersen parameters over another modulus would make the
+/// range proofs others prove to this party rest on an N no one proved.
 pub Bool rsh_announce_ok(RshAnn a, Transcript tr) {
-    return mod_verify(a.pail.n, a.modp, tr) && prm_verify(a.ped, a.prm, tr);
+    List(UInt(64)) n = a.pail.n;
+    if (bn_bit_len(n) != zk_bits_n() || !bn_is_odd(n)) { return false; }
+    List(UInt(64)) n2 = bn_mul(n, n);
+    if (bn_cmp(a.pail.n2, n2) != 0 || bn_cmp(a.pail.mont2.n, n2) != 0) { return false; }
+    if (bn_cmp(a.ped.n, n) != 0 || !pedersen_valid(a.ped)) { return false; }
+    return mod_verify(n, a.modp, tr) && prm_verify(a.ped, a.prm, tr);
 }
 
 /// Encrypts `share` for new party `to` and proves knowledge of the Paillier nonce `rho`.
