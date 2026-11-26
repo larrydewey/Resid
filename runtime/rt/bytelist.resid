@@ -265,7 +265,8 @@ pub Int bl_set_slow(Int l0, Int owned, Int i, Int w) {
     Int n = lcount(l0);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
     Int l = bl_norm(l0);
-    if (owned != 0 && no_thaw(l)) { return mark_frozen(bl_with_copy(l, i, w)); }
+    // A copy is whole either way: thawed (no_thaw_cost), it is the last.
+    if (owned != 0 && no_thaw_cost(l, lcount(l))) { return mark_frozen(bl_with_copy(l, i, w)); }
     if (owned == 0) { return bl_with_copy(l, i, w); }
     Int t = if (ltransient(l)) { l } else { bl_fresh(l, 0) };
     return st8(bl_data(t) + i, w) * 0 + t;

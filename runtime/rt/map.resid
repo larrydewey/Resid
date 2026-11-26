@@ -2370,7 +2370,7 @@ pub Int rt_list_rec_slot(Int l, Int owned, Int i, Int w) {
 Int list_rec_slot_slow(Int l, Int owned, Int i, Int w) {
     Int n = lelems(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    Bool keep = owned != 0 && !no_thaw(l);
+    Bool keep = owned != 0 && !no_thaw_cost(l, lcount(l));
     Int t = if (keep && ltransient(l)) { l } else { with_fresh(l, 0) };
     if (keep) { return t; }
     _ = st32(t + 8, 0 - 1);
@@ -2417,7 +2417,7 @@ Int list_set_rec_slow(Int l, Int owned, Int i, Int r, Int w) {
     Int n = lelems(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
     // A record list is always flat: a shared one is copied whole.
-    Bool keep = owned != 0 && !no_thaw(l);
+    Bool keep = owned != 0 && !no_thaw_cost(l, lcount(l));
     Int t = if (keep && ltransient(l)) { l } else { with_fresh(l, 0) };
     _ = mcopy(lroot(t) + 32 + i * w * 8, r, (w - 1) * 8);
     if (keep) { return t; }
@@ -2431,7 +2431,7 @@ Int list_set_slow(Int l, Int owned, Int i, Int w) {
     if (lbytes(l)) { return bl_set_slow(l, owned, i, w); }
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    if (owned != 0 && no_thaw(l)) { return mark_frozen(with_shared(l, i, w)); }
+    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return mark_frozen(with_shared(l, i, w)); }
     if (owned == 0) { return with_shared(l, i, w); }
     Int t = if (ltransient(l)) { l } else { with_fresh(l, 0) };
     return st64(lroot(t) + 24 + i * 8, w) * 0 + t;
@@ -2510,7 +2510,7 @@ Int words_dup(Int p, Int have, Int n) {
 Int list_with_slow(Int l, Int owned, Int i, Int v) {
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    if (owned != 0 && no_thaw(l)) { return mark_frozen(with_shared(l, i, v)); }
+    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return mark_frozen(with_shared(l, i, v)); }
     Int t = if (owned == 0 || ltransient(l)) { l } else { with_fresh(l, 0) };
     if (owned == 0) { return with_shared(l, i, v); }
     Int f = lroot(t);
@@ -2547,7 +2547,7 @@ pub Int rt_list_with_fh(Int l, Int owned, Int i, Int v, Int ek) {
 Int list_with_fh_slow(Int l, Int owned, Int i, Int v, Int ek) {
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    if (owned != 0 && no_thaw(l)) { return mark_frozen(with_shared(l, i, v)); }
+    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return mark_frozen(with_shared(l, i, v)); }
     if (owned == 0) { return with_shared(l, i, v); }
     Int t = if (ltransient(l)) { l } else { with_fresh_f(l, 0) };
     Int f = lroot(t);
@@ -2574,11 +2574,35 @@ pub Bool no_thaw(Int l) { return !ltransient(l) && lcount(l) > fresh_max() && (l
 
 pub Int mark_frozen(Int l) { return st32(l + 12, ld32(l + 12) | 2147483648) * 0 + l; }
 
+// An owned update of a list frozen before takes the persistent path only
+// while what those copies have cost on this thread stays below the list's
+// size; the update that reaches it thaws the list instead (one whole copy
+// into a transient, written in place from then on). A loop updating a
+// large list it owns, which a call boundary froze, so stops copying after
+// about one copy's worth of paths (before, every update copied a path, and
+// the old paths stayed in a loop without a region); a parser's node list,
+// thawed and refrozen by every call, still mostly copies a path, and the
+// thaws cost at most what the paths did. `cost` is the persistent copy's
+// size in words: a path, or the whole list when that copy is whole.
+Int thaw_debt() { return resid_raw_tls("rt_thaw_debt", 8); }
+
+pub Bool no_thaw_cost(Int l, Int cost) {
+    if (!no_thaw(l)) { return false; }
+    Int w = thaw_debt();
+    Int c = ld64(w) + cost;
+    if (c >= lcount(l)) { return st64(w, 0) * 0 == 1; }
+    return st64(w, c) * 0 == 0;
+}
+
+// What with_shared copies: a flat list becomes a trie (all of it), a
+// trie copies a leaf and a node a level above it.
+pub Int path_cost(Int l) { return if (lflat(l)) { lcount(l) } else { 40 + lshift(l) * 8 }; }
+
 @noinline
 Int list_with_f_slow(Int l, Int owned, Int i, Int v, Int ek) {
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    if (owned != 0 && no_thaw(l)) { return mark_frozen(with_shared(l, i, v)); }
+    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return mark_frozen(with_shared(l, i, v)); }
     if (owned == 0) { return with_shared(l, i, v); }
     Int t = if (ltransient(l)) { l } else { with_fresh(l, 0) };
     Int f = lroot(t);

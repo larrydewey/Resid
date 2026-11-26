@@ -1,0 +1,25 @@
+// Owned xs.with on a large list a call boundary froze (runtime/rt/map.resid,
+// no_thaw_cost). The loops are written `return if ... else { loop(...) }`,
+// which gets no loop region, so what a step leaves behind is never freed:
+// after about one copy's worth of path copies the list is thawed and then
+// written in place. Before, every update of a frozen list of more than 256
+// elements copied a path for good (375-650 bytes a step: 374 MB for the
+// first loop). run.sh sets RESID_MEM_LIMIT=32.
+List(Int) mk(List(Int) xs, Int i, Int n) { return if (i >= n) { xs } else { mk(xs.concat([i]), i + 1, n) }; }
+List(Int) with_loop(List(Int) xs, Int i, Int n, Int len) { return if (i >= n) { xs } else { with_loop(xs.with(i % len, i), i + 1, n, len) }; }
+List(UInt(8)) with_bytes(List(UInt(8)) xs, Int i, Int n) { return if (i >= n) { xs } else { with_bytes(xs.with(i % 1000, (UInt(8)) (i % 251)), i + 1, n) }; }
+List(UInt(8)) zeros(List(UInt(8)) xs, Int n) { return if (xs.len() >= n) { xs } else { zeros(xs.concat([(UInt(8)) 0]), n) }; }
+
+// The loops run inside an if expression, whose branches freeze the list
+// they pass (as BurrowDB's did). The sizes come from the argument count
+// (1), so the compiler cannot work the loops out ahead.
+@requires(args)
+Int main() {
+    Int k = args.count();
+    List(UInt(8)) z = [];
+    List(Int) a = if (k > 0) { with_loop(mk([], 0, 257 * k), 0, 1000000 * k, 257) } else { [] };
+    List(Int) b = if (k > 0) { with_loop(mk([], 0, 5000 * k), 0, 1000000 * k, 5000) } else { [] };
+    List(UInt(8)) g = if (k > 0) { with_bytes(zeros(z, 1000 * k), 0, 1000000 * k) } else { z };
+    println(f"{a.len()} {a[7]} {b[4999]} {g[999]}");
+    return 0;
+}

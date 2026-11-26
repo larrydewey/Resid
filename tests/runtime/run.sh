@@ -425,6 +425,17 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/spawn_jobs.resid -o "$W/spawn_jo
 else
     fail=$((fail + 1)); echo "FAIL spawned regions in a loop: $(tail -1 "$W/spawn_jobs.out" "$W/spawn_jobs.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# Owned updates of a large list a call froze (map.resid, no_thaw_cost):
+# after about one copy's worth of path copies the list is thawed and then
+# written in place, in loops that have no region. Measured: under 1 MB;
+# before, each update copied a path for good (1.2 GB).
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/list_with.resid -o "$W/list_with") > "$W/list_with.log" 2>&1 \
+    && RESID_MEM_LIMIT=32 timeout 120 "$W/list_with" > "$W/list_with.out" 2>&1 \
+    && [ "$(tr '\n' ' ' < "$W/list_with.out")" = "257 999994 999999 15 " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL owned updates of a frozen list: $(tail -1 "$W/list_with.out" "$W/list_with.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # Volatile raw loads and stores (lower.resid): two processes pass a counter
 # through a shared page, each polling with resid_raw_loadv64; a plain load
 # is hoisted out of the loop and the program never ends. Built from its own
