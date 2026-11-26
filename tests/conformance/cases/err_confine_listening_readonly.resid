@@ -1,0 +1,8 @@
+// Confining the program and leaving TCP bind possible is a write of
+// `process`, as plain confinement is: a read-only grant does not cover it
+// (E0219).
+@requires(process(readonly))
+Int main() {
+    List(Str) none = [];
+    return resid_sandbox_confine_listening(none, none);
+}

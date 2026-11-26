@@ -833,7 +833,8 @@ pub Int rt_pty_status(Int broker, Int pid) {
 // For a long-running server that reads hostile input (pylond, SPEC 8.4):
 // no new privileges; Landlock, under which the filesystem is reachable
 // only beneath `rw` (every right) and `ro` (reading files and listing
-// directories), no TCP port can be bound (ABI 4), and no abstract Unix
+// directories), no TCP port can be bound (ABI 4; but see
+// resid_sandbox_confine_listening below), and no abstract Unix
 // socket outside the domain can be reached nor any process outside it
 // signalled (ABI 6); then a seccomp filter allowing only the system calls
 // an event loop of sockets, terminals and memory needs: socket() only for
@@ -864,6 +865,23 @@ pub Int rt_pty_status(Int broker, Int pid) {
 @export("resid_sandbox_confine", "i64(ptr,ptr)")
 pub Int rt_sandbox_confine(Int rw, Int ro) {
     _ = rt_cap_check(resid_raw_addr("process!"));
+    return sb_confine(rw, ro, true);
+}
+
+// The same confinement, except that binding a TCP port stays possible
+// (Landlock's BIND_TCP is not handled): for a server that must listen on
+// ports chosen after it confined itself (pylond's forwards, SPEC 9.7 -R).
+// It is opted into by name; where the program listens is still held by
+// the capability checks: resid_tcp_listen binds loopback only, and any
+// other address is resid_tcp_listen_at, a write of `network`.
+@export("resid_sandbox_confine_listening", "i64(ptr,ptr)")
+pub Int rt_sandbox_confine_listening(Int rw, Int ro) {
+    _ = rt_cap_check(resid_raw_addr("process!"));
+    return sb_confine(rw, ro, false);
+}
+
+// `no_bind`: handle Landlock's BIND_TCP (ABI 4) with no port allowed.
+Int sb_confine(Int rw, Int ro, Bool no_bind) {
     Int abi = resid_raw_syscall(444, 0, 0, 1, 0, 0, 0);   // landlock_create_ruleset(NULL, 0, VERSION)
     if (abi < 1) { return 0; }
     Int pid = c_fork();
@@ -877,7 +895,7 @@ pub Int rt_sandbox_confine(Int rw, Int ro) {
     // struct landlock_ruleset_attr: handled_access_fs, handled_access_net
     // (ABI 4: BIND_TCP 1), scoped (ABI 6: ABSTRACT_UNIX_SOCKET 1 | SIGNAL 2).
     Int attr = resid_raw_tls("ll_attr", 24);
-    _ = st64(attr, all) + st64(attr + 8, if (abi >= 4) { 1 } else { 0 }) + st64(attr + 16, if (abi >= 6) { 3 } else { 0 });
+    _ = st64(attr, all) + st64(attr + 8, if (abi >= 4 && no_bind) { 1 } else { 0 }) + st64(attr + 16, if (abi >= 6) { 3 } else { 0 });
     Int size = if (abi >= 6) { 24 } else { if (abi >= 4) { 16 } else { 8 } };
     Int rs = resid_raw_syscall(444, attr, size, 0, 0, 0, 0);
     if (rs < 0) { return confine_failed(); }

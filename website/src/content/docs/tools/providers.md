@@ -94,9 +94,21 @@ the umask; secrets go through `write_secret` (owner-only), never
 | `environment.has(name)` | `Bool`: the variable is set, even to `""` | `environment` |
 | `args.count()`, `args.get(i)` | the command line; `args.get(0)` is the program | `args` |
 | `process.run(cmd)` | the exit status | `process` (a write) |
+| `resid_sandbox_confine(rw, ro)` | 1 when the program now runs confined, 0 without Landlock | `process` (a write) |
+| `resid_sandbox_confine_listening(rw, ro)` | the same, leaving TCP bind possible | `process` (a write) |
 
 `process.run` runs a program directly (no shell) with its standard streams
 inherited.
+
+`resid_sandbox_confine` confines the rest of the program (it continues in
+a forked child): files only beneath the `rw` paths (every right but
+execute) and `ro` paths (reading), no Unix socket, no other process, no
+terminal input pushed, nothing executed, and with Landlock ABI 4 no TCP
+port bound. A server that listens on ports it picks after confining
+itself calls `resid_sandbox_confine_listening` instead, which leaves TCP
+bind possible; `resid_tcp_listen` still binds loopback only, and any other
+address needs `network`'s write (`resid_tcp_listen_at`). See
+"Program confinement" in [`SECURITY.md`](https://github.com/larrydewey/Resid/blob/master/SECURITY.md).
 
 ## network
 

@@ -140,7 +140,7 @@ Int lb_builtin(Str n) {
     if (str_starts_with(n, "resid_cpu_has_")) { return 3; }
     if (str_starts_with(n, "resid_tcp_") || str_starts_with(n, "resid_udp_") || str_starts_with(n, "resid_unix_") || str_starts_with(n, "resid_term_") || str_starts_with(n, "resid_dbg_") || str_starts_with(n, "resid_pty_") || str_starts_with(n, "resid_disp_") || str_starts_with(n, "resid_a11y_") || str_starts_with(n, "resid_clock_") || str_starts_with(n, "resid_device_")) { return 2; }
     if (str_starts_with(n, "resid_chal_")) { return 2; }
-    if (n == "resid_tr_read" || n == "resid_sandbox_confine") { return 2; }
+    if (n == "resid_tr_read" || n == "resid_sandbox_confine" || n == "resid_sandbox_confine_listening") { return 2; }
     if (n == "resid_tr_note") { return 1; }
     if (n == "resid_crypto_random_byte" || n == "resid_random_os" || n == "resid_random_cpu" || n == "resid_read_line" || n == "resid_read_byte" || n == "resid_read_some" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_stack_left") { return 2; }
     if (n == "print" || n == "println" || n == "eprintln" || n == "print_bytes") { return 2; }

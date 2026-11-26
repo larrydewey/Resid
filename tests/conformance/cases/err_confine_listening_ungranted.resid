@@ -1,0 +1,10 @@
+// resid_sandbox_confine_listening confines the program as
+// resid_sandbox_confine does, leaving TCP bind possible: the same write of
+// `process` (E0219), so a library holding no grant cannot call it.
+Int helper() {
+    List(Str) none = [];
+    return resid_sandbox_confine_listening(none, none);
+}
+
+@requires(network)
+Int main() { return helper(); }

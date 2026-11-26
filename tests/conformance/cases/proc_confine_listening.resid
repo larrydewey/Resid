@@ -1,0 +1,15 @@
+// A server confined with resid_sandbox_confine_listening can still listen
+// on a loopback port it picks afterwards and accept a connection on it
+// (pylond's -R forwards); resid_sandbox_confine forbids any TCP bind
+// (Landlock ABI 4; tests/runtime/confine_listen.c checks both).
+@requires(process, network)
+Int main() {
+    List(Str) none = [];
+    Int c = resid_sandbox_confine_listening(none, none);
+    Int l = resid_tcp_listen(0);
+    Int port = resid_tcp_bound_port(l);
+    Int fd = resid_tcp_connect("127.0.0.1", port);
+    Int a = resid_tcp_accept(l);
+    println(f"{c >= 0} {l >= 0} {port > 0} {fd >= 0} {a >= 0}");
+    return 0;
+}

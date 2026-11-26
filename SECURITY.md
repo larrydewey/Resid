@@ -40,7 +40,7 @@ them with:
 |---|---|---|
 | No ambient authority: every capability family a function uses, directly or through anything it calls, wraps in a closure, or runs as a `sort` behavior, is granted by its own `@requires` or its enclosing sandbox. Authority enters a program only where `main` (or a `test` block) declares it. | E0219, `gk_authority` in `compiler/gcheck.resid` | `err_authority_*` (provider, builtin, call, closure, lambda, method sugar, behavior, f-string Show, test block), `authority_granted` |
 | Effectful runtime builtins are capabilities too: TCP is `network`, the ptrace debugger is `process`, TTY queries and raw mode are `terminal`. The runtime's `git rev-parse` helpers (`resid_git_rev`, `resid_git_branch`) are reachable from no program: `git` is not a family, the `git.` provider is unbound and the builtins are not callable. | `gk_builtin_family`, `gk_unknown_family` | `err_authority_ambient_builtin`, `term_requires_missing`, `readline_requires_terminal`, `err_git_family`, `err_git_provider_unreachable`, `err_git_builtin_unreachable` |
-| Confining the program (`resid_sandbox_confine`) is a write of `process`: it forks the program and confines the copy that goes on, taking away authority the program granted, so a dependency holding no grant (or `process(readonly)`) cannot call it (E0219), and the runtime checks `process!` again at force time. A path given to it gets a file's rights when it is not a directory, so its result no longer tells a regular file from a missing path, and a confinement that fails part-way ends the process (status 125) instead of letting an unconfined copy go on. | `gk_builtin_family`, `gk_builtin_write`, `rt_sandbox_confine`, `ll_each`, `confine_failed` | `err_confine_ungranted`, `err_confine_readonly`, `proc_confine_scope` |
+| Confining the program (`resid_sandbox_confine`, or `resid_sandbox_confine_listening`) is a write of `process`: it forks the program and confines the copy that goes on, taking away authority the program granted, so a dependency holding no grant (or `process(readonly)`) cannot call it (E0219), and the runtime checks `process!` again at force time. A path given to it gets a file's rights when it is not a directory, so its result no longer tells a regular file from a missing path, and a confinement that fails part-way ends the process (status 125) instead of letting an unconfined copy go on. | `gk_builtin_family`, `gk_builtin_write`, `rt_sandbox_confine`, `rt_sandbox_confine_listening`, `ll_each`, `confine_failed` | `err_confine_ungranted`, `err_confine_readonly`, `err_confine_listening_ungranted`, `err_confine_listening_readonly`, `proc_confine_scope` |
 | `terminal(readonly)` covers the TTY and window-size queries only; raw mode and restoring it are writes, at compile time and in the force-time guard (`terminal!`). | `gk_builtin_write`, `provider_family_of_line` | `term_readonly_write`, `term_readonly_query` |
 | `network(readonly)` covers connecting out, listening on 127.0.0.1, accepting, sending, receiving and closing. Binding a listener to any other address (`resid_tcp_listen_at`, `http_listen_at`) exposes a port to other machines and is the one network write, at compile time and in the force-time guard (`network!`). A server's worker regions can therefore be spawned with `network(readonly)` while only the code that binds holds `network`. The TCP verbs accept only `AF_INET`/`AF_INET6` sockets, so a `network` grant cannot drive a display connection or any other Unix-domain socket it did not make itself; accept refuses a descriptor past the 65536-entry deadline table, so every connection it hands out has its deadline. Every descriptor the runtime makes is close-on-exec (listeners, accepted connections via `accept4`, sockets, pairs, pipes, files, `memfd`, `eventfd`, and descriptors received with `MSG_CMSG_CLOEXEC`), so a command started with `process.run`, a terminal session or the PTY broker inherits none of the program's connections. Unix-domain sockets (`resid_unix_*`) are the local form under the same family: `resid_unix_listen` is a write (it exposes a socket to other processes), the rest are reads. The runtime fixes the policy: the socket is 0600 in a directory owned by the user with no group or other bits (made 0700 when missing, else refused), an existing file is replaced only if it is the user's own dead socket, accept drops and connect refuses a peer of another uid (`SO_PEERCRED`), every descriptor is close-on-exec, and the unix verbs work only on descriptors they made (a per-fd mark), so they cannot reach a display socket either. | `gk_builtin_write`, `gk_direct`, `provider_family_of_line`; `listen_sa`, `rt_tcp_accept`, `rt_tcp_accept_now` | `err_network_readonly_listen`, `network_readonly_loopback`, `fd_cloexec` |
 | Reading the clock is `clock`, an effect like any other: under Laws 8 and 9 the answer to "what time is it" is knowledge the program does not have, so it arrives only through an authorized provider and never ambiently. `clock(readonly)` covers `now_ns`, `now_sec` and `monotonic_ns`; `sleep_ns` consumes time rather than observing it and so needs the full grant, at compile time and in the force-time guard (`clock!`). `lib/clock.resid` is the standard library's only clock surface, and the rest of the date and time library needs no grant at all — converting, formatting and zone-resolving a timestamp you already hold is arithmetic. | `is_prov_family`, `is_write_verb`, `provider_family_of_line` | `err_authority_clock`, `err_clock_readonly_write`, `authority_clock_readonly`, `dt_clock`, `tests/runtime/cap_guard.c` |
@@ -391,7 +391,7 @@ Not guaranteed:
   the reduced program, so a type-check-only run does not make them and
   `--no-reduce` leaves every descriptor unknown (E0262).
 
-## Program confinement (`resid_sandbox_confine`)
+## Program confinement (`resid_sandbox_confine`, `resid_sandbox_confine_listening`)
 
 A second layer for a long-running server that reads hostile input
 (pylond), behind memory safety: the program continues in a forked child
@@ -402,7 +402,7 @@ with no new privileges, under Landlock and a seccomp filter
 |---|---|---|
 | The file tree is reachable only beneath the `rw` paths (every right but execute) and `ro` paths (read files, list directories); a path that is not a directory gets only a file's rights. | `ll_rules`, `ll_each` | `proc_confine_scope`, `proc_pty_broker` |
 | No Unix socket can be reached, by path or abstract name (a session bus, systemd's or a container daemon's socket would run commands on request): `socket()` is allowed only for AF_INET and AF_INET6. With Landlock ABI 6 abstract sockets and signals are also scoped to the domain. | `sb_filter` (socket block), the ruleset's `scoped` | `proc_confine_scope` |
-| No new TCP port can be bound (Landlock ABI 4, `handled_access_net` BIND_TCP). | ruleset `handled_access_net` | (kernel-dependent; not in the suite) |
+| No new TCP port can be bound (Landlock ABI 4, `handled_access_net` BIND_TCP, no port allowed), unless the program opted in with `resid_sandbox_confine_listening`. | ruleset `handled_access_net` (`sb_confine`) | `tests/runtime/confine_listen.c` (skipped before ABI 4) |
 | `ioctl` only for the terminal and socket requests the runtime makes (TCGETS, TCSETS*, TIOCGWINSZ, TIOCSWINSZ, FIONREAD, FIONBIO, TIOCGPTN, TIOCSPTLCK), never TIOCSTI; `tgkill` only to the process itself; `prlimit64` only on itself (pid 0); nothing can be executed; any other system call fails with EPERM. | `sb_filter`, `sb_nrs`, `sb_ioctls` | `proc_pty_broker` (exec fails) |
 
 What stays open: outgoing TCP connections (a server's own work; Landlock
@@ -410,6 +410,17 @@ CONNECT_TCP is not handled); sockets, terminals and listeners the program
 already held; and on kernels before Landlock ABI 4 or 6, TCP bind and the
 abstract-socket and signal scopes. Without Landlock at all the call
 changes nothing and returns 0.
+
+`resid_sandbox_confine_listening(List(Str) rw, List(Str) ro) -> Int` is
+the same confinement with one difference: BIND_TCP is not handled, so the
+program can still bind TCP ports it picks after confining itself (pylond
+listens on the loopback ports a client asks for, SPEC 9.7 `-R`). It is an
+explicit opt-in, the same write of `process` (E0219 without the grant,
+checked again at force time). Where the program can listen is still
+bounded by the capability checks, not by the kernel: `resid_tcp_listen`
+binds 127.0.0.1 only, and any other address is `resid_tcp_listen_at`, a
+write of `network`. Every other guarantee above holds unchanged
+(`tests/runtime/confine_listen.c`, `proc_confine_listening`).
 
 ## Memory safety
 
