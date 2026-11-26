@@ -964,16 +964,20 @@ pub List(Int) name_at(List(Int) data, Int pos) {
     return der_slice_seeded(data, cs, e - 1);
 }
 
-/// Is this CRL one `issuer` signed, and current at `now`?
+/// Is this CRL one `issuer` signed, and current at `now`, with nothing in
+/// it this walk cannot process?
 ///
-/// Issuer name, the thisUpdate..nextUpdate window, and the signature over
-/// the tbsCertList. A CRL whose nextUpdate has passed is not used at all:
+/// Issuer name, the thisUpdate..nextUpdate window, the signature over
+/// the tbsCertList, and its extensions (`crl_ext_ok`). A CRL whose nextUpdate has passed is not used at all:
 /// it says what was true when it was issued, and a stale CRL is exactly how
 /// a revoked certificate keeps working.
 pub Bool crl_usable(List(Int) crl, List(Int) issuer, Instant now) {
     // The signature first: it parses the CRL strictly, and the positions
     // read below are then in a structure the issuer vouched for.
     if (!x509_signed_by(crl, issuer)) { return false; }
+    // RFC 5280 §5.2: a CRL with a critical extension, or a critical entry
+    // extension, that is not processed is not used at all.
+    if (!crl_ext_ok(crl)) { return false; }
     Int ip = crl_issuer_pos(crl);
     if (ip < 0) { return false; }
     Int sp2 = x509_subject_pos(issuer);
@@ -991,9 +995,148 @@ pub Bool crl_usable(List(Int) crl, List(Int) issuer, Instant now) {
     return t <= nextn;
 }
 
+/// What a CRL's extensions let it say (RFC 5280 §5.2, §5.3), read once:
+/// whether it is well formed with every critical extension, on the CRL and
+/// on each entry, one processed here (`ok`); whether an
+/// issuingDistributionPoint scopes it to part of what its issuer issued
+/// (`scoped`); whether it is a delta CRL (`delta`); and whether an entry
+/// says removeFromCRL (`removes`).
+type CrlScan = { Bool ok; Bool scoped; Bool delta; Bool removes; };
+
+CrlScan crl_scan_bad() { return CrlScan { .ok = false, .scoped = false, .delta = false, .removes = false }; }
+
+/// Whether this CRL may be used at all: every critical extension is one
+/// processed here, it is not indirect (its entries could be another
+/// issuer's, named by a certificateIssuer this does not read), and no
+/// entry un-revokes with removeFromCRL, which only a base CRL read
+/// together with its delta can apply.
+pub Bool crl_ext_ok(List(Int) crl) {
+    CrlScan s = crl_scan(crl);
+    return s.ok && !s.removes;
+}
+
+/// Whether this CRL speaks for every certificate its issuer issued, so
+/// that a serial it does not list is not revoked: not a delta CRL (which
+/// lists only what changed since its base) and not partitioned or scoped
+/// by an issuingDistributionPoint. A CRL that is not complete still
+/// revokes what it lists; it never answers `revocation_required`.
+pub Bool crl_complete(List(Int) crl) {
+    CrlScan s = crl_scan(crl);
+    return s.ok && !s.removes && !s.scoped && !s.delta;
+}
+
+pub CrlScan crl_scan(List(Int) crl) {
+    Der tbs = der_child(crl, der_top(crl));
+    if (!tbs.ok || tbs.tag != 48) { return crl_scan_bad(); }
+    return crl_scan_fields(crl, der_child(crl, tbs), tbs, false, CrlScan { .ok = true, .scoped = false, .delta = false, .removes = false });
+}
+
+// The tbsCertList's fields from `f`: a SEQUENCE after a Time is the list
+// of revoked certificates, and [0] is crlExtensions.
+CrlScan crl_scan_fields(List(Int) b, Der f, Der tbs, Bool timed, CrlScan acc) {
+    if (!f.ok) { return crl_scan_bad(); }
+    CrlScan here = if (f.tag == 48 && timed) { crl_scan_entries(b, f, acc) }
+        else { if (f.tag == 160) { crl_scan_exts(b, f, acc) } else { acc } };
+    if (!here.ok || der_is_last(f, tbs)) { return here; }
+    Bool t2 = timed || f.tag == 23 || f.tag == 24;
+    return crl_scan_fields(b, der_sibling(b, f, tbs), tbs, t2, here);
+}
+
+CrlScan crl_scan_entries(List(Int) b, Der list, CrlScan acc) {
+    if (list.len == 0) { return acc; }
+    return crl_scan_entry(b, der_child(b, list), list, acc);
+}
+
+// Each entry: SEQUENCE { serial, revocationDate, crlEntryExtensions OPTIONAL }.
+CrlScan crl_scan_entry(List(Int) b, Der e, Der list, CrlScan acc) {
+    if (!e.ok || e.tag != 48) { return crl_scan_bad(); }
+    Der serial = der_child(b, e);
+    Der date = der_sibling(b, serial, e);
+    if (!date.ok) { return crl_scan_bad(); }
+    Der exts = if (der_is_last(date, e)) { der_bad() } else { der_sibling(b, date, e) };
+    if (!der_is_last(date, e) && (!exts.ok || exts.tag != 48 || !der_is_last(exts, e) || exts.len == 0)) { return crl_scan_bad(); }
+    CrlScan here = if (exts.ok) { crl_scan_entry_ext(b, der_child(b, exts), exts, acc) } else { acc };
+    if (!here.ok || der_is_last(e, list)) { return here; }
+    return crl_scan_entry(b, der_sibling(b, e, list), list, here);
+}
+
+// One Extension: SEQUENCE { OID, critical BOOLEAN DEFAULT FALSE, OCTET
+// STRING }. The value element, or a malformed one.
+Der crl_ext_value(List(Int) b, Der e) {
+    if (!e.ok || e.tag != 48) { return der_bad(); }
+    Der id = der_child(b, e);
+    Der v1 = der_sibling(b, id, e);
+    Der v = if (v1.ok && v1.tag == 1) { der_sibling(b, v1, e) } else { v1 };
+    if (!v.ok || v.tag != 4 || !der_is_last(v, e)) { return der_bad(); }
+    return v;
+}
+
+Bool crl_ext_critical(List(Int) b, Der e) {
+    Der v1 = der_sibling(b, der_child(b, e), e);
+    return v1.ok && v1.tag == 1 && v1.len == 1 && b[v1.start] == 255;
+}
+
+// Entry extensions: reasonCode (read for removeFromCRL) and
+// invalidityDate are processed; certificateIssuer and anything else
+// critical make the CRL unusable.
+CrlScan crl_scan_entry_ext(List(Int) b, Der e, Der seq, CrlScan acc) {
+    Der v = crl_ext_value(b, e);
+    if (!v.ok) { return crl_scan_bad(); }
+    Str o = der_oid(b, der_child(b, e));
+    Bool crit = crl_ext_critical(b, e);
+    if (crit && o != "2.5.29.21" && o != "2.5.29.24") { return crl_scan_bad(); }
+    // CRLReason ::= ENUMERATED, removeFromCRL (8).
+    Bool rm = o == "2.5.29.21" && v.len == 3 && b[v.start] == 10 && b[v.start + 1] == 1 && b[v.start + 2] == 8;
+    CrlScan here = CrlScan { .ok = true, .scoped = acc.scoped, .delta = acc.delta, .removes = acc.removes || rm };
+    if (der_is_last(e, seq)) { return here; }
+    return crl_scan_entry_ext(b, der_sibling(b, e, seq), seq, here);
+}
+
+// crlExtensions: [0] { SEQUENCE OF Extension }.
+CrlScan crl_scan_exts(List(Int) b, Der e0, CrlScan acc) {
+    Der seq = der_child(b, e0);
+    if (!seq.ok || seq.tag != 48 || !der_is_last(seq, e0) || seq.len == 0) { return crl_scan_bad(); }
+    return crl_scan_ext(b, der_child(b, seq), seq, acc);
+}
+
+// CRL extensions: deltaCRLIndicator and issuingDistributionPoint are
+// processed; cRLNumber and authorityKeyIdentifier change nothing read
+// here; anything else critical makes the CRL unusable.
+CrlScan crl_scan_ext(List(Int) b, Der e, Der seq, CrlScan acc) {
+    Der v = crl_ext_value(b, e);
+    if (!v.ok) { return crl_scan_bad(); }
+    Str o = der_oid(b, der_child(b, e));
+    Bool crit = crl_ext_critical(b, e);
+    CrlScan here = if (o == "2.5.29.27") { CrlScan { .ok = true, .scoped = acc.scoped, .delta = true, .removes = acc.removes } }
+        else { if (o == "2.5.29.28") { crl_scan_idp(b, v, acc) }
+        else { if (crit && o != "2.5.29.20" && o != "2.5.29.35") { crl_scan_bad() } else { acc } } };
+    if (!here.ok || der_is_last(e, seq)) { return here; }
+    return crl_scan_ext(b, der_sibling(b, e, seq), seq, here);
+}
+
+// IssuingDistributionPoint ::= SEQUENCE { distributionPoint [0],
+// onlyContainsUserCerts [1], onlyContainsCACerts [2], onlySomeReasons
+// [3], indirectCRL [4], onlyContainsAttributeCerts [5] }, every field
+// optional or DEFAULT FALSE. Any field present scopes the CRL; an
+// indirect CRL, or one of attribute certificates only, is not used.
+CrlScan crl_scan_idp(List(Int) b, Der v, CrlScan acc) {
+    Der s = der_at(b, v.start, der_end(v));
+    if (!s.ok || s.tag != 48 || s.next != der_end(v)) { return crl_scan_bad(); }
+    if (s.len == 0) { return acc; }
+    return crl_scan_idp_field(b, der_child(b, s), s, acc);
+}
+
+CrlScan crl_scan_idp_field(List(Int) b, Der f, Der s, CrlScan acc) {
+    if (!f.ok) { return crl_scan_bad(); }
+    if (f.tag == 132 || f.tag == 133) { return crl_scan_bad(); }
+    CrlScan here = CrlScan { .ok = true, .scoped = true, .delta = acc.delta, .removes = acc.removes };
+    if (der_is_last(f, s)) { return here; }
+    return crl_scan_idp_field(b, der_sibling(b, f, s), s, here);
+}
+
 /// What the store's CRLs say about one certificate: whether a usable CRL
-/// revokes it, and whether any usable CRL covers it at all (`covered`, what
-/// `revocation_required` asks about).
+/// revokes it, and whether a usable, complete CRL covers it (`covered`,
+/// what `revocation_required` asks about).
 type Rev = { Bool revoked; Bool covered; };
 
 Rev crl_check_at(TrustStore st, List(Int) cert, List(Int) issuer, Instant now, Int i) {
@@ -1002,12 +1145,13 @@ Rev crl_check_at(TrustStore st, List(Int) cert, List(Int) issuer, Instant now, I
     Bool usable = crl_usable(crl, issuer, now);
     if (usable && crl_revokes(crl, cert)) { return Rev { .revoked = true, .covered = true }; }
     Rev rest = crl_check_at(st, cert, issuer, now, i + 1);
-    if (usable && !rest.covered) { return Rev { .revoked = rest.revoked, .covered = true }; }
+    // A delta or scoped CRL that does not list the serial says nothing.
+    if (usable && !rest.covered && crl_complete(crl)) { return Rev { .revoked = rest.revoked, .covered = true }; }
     return rest;
 }
 
 /// What the store's CRLs say about `cert` under `issuer` at `now`: whether
-/// a usable CRL revokes it, and whether any usable CRL covers it at all.
+/// a usable CRL revokes it, and whether a usable, complete CRL covers it.
 pub Rev crl_check(TrustStore st, List(Int) cert, List(Int) issuer, Instant now) {
     return crl_check_at(st, cert, issuer, now, 0);
 }

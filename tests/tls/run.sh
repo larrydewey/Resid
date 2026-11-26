@@ -249,6 +249,38 @@ REV="$(rev bad "$STALE")"
 REV="$(rev bad "$IN_WINDOW")"
 [ "$(revfield revoked_list)" = "2001" ] && ok || bad "CRL should list serial 2001, got $(revfield revoked_list)"
 
+# What a CRL's extensions let it say (fixtures/crlscope, gen_crlscope.py;
+# RFC 5280 §5.2-5.3). A critical extension, on the CRL or on an entry,
+# that the walk does not process makes the CRL unusable, and so does an
+# indirect CRL or a delta that un-revokes. A delta CRL, or one an
+# issuingDistributionPoint scopes or partitions, still revokes what it
+# lists, but not listing a serial is no answer: such a CRL never covers a
+# certificate for `revocation_required`.
+CS="$F/crlscope"
+mkdir -p "$W/crlscope" && cp "$CS/ca.der" "$W/crlscope/"
+crs() { # <name> <crl> <leaf> <field=value>...
+    local name="$1" crl="$2" leaf="$3"; shift 3
+    REV="$("$PROBE" "$W/crlscope" --revoke "$CS/$crl.der" "$CS/$leaf.der" localhost "" "$CS/ca.der" "$IN_WINDOW" 2>&1)"
+    local kv
+    for kv in "$@"; do
+        if [ "$(revfield "${kv%%=*}")" = "${kv#*=}" ]; then ok; else bad "crl $name: ${kv%%=*}=$(revfield "${kv%%=*}") want ${kv#*=}"; fi
+    done
+}
+crs full-good full good crl_usable=true crl_complete=true covered=true TRUSTED-strict=true
+crs full-bad full bad revoked=true TRUSTED=false
+crs noncrit-unknown noncrit_unknown good crl_usable=true covered=true TRUSTED-strict=true
+crs crit-unknown crit_unknown good crl_usable=false covered=false TRUSTED-strict=false
+crs crit-unknown-lists-bad crit_unknown_bad bad crl_usable=false revoked=false TRUSTED-strict=false
+crs entry-critical entry_crit good crl_usable=false covered=false TRUSTED-strict=false
+crs indirect indirect good crl_usable=false covered=false TRUSTED-strict=false
+crs delta delta good crl_usable=true crl_complete=false covered=false TRUSTED=true TRUSTED-strict=false
+crs delta-lists-bad delta_bad bad crl_usable=true revoked=true TRUSTED=false
+crs delta-remove delta_remove bad crl_usable=false TRUSTED-strict=false
+crs idp-partition idp_part good crl_usable=true crl_complete=false covered=false TRUSTED-strict=false
+crs idp-partition-lists-bad idp_part_bad bad revoked=true TRUSTED=false
+crs idp-reasons idp_reasons good crl_complete=false covered=false TRUSTED-strict=false
+crs idp-users-only idp_users good crl_complete=false covered=false TRUSTED-strict=false
+
 # PEM reading, checked through what it produces.
 probe "$F/root.pem" "$F/root.der" localhost
 [ "$(field roots)" = 1 ] && ok || bad "PEM bundle did not parse to one root"

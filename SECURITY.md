@@ -611,7 +611,8 @@ against a moment it did not read.
 | A certificate may only sign for another if it says `CA:TRUE` and allows `keyCertSign`. A leaf handed over as an intermediate cannot issue. | leaf must not be a CA, issuer CA checks |
 | A store carrying CRLs enforces them: a certificate the issuer's current CRL lists is refused. | good.der, bad.der |
 | A CRL is used only if it is signed by the issuing CA and inside its `thisUpdate`..`nextUpdate` window, so a stale CRL cannot certify anything. | a stale CRL must not be usable |
-| `revocation_required` refuses a certificate that no current CRL covers, so "no revocation information" never reads as "not revoked". | good.der under revocation_required, revocation_required must refuse a stale CRL |
+| `revocation_required` refuses a certificate that no current, complete CRL covers, so "no revocation information" never reads as "not revoked". A delta CRL, or one an issuingDistributionPoint partitions or scopes (distribution point, reasons, user or CA certificates only), revokes what it lists but never covers a serial it does not list. | good.der under revocation_required, revocation_required must refuse a stale CRL, crl delta, crl idp-* |
+| A CRL with a critical extension or critical entry extension the walk does not process is not used at all (RFC 5280 §5.2), and neither is an indirect CRL (its entries could be another issuer's), one of attribute certificates only, or a delta that un-revokes with removeFromCRL. | crl crit-unknown, crl entry-critical, crl indirect, crl delta-remove (`fixtures/crlscope`, `gen_crlscope.py`) |
 | CRLs and roots are loaded separately, so a bundle of CRLs is never mistaken for a set of trust anchors. | (loading) |
 
 Not guaranteed:
