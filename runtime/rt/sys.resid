@@ -827,12 +827,21 @@ pub Int rt_pty_status(Int broker, Int pid) {
 // For a long-running server that reads hostile input (pylond, SPEC 8.4):
 // no new privileges; Landlock, under which the filesystem is reachable
 // only beneath `rw` (every right) and `ro` (reading files and listing
-// directories); then a seccomp filter allowing only the system calls an
-// event loop of sockets, terminals and memory needs. Anything else fails
-// with EPERM (a foreign architecture or x32 call kills the process), so
-// in particular nothing can be executed. 1 when confined; 0 when the
-// kernel has no Landlock and nothing was changed. When confinement fails
-// part-way the process ends (exit status 125): no unconfined copy goes on.
+// directories), no TCP port can be bound (ABI 4), and no abstract Unix
+// socket outside the domain can be reached nor any process outside it
+// signalled (ABI 6); then a seccomp filter allowing only the system calls
+// an event loop of sockets, terminals and memory needs: socket() only for
+// AF_INET and AF_INET6 (so no Unix socket, by path or abstract name, can
+// be connected to: a session bus or a container daemon would run commands
+// on request), ioctl only the terminal and FIONBIO requests the runtime
+// makes (never TIOCSTI), tgkill only to the process itself and prlimit64
+// only on itself. Anything else fails with EPERM (a foreign architecture or
+// x32 call kills the process), so nothing can be executed. What stays
+// open is listed in SECURITY.md: TCP connect, sockets and terminals the
+// program already holds, and on kernels before Landlock ABI 4 / 6 the TCP
+// bind and the scopes. 1 when confined; 0 when the kernel has no Landlock
+// and nothing was changed. When confinement fails part-way the process
+// ends (exit status 125): no unconfined copy goes on.
 //
 // It is a capability of the program as a whole (`process`, a write:
 // gk_builtin_family), checked again here at force time, so a dependency
@@ -859,9 +868,12 @@ pub Int rt_sandbox_confine(Int rw, Int ro) {
         return resid_raw_syscall(231, code, 0, 0, 0, 0, 0);
     }
     Int all = 8191 | (if (abi >= 2) { 8192 } else { 0 }) | (if (abi >= 3) { 16384 } else { 0 }) | (if (abi >= 5) { 32768 } else { 0 });
-    Int attr = resid_raw_tls("ll_attr", 8);
-    _ = st64(attr, all);
-    Int rs = resid_raw_syscall(444, attr, 8, 0, 0, 0, 0);
+    // struct landlock_ruleset_attr: handled_access_fs, handled_access_net
+    // (ABI 4: BIND_TCP 1), scoped (ABI 6: ABSTRACT_UNIX_SOCKET 1 | SIGNAL 2).
+    Int attr = resid_raw_tls("ll_attr", 24);
+    _ = st64(attr, all) + st64(attr + 8, if (abi >= 4) { 1 } else { 0 }) + st64(attr + 16, if (abi >= 6) { 3 } else { 0 });
+    Int size = if (abi >= 6) { 24 } else { if (abi >= 4) { 16 } else { 8 } };
+    Int rs = resid_raw_syscall(444, attr, size, 0, 0, 0, 0);
     if (rs < 0) { return confine_failed(); }
     // ro: LANDLOCK_ACCESS_FS_READ_FILE (4) | READ_DIR (8); never EXECUTE (1).
     Bool ok = ll_rules(rs, rw, all & (0 - 2)) && ll_rules(rs, ro, 4 | 8)
@@ -869,7 +881,7 @@ pub Int rt_sandbox_confine(Int rw, Int ro) {
         && resid_raw_syscall(446, rs, 0, 0, 0, 0, 0) == 0;                    // landlock_restrict_self
     _ = sys_close(rs);
     if (!ok) { return confine_failed(); }
-    Int prog = sb_filter();
+    Int prog = sb_filter(resid_raw_syscall(39, 0, 0, 0, 0, 0, 0));
     Int fprog = resid_raw_tls("sb_fprog", 16);
     _ = st64(fprog, sb_len()) + st64(fprog + 8, prog);
     return if (resid_raw_syscall(317, 1, 1, fprog, 0, 0, 0) == 0) { 1 } else { confine_failed() };   // seccomp(SET_MODE_FILTER, TSYNC)
@@ -912,17 +924,32 @@ Bool ll_each(Int rs, Int items, Int i, Int n, Int access) {
     return ll_each(rs, items, i + 1, n, access);
 }
 
-// The allowed system calls (x86-64 numbers; resid_raw_nr maps them).
+// The system calls allowed whatever their arguments (x86-64 numbers;
+// resid_raw_nr maps them). ioctl (16), socket (41), tgkill (234) and
+// prlimit64 (302) are allowed by argument (sb_arg_blocks).
 Int sb_nrs() {
-    return resid_raw_table([0, 1, 3, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 20, 23, 24, 25, 28, 35, 39, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 54, 55,
-        60, 72, 96, 102, 104, 107, 108, 186, 202, 219, 228, 229, 230, 231, 234, 257, 262, 263, 270, 271, 281, 288, 302, 318, 334]);
+    return resid_raw_table([0, 1, 3, 5, 7, 9, 10, 11, 12, 13, 14, 15, 20, 23, 24, 25, 28, 35, 39, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 54, 55,
+        60, 72, 96, 102, 104, 107, 108, 186, 202, 219, 228, 229, 230, 231, 257, 262, 263, 270, 271, 281, 288, 318, 334]);
 }
-Int sb_count() { return 59; }
-Int sb_len() { return 8 + sb_count(); }
+Int sb_count() { return 55; }
 
-// arch check, nr load, x32 kill, one JEQ per allowed call, then EPERM,
-// allow, kill.
-Int sb_filter() {
+// The ioctl requests the runtime makes on terminals and sockets: TCGETS,
+// TCSETS, TCSETSW, TCSETSF, TIOCGWINSZ, TIOCSWINSZ, FIONREAD, FIONBIO,
+// TIOCGPTN, TIOCSPTLCK (the same numbers on AArch64).
+Int sb_ioctls() { return resid_raw_table([21505, 21506, 21507, 21508, 21523, 21524, 21531, 21537, 2147767344, 1074025521]); }
+Int sb_nioctls() { return 10; }
+
+// Each argument block: load the argument's low 32 bits, one JEQ per value
+// allowed, then EPERM, then allow.
+Int sb_block_len(Int m) { return m + 3; }
+Int sb_blocks_len() { return sb_block_len(sb_nioctls()) + sb_block_len(2) + sb_block_len(1) + sb_block_len(1); }
+// header 5, the plain JEQs, 4 JEQs to the blocks, EPERM, allow, kill.
+Int sb_len() { return 5 + sb_count() + 4 + 3 + sb_blocks_len(); }
+
+// arch check, nr load, x32 kill, one JEQ per allowed call, a JEQ per call
+// allowed by argument, then EPERM, allow, kill, then the argument blocks.
+// `self` is the confined process's pid (tgkill, prlimit64).
+Int sb_filter(Int self) {
     Int n = sb_count();
     Int p = xmalloc(sb_len() * 8);
     Int ld = 32;
@@ -932,25 +959,63 @@ Int sb_filter() {
     Int kill = 2147483648;     // SECCOMP_RET_KILL_PROCESS
     Int allow = 2147418112;    // SECCOMP_RET_ALLOW
     Int eperm = 327680 | 1;    // SECCOMP_RET_ERRNO | EPERM
+    Int s0 = 5 + n;            // the JEQs to the blocks
+    Int e = s0 + 4;            // EPERM
+    Int b0 = e + 3;            // the first block
+    Int b1 = b0 + sb_block_len(sb_nioctls());
+    Int b2 = b1 + sb_block_len(2);
+    Int b3 = b2 + sb_block_len(1);
     _ = bpf(p, 0, ld, 0, 0, 4)
       + bpf(p, 1, jeq, 1, 0, if (on_a64()) { 3221225655 } else { 3221225534 })
       + bpf(p, 2, ret, 0, 0, kill)
       + bpf(p, 3, ld, 0, 0, 0)
-      + bpf(p, 4, jge, n + 2, 0, 1073741824)
-      + sb_jeqs(p, 0, n)
-      + bpf(p, 5 + n, ret, 0, 0, eperm)
-      + bpf(p, 6 + n, ret, 0, 0, allow)
-      + bpf(p, 7 + n, ret, 0, 0, kill);
+      + bpf(p, 4, jge, e + 2 - 5, 0, 1073741824)
+      + sb_jeqs(p, 0, n, e + 1)
+      + bpf(p, s0, jeq, b0 - s0 - 1, 0, sb_nr_k(16))
+      + bpf(p, s0 + 1, jeq, b1 - s0 - 2, 0, sb_nr_k(41))
+      + bpf(p, s0 + 2, jeq, b2 - s0 - 3, 0, sb_nr_k(234))
+      + bpf(p, s0 + 3, jeq, b3 - s0 - 4, 0, sb_nr_k(302))
+      + bpf(p, e, ret, 0, 0, eperm)
+      + bpf(p, e + 1, ret, 0, 0, allow)
+      + bpf(p, e + 2, ret, 0, 0, kill)
+      // ioctl: the request (args[1], offset 24)
+      + sb_block(p, b0, 24, sb_ioctls(), sb_nioctls())
+      // socket: the domain (args[0]), AF_INET 2 or AF_INET6 10
+      + sb_block(p, b1, 16, resid_raw_table([2, 10]), 2)
+      // tgkill: the thread group (args[0]) is this process
+      + sb_block(p, b2, 16, sb_one(self), 1)
+      // prlimit64: the pid (args[0]) is 0, this process
+      + sb_block(p, b3, 16, sb_one(0), 1);
     return p;
 }
 
-Int sb_nr(Int n) { return resid_raw_nr(n); }
+Int sb_one(Int v) {
+    Int t = xmalloc(8);
+    return st64(t, v) * 0 + t;
+}
 
-Int sb_jeqs(Int p, Int i, Int n) {
+Int sb_block(Int p, Int at, Int off, Int vals, Int m) {
+    _ = bpf(p, at, 32, 0, 0, off) + sb_vals(p, at + 1, vals, 0, m)
+      + bpf(p, at + 1 + m, 6, 0, 0, 327680 | 1)
+      + bpf(p, at + 2 + m, 6, 0, 0, 2147418112);
+    return 0;
+}
+
+// JEQ i jumps to the block's allow (m - i ahead of the next instruction).
+Int sb_vals(Int p, Int at, Int vals, Int i, Int m) {
+    if (i >= m) { return 0; }
+    _ = bpf(p, at + i, 21, m - i, 0, ld64(vals + i * 8) & 4294967295);
+    return sb_vals(p, at, vals, i + 1, m);
+}
+
+Int sb_nr(Int n) { return resid_raw_nr(n); }
+Int sb_nr_k(Int n) { Int nr = sb_nr(n); return if (nr < 0) { 4294967295 } else { nr }; }
+
+// Plain JEQ i (at 5 + i) jumps to the allow at `al`.
+Int sb_jeqs(Int p, Int i, Int n, Int al) {
     if (i >= n) { return 0; }
-    Int nr = sb_nr(ld64(sb_nrs() + i * 8));
-    _ = bpf(p, 5 + i, 21, n - i, 0, if (nr < 0) { 4294967295 } else { nr });
-    return sb_jeqs(p, i + 1, n);
+    _ = bpf(p, 5 + i, 21, al - (5 + i) - 1, 0, sb_nr_k(ld64(sb_nrs() + i * 8)));
+    return sb_jeqs(p, i + 1, n, al);
 }
 
 // git rev-parse through sh -c (git provider).

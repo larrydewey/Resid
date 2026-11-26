@@ -332,6 +332,26 @@ Not guaranteed:
   the reduced program, so a type-check-only run does not make them and
   `--no-reduce` leaves every descriptor unknown (E0262).
 
+## Program confinement (`resid_sandbox_confine`)
+
+A second layer for a long-running server that reads hostile input
+(pylond), behind memory safety: the program continues in a forked child
+with no new privileges, under Landlock and a seccomp filter
+(`rt_sandbox_confine`, `runtime/rt/sys.resid`). Inside it:
+
+| Guarantee | Where | Tests |
+|---|---|---|
+| The file tree is reachable only beneath the `rw` paths (every right but execute) and `ro` paths (read files, list directories); a path that is not a directory gets only a file's rights. | `ll_rules`, `ll_each` | `proc_confine_scope`, `proc_pty_broker` |
+| No Unix socket can be reached, by path or abstract name (a session bus, systemd's or a container daemon's socket would run commands on request): `socket()` is allowed only for AF_INET and AF_INET6. With Landlock ABI 6 abstract sockets and signals are also scoped to the domain. | `sb_filter` (socket block), the ruleset's `scoped` | `proc_confine_scope` |
+| No new TCP port can be bound (Landlock ABI 4, `handled_access_net` BIND_TCP). | ruleset `handled_access_net` | (kernel-dependent; not in the suite) |
+| `ioctl` only for the terminal and socket requests the runtime makes (TCGETS, TCSETS*, TIOCGWINSZ, TIOCSWINSZ, FIONREAD, FIONBIO, TIOCGPTN, TIOCSPTLCK), never TIOCSTI; `tgkill` only to the process itself; `prlimit64` only on itself (pid 0); nothing can be executed; any other system call fails with EPERM. | `sb_filter`, `sb_nrs`, `sb_ioctls` | `proc_pty_broker` (exec fails) |
+
+What stays open: outgoing TCP connections (a server's own work; Landlock
+CONNECT_TCP is not handled); sockets, terminals and listeners the program
+already held; and on kernels before Landlock ABI 4 or 6, TCP bind and the
+abstract-socket and signal scopes. Without Landlock at all the call
+changes nothing and returns 0.
+
 ## Memory safety
 
 | Guarantee | Tests |
