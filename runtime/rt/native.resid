@@ -231,7 +231,7 @@ pub Int hs_recv_until(Int fd, Int p, Int i, Int n, Int dl) {
     // struct msghdr (56 bytes), its iovec at 56, the control buffer at 72.
     _ = st64(m + 56, p + i) + st64(m + 64, n - i);
     _ = st64(m + 16, m + 56) + st64(m + 24, 1) + st64(m + 32, m + 72) + st64(m + 40, 48);
-    Int r = resid_raw_syscall(47, fd, m, 64, 0, 0, 0);   // recvmsg, MSG_DONTWAIT
+    Int r = resid_raw_syscall(47, fd, m, 64 | 1073741824, 0, 0, 0);   // recvmsg, MSG_DONTWAIT | MSG_CMSG_CLOEXEC
     if (r == 0 - 4 || r == 0 - 11) { return hs_recv_until(fd, p, i, n, dl); }
     if (r <= 0) { return i; }
     // Bytes from anyone else are dropped, and reading stops.
@@ -518,7 +518,7 @@ pub Int hs_recv_cred(Int fd, Int p, Int i, Int n, Int ppid) {
     // struct msghdr (56 bytes), its iovec at 56, the control buffer at 72.
     _ = st64(m + 56, p + i) + st64(m + 64, n - i);
     _ = st64(m + 16, m + 56) + st64(m + 24, 1) + st64(m + 32, m + 72) + st64(m + 40, 48);
-    Int r = resid_raw_syscall(47, fd, m, 0, 0, 0, 0);   // recvmsg
+    Int r = resid_raw_syscall(47, fd, m, 1073741824, 0, 0, 0);   // recvmsg, MSG_CMSG_CLOEXEC
     if (r == 0 - 4) { return hs_recv_cred(fd, p, i, n, ppid); }
     if (r <= 0) { return i; }
     if (!hs_cred_ok(m, ppid)) { return 0 - 1; }

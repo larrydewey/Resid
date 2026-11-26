@@ -1,0 +1,42 @@
+// Every descriptor the runtime makes is close-on-exec: a command run with
+// process.run inherits none of them. The TCP listener and the connections
+// accept hands out (both forms) used to leak, as did a descriptor that
+// arrived beside a display message. `test -e /proc/self/fd/N` in the
+// child answers 0 when it holds descriptor N.
+@requires(process, network, display)
+Int main() {
+    Int l = resid_tcp_listen(0);
+    Int port = resid_tcp_bound_port(l);
+    Int c = resid_tcp_connect("127.0.0.1", port);
+    Int a = resid_tcp_accept(l);
+    Int c2 = resid_tcp_connect("127.0.0.1", port);
+    Int a2 = waited(l, 50);
+    Int u = resid_udp_bind(0);
+    List(Int) p = resid_disp_pair();
+    Int h = resid_disp_shm_new(4096);
+    _ = resid_disp_send(p[0], [1], resid_disp_shm_fd(h));
+    _ = resid_disp_recv(p[1], 16);
+    Int r = resid_disp_recv_fd();
+    println(f"made {l >= 0 && c >= 0 && a >= 0 && c2 >= 0 && a2 >= 0 && u >= 0 && p.len() == 2 && r >= 0}");
+    println(f"listener inherited: {held(l)}");
+    println(f"accepted inherited: {held(a)}");
+    println(f"accepted (now) inherited: {held(a2)}");
+    println(f"client inherited: {held(c)}");
+    println(f"udp inherited: {held(u)}");
+    println(f"display pair inherited: {held(p[0])} {held(p[1])}");
+    println(f"shm inherited: {held(resid_disp_shm_fd(h))}");
+    println(f"received inherited: {held(r)}");
+    return 0;
+}
+
+// An accept_now that waits a little for the connection to arrive.
+@requires(network)
+Int waited(Int l, Int tries) {
+    Int a = resid_tcp_accept_now(l);
+    if (a != -2 || tries <= 0) { return a; }
+    _ = resid_tcp_poll([l], [1], 20);
+    return waited(l, tries - 1);
+}
+
+@requires(process)
+Bool held(Int fd) { return process.run(f"test -e /proc/self/fd/{fd}") == 0; }

@@ -635,7 +635,7 @@ pub Int rt_disp_recv(Int fd, Int max0) {
     _ = resid_raw_fill(ctl, 0, 64);
     Int m = disp_msg_head(buf, max, false);
     _ = st64(msg_buf() + 48, ctl) + st64(msg_buf() + 56, 64);
-    Int r = resid_raw_syscall(47, fd, m, 0, 0, 0, 0);           // recvmsg
+    Int r = resid_raw_syscall(47, fd, m, 1073741824, 0, 0, 0);   // recvmsg, MSG_CMSG_CLOEXEC: a received descriptor is close-on-exec
     Int n = if (r > 0) { r } else { 0 };
     Int cl0 = ld64(msg_buf() + 56);
     Int cl = if (cl0 > 64) { 64 } else { cl0 };

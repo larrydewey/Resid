@@ -3014,7 +3014,7 @@ Int dh_session(Int h, Int d) {
     if (dma && dmem == 0) { return native_child_exit(125); }
     _ = if (dma) { st64(tab + (more + 1) * 16, dmem) + st64(tab + (more + 1) * 16 + 8, dget(d, 37)) } else { 0 };
     // Its interrupt: an event nothing here ever signals.
-    Int efd = if (dma) { resid_raw_syscall(290, 0, 0, 0, 0, 0, 0) } else { 0 - 1 };   // eventfd2
+    Int efd = if (dma) { resid_raw_syscall(290, 0, 524288, 0, 0, 0, 0) } else { 0 - 1 };   // eventfd2(0, EFD_CLOEXEC)
     if (!dh_regions(h, 4)) { return native_child_exit(125); }
     Int vb = dh_region(h, 32, 0);
     Int db = dh_region(h, 32, 0);
@@ -3090,7 +3090,7 @@ Int vf_map(Int dev, Int ri, Int tab, Int i, Int res, Int size) {
 Int vf_irq(Int dev, Int w) {
     _ = resid_raw_fill(w, 0, 32) + st32(w, 16) + st32(w + 8, 2);   // VFIO_PCI_MSIX_IRQ_INDEX
     if (vf_ioctl(dev, 109, w) < 0 || ld32(w + 12) < 1) { return 0 - 1; }   // VFIO_DEVICE_GET_IRQ_INFO: its count
-    Int efd = resid_raw_syscall(290, 0, 0, 0, 0, 0, 0);   // eventfd2
+    Int efd = resid_raw_syscall(290, 0, 524288, 0, 0, 0, 0);   // eventfd2(0, EFD_CLOEXEC)
     if (efd < 0) { return 0 - 1; }
     // DATA_EVENTFD | ACTION_TRIGGER, index 2, from vector 0, one, the descriptor.
     _ = resid_raw_fill(w, 0, 32) + st32(w, 24) + st32(w + 4, 36) + st32(w + 8, 2) + st32(w + 12, 0) + st32(w + 16, 1) + st32(w + 20, efd);
