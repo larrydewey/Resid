@@ -1,0 +1,7 @@
+// A function has no value to compare, so it is no Map key or Set element;
+// a map or set is none either (E0302). Before, a closure's environment or
+// a map's handle was read as a string or a box by its first bytes.
+Int main() {
+    Map(Int closure(Int), Int) m = {};
+    return m.len();
+}

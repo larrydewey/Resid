@@ -1,0 +1,12 @@
+rec 3 4 2 3 false 2
+many 3000 3000 false
+hostile 2 true false
+sum 5 true false true false true false true
+enum 2 g false
+opt 2 3 false
+result 3 true false
+listrec 2 true false true
+tree 2 true false
+dec 2 3
+keys 1 5 z 5
+algebra 3 1 true

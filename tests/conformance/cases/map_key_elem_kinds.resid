@@ -1,0 +1,60 @@
+// A list as a Map key or Set element is hashed and compared by its
+// elements, read by what the compiler says they are: raw Float slots
+// (whose bits were taken for a box's address: [0.0] faulted, and the bits
+// 0x4141414141 were read from), strings starting with 0xFF (taken for a
+// box), Bools, integers of every width, and lists of those, nested; a
+// Str(N) key is a string too. Every one by value.
+@requires(filesystem)
+Str raw(List(Int) bs) {
+    Str p = "@TMP@/ff.bin";
+    Bool ok = filesystem.write_bytes(p, bs);
+    return filesystem.read_all(p);
+}
+
+List(List(Int)) rows(List(List(Int)) acc, Int i, Int n) { return if (i >= n) { acc } else { rows(acc.concat([[i]]), i + 1, n) }; }
+
+@requires(filesystem)
+Int main() {
+    Float tiny = str_parse_float("1.384706273005e-312");
+    Float den = str_parse_float("5e-324");
+    Float nan = str_parse_float("nan");
+    Map(List(Float), Int) f0 = {};
+    Map(List(Float), Int) f = f0.insert([0.0], 1).insert([tiny], 2).insert([den, 1.5], 3).insert([1.5], 4).insert([-0.0], 5);
+    println(f"float {f.len()} {f.get([0.0]) else { 0 }} {f.get([tiny]) else { 0 }} {f.get([den, 1.5]) else { 0 }} {f.get([1.5]) else { 0 }} {f.contains([2.5])} {f.contains([nan])}");
+    Set(List(Float)) fs = {[tiny], [0.0]};
+    println(f"floatset {fs.len()} {fs.contains([tiny])} {fs.contains([den])} {fs.remove([tiny]).len()} {fs.union({[den]}).len()}");
+
+    Str k = raw([255, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65]);
+    Str k2 = raw([255, 255, 255, 255, 255, 255, 255, 255, 65, 65, 65, 65, 65, 65, 65, 65, 66, 66, 66, 66, 66, 66, 66, 66]);
+    Set(List(Str)) s0 = {};
+    Set(List(Str)) s = s0.insert(["a", k]).insert([k2]).insert(["a", k]);
+    println(f"str {s.len()} {s.contains(["a", k])} {s.contains([k2])} {s.contains([k])} {s.remove([k2]).len()}");
+    Map(List(Str), Int) ms = {[k]: 1, [k2, k]: 2};
+    println(f"strmap {ms.len()} {ms.get([k]) else { 0 }} {ms.get([k2, k]) else { 0 }} {ms.get([k, k2]) else { 0 }}");
+
+    Str(32) fx = (Str(32))k2;
+    Map(Str(32), Int) mf = {};
+    Map(Str(32), Int) mf2 = mf.insert(fx, 7).insert("x", 8);
+    println(f"strn {mf2.len()} {mf2.get(fx) else { 0 }} {mf2.contains("x")} {mf2.contains("y")}");
+
+    Map(List(Bool), Int) mb = {[true, false]: 1, [false]: 2};
+    println(f"bool {mb.len()} {mb.get([true, false]) else { 0 }} {mb.get([false]) else { 0 }} {mb.contains([true])}");
+    Map(List(UInt(16)), Int) mu = {[0, 65535]: 1, [0]: 2};
+    println(f"u16 {mu.len()} {mu.get([0, 65535]) else { 0 }} {mu.get([0]) else { 0 }} {mu.contains([1])}");
+    Map(List(Int(128)), Int) mw = {[170141183460469231731687303715884105727]: 1, [0 - 1]: 2};
+    println(f"i128 {mw.len()} {mw.get([170141183460469231731687303715884105727]) else { 0 }} {mw.get([0 - 1]) else { 0 }} {mw.contains([1])}");
+
+    Map(List(List(Float)), Int) nf = {[[0.0]]: 1, [[tiny], [1.5]]: 2};
+    println(f"nested float {nf.len()} {nf.get([[0.0]]) else { 0 }} {nf.get([[tiny], [1.5]]) else { 0 }} {nf.contains([[tiny]])}");
+    Set(List(List(Str))) ns = {[[k]], [["a"], [k2]]};
+    println(f"nested str {ns.len()} {ns.contains([[k]])} {ns.contains([["a"], [k2]])} {ns.contains([[k2]])}");
+    Map(List(List(List(Int))), Int) n3 = {[[[1]], [[2, 3]]]: 1};
+    println(f"nested3 {n3.get([[[1]], [[2, 3]]]) else { 0 }} {n3.contains([[[1]], [[2, 4]]])}");
+    // A list whose count ends in 0xFF was taken for a box by its header.
+    List(List(Int)) e = [];
+    List(List(Int)) big = rows(e, 0, 255);
+    Map(List(List(Int)), Int) nb = {};
+    Map(List(List(Int)), Int) nb2 = nb.insert(big, 1).insert(rows(e, 0, 511), 2).insert([[1]], 3).insert([[2]], 4);
+    println(f"nested len {nb2.len()} {nb2.get(big) else { 0 }} {nb2.get(rows(e, 0, 511)) else { 0 }} {nb2.get([[2]]) else { 0 }} {nb2.contains(rows(e, 0, 254))}");
+    return 0;
+}

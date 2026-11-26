@@ -1,0 +1,65 @@
+// Records, sums (enums, Options, Results, sums with payloads), Decs and
+// lists of them are Map keys and Set elements compared by value, through
+// functions the compiler makes for the key's type. Before, such a key was
+// read as a string by its first bytes: every record of a type was one key
+// (Pt {1, "a"} and Pt {1, "b"} collided), Circle(4) and Circle(5) were
+// equal, and a record whose first field was -1 was taken for a box, whose
+// second word was then read as a type name's address.
+type Pt = { Int x; Str s; };
+type Rec = { Int tag; Int addr; List(Float) fs; Option(Str) note; };
+type Shape = Circle(Int) | Square(Pt) | Pair(Str, Float) | Dot;
+type Color = Red | Green | Blue;
+type Tree = Leaf | Node(Tree, Int, Tree);
+
+Pt pt(Int x, Str s) { return Pt {.x = x, .s = s}; }
+Tree node(Tree l, Int v, Tree r) { return Node(l, v, r); }
+
+Map(Pt, Int) fill(Map(Pt, Int) m, Int i, Int n) { return if (i >= n) { m } else { fill(m.insert(pt(i, f"k{i % 7}"), i), i + 1, n) }; }
+Int hits(Map(Pt, Int) m, Int i, Int n, Int acc) { return if (i >= n) { acc } else { hits(m, i + 1, n, acc + (if ((m.get(pt(i, f"k{i % 7}")) else { 0 - 1 }) == i) { 1 } else { 0 })) }; }
+
+Int main() {
+    Map(Pt, Int) m0 = {};
+    Map(Pt, Int) m = m0.insert(pt(1, "a"), 1).insert(pt(2, "a"), 2).insert(pt(1, "b"), 3).insert(pt(1, "a"), 4);
+    println(f"rec {m.len()} {m.get(pt(1, "a")) else { 0 }} {m.get(pt(2, "a")) else { 0 }} {m.get(pt(1, "b")) else { 0 }} {m.contains(pt(3, "a"))} {m.remove(pt(1, "b")).len()}");
+    Map(Pt, Int) big = fill(m0, 0, 3000);
+    println(f"many {big.len()} {hits(big, 0, 3000, 0)} {big.contains(pt(3000, "k4"))}");
+
+    // A first field of -1 and a second of an address-like number.
+    Set(Rec) r0 = {};
+    Set(Rec) rs = r0.insert(Rec {.tag = 0 - 1, .addr = 4702111234474983745, .fs = [0.0], .note = None}).insert(Rec {.tag = 0 - 1, .addr = 1, .fs = [1.5, 0.0], .note = Some("n")});
+    println(f"hostile {rs.len()} {rs.contains(Rec {.tag = 0 - 1, .addr = 4702111234474983745, .fs = [-0.0], .note = None})} {rs.contains(Rec {.tag = 0 - 1, .addr = 1, .fs = [1.5, 0.0], .note = Some("m")})}");
+
+    Set(Shape) s0 = {};
+    Set(Shape) s = s0.insert(Circle(1)).insert(Circle(4)).insert(Square(pt(1, "a"))).insert(Pair("p", 2.5)).insert(Dot).insert(Circle(1)).insert(Square(pt(1, "a")));
+    println(f"sum {s.len()} {s.contains(Circle(4))} {s.contains(Circle(5))} {s.contains(Square(pt(1, "a")))} {s.contains(Square(pt(1, "b")))} {s.contains(Pair("p", 2.5))} {s.contains(Pair("p", 2.0))} {s.contains(Dot)}");
+
+    Map(Color, Str) c = {Red: "r", Green: "g"};
+    println(f"enum {c.len()} {c.get(Green) else { "-" }} {c.contains(Blue)}");
+
+    Map(Option(Int), Int) o0 = {};
+    Map(Option(Int), Int) o = o0.insert(Some(1), 1).insert(Some(2), 2).insert(Some(1), 3);
+    println(f"opt {o.len()} {o.get(Some(1)) else { 0 }} {o.contains(Some(3))}");
+    Set(Result(Int, Str)) e0 = {};
+    Set(Result(Int, Str)) e = e0.insert(Ok(1)).insert(Err("x")).insert(Ok(1)).insert(Err("y"));
+    println(f"result {e.len()} {e.contains(Err("x"))} {e.contains(Ok(2))}");
+
+    Set(List(Pt)) l0 = {};
+    Set(List(Pt)) l = l0.insert([pt(1, "a"), pt(2, "b")]).insert([pt(2, "b")]).insert([pt(1, "a"), pt(2, "b")]);
+    println(f"listrec {l.len()} {l.contains([pt(2, "b")])} {l.contains([pt(2, "c")])} {l.contains([pt(1, "a"), pt(2, "b")])}");
+
+    Set(Tree) t0 = {};
+    Set(Tree) t = t0.insert(node(Leaf, 1, node(Leaf, 2, Leaf))).insert(node(Leaf, 1, Leaf)).insert(node(Leaf, 1, node(Leaf, 2, Leaf)));
+    println(f"tree {t.len()} {t.contains(node(Leaf, 1, node(Leaf, 2, Leaf)))} {t.contains(node(Leaf, 1, node(Leaf, 3, Leaf)))}");
+
+    Map(Dec(34), Int) d0 = {};
+    Map(Dec(34), Int) d = d0.insert(1.50m, 1).insert(2.25m, 2).insert(1.5m, 3);
+    println(f"dec {d.len()} {d.get(1.50m) else { 0 }}");
+
+    Map(Pt, Int) k = m0.insert(pt(5, "z"), 5);
+    println(f"keys {k.len()} {k.get(pt(5, "z")) else { 0 }} {k.keys()[0].s} {s.len()}");
+
+    Set(Pt) u = {pt(1, "a"), pt(2, "b")};
+    Set(Pt) v = {pt(2, "b"), pt(3, "c")};
+    println(f"algebra {u.union(v).len()} {u.intersection(v).len()} {u.difference(v).contains(pt(1, "a"))}");
+    return 0;
+}

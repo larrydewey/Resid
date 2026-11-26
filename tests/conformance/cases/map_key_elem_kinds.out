@@ -1,0 +1,12 @@
+float 4 5 2 3 4 false false
+floatset 2 true false 1 3
+str 2 true true false 1
+strmap 2 1 2 0
+strn 2 7 true false
+bool 2 1 2 false
+u16 2 1 2 false
+i128 2 1 2 false
+nested float 2 1 2 false
+nested str 2 true true false
+nested3 1 false
+nested len 4 1 2 4 false

@@ -4975,9 +4975,10 @@ Int gk_finish(GK k0, List(Int) fnode, Str src, Str smap, Str smap0) {
     Bool err5 = gk_authority(k, fnode, facts);
     Bool err6 = gk_internals_at(k, 0, k.nls, smap, gm_prelude_pos(src), false);
     Bool err7 = sec_wide_scan(k, k.tl.keys, k.tl.tys, 0, src, smap);
+    Bool err10 = key_scan(k, k.tl.keys, k.tl.tys, 0, src, smap);
     Bool err8 = dv_scan(k, 0, k.nls, src, smap, dv_std_dir(gm_pk(smap0), 0), false) || dv_raw_sessions(k, src, smap);
     Bool err9 = op_scan(k, 0, k.nls, src, smap, op_std_root(gm_pk(smap0), 0), false);
-    if (err1 || err2 || err3 || err4 || err5 || err6 || err7 || err8 || err9) { return 1; }
+    if (err1 || err2 || err3 || err4 || err5 || err6 || err7 || err8 || err9 || err10) { return 1; }
     if (!resid_quiet()) { println("typecheck OK"); }
     return 0;
 }
@@ -5102,7 +5103,7 @@ Map(Str, Int) gm_add_names(List(Str) ns, Int i, Map(Str, Int) m) {
     return gm_add_names(ns, i + 1, m.insert(ty_head(ns[i]), 1));
 }
 
-Bool gm_unknown_types(Kg g, Int id, Map(Str, Int) known, Str src, Str smap, Bool acc) {
+Bool gm_unknown_types(Kg g, Int id, Map(Str, Int) known, Sigs fs, Str src, Str smap, Bool acc) {
     if (id >= kg_count(g)) { return acc; }
     Str u = if (g.ns[id].kind == "ty") { gm_unknown_in(g.ns[id].text, 0, known) } else { "" };
     Str sk = if (g.ns[id].kind == "ty" && u == "") { sec_key_err(g.ns[id].text) } else { "" };
@@ -5111,12 +5112,15 @@ Bool gm_unknown_types(Kg g, Int id, Map(Str, Int) known, Str src, Str smap, Bool
     if (sb != "") { gk_diag("E0253", sb, g, id, src, smap); }
     Str sw = if (g.ns[id].kind == "ty" && u == "" && sk == "" && sb == "") { sec_wide_err(g.ns[id].text) } else { "" };
     if (sw != "") { gk_diag("E0258", sw, g, id, src, smap); }
+    Bool mk = g.ns[id].kind == "ty" && u == "" && sk == "" && sb == "" && sw == "" && (str_contains(g.ns[id].text, "Map(") || str_contains(g.ns[id].text, "Set("));
+    Str ke = if (mk) { key_type_err(fs, g.ns[id].text, 0) } else { "" };
+    if (ke != "") { gk_diag("E0302", ke, g, id, src, smap); }
     Bool rsv = (g.ns[id].kind == "fn" || g.ns[id].kind == "proto") && sec_reserved(g.ns[id].text);
     if (rsv) { gk_diag("E0259", "`" + g.ns[id].text + "` is a builtin of secret values (spec §48) and cannot be redefined: a function by that name would replace it in every module, libraries included", g, id, src, smap); }
     Str near = if (u == "") { "" } else { gm_near(known.keys(), 0, u) };
     Str hint = if (near != "") { " (did you mean `" + near + "`?)" } else { "; a type parameter is a single uppercase letter (T, K, V)" };
     if (u != "") { gk_diag("E0001", "type error: unknown type `" + u + "`" + hint, g, id, src, smap); }
-    return gm_unknown_types(g, id + 1, known, src, smap, acc || u != "" || sk != "" || sb != "" || sw != "" || rsv);
+    return gm_unknown_types(g, id + 1, known, fs, src, smap, acc || u != "" || sk != "" || sb != "" || sw != "" || ke != "" || rsv);
 }
 
 // ─── Ambiguous imports (E0223) ──────────────────────────────────────
@@ -5176,7 +5180,7 @@ pub GKR gk_analyze_m(Kg g, Int unit, Str src, Str smap0, Bool log, Bool fin, Str
     // checked on inferred types and generic copies too (sec_wide_scan).
     TL tl = TL {.on = log || sec_graph_has(g, 0), .keys = e, .tys = es, .mem = e, .bm = e, .sh = es};
     Map(Str, Int) m0 = {};
-    if (!lite && gm_unknown_types(g, 0, gm_known_types(sg, m0), src, smap, false)) { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
+    if (!lite && gm_unknown_types(g, 0, gm_known_types(sg, m0), sg.fs, src, smap, false)) { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
     List(Int) nls = if (nls0.len() > 0) { nls0 } else { gk_newlines(src, 0, ListBuf()) };
     GX gx = gm_gx_init(g, unit, sg, src, smap0, nls);
     Map(Str, Int) vo0 = {};
@@ -6017,6 +6021,158 @@ Str sec_key_err(Str t) {
     if (m >= 0 && sec_key_err(str_slice(t, m + 4, str_len(t))) != "") { return sec_key_err(str_slice(t, m + 4, str_len(t))); }
     if (st >= 0 && sec_key_err(str_slice(t, st + 4, str_len(t))) != "") { return sec_key_err(str_slice(t, st + 4, str_len(t))); }
     return "";
+}
+
+// ─── Map keys (E0302) ───────────────────────────────────────────────
+// A Map key or Set element is hashed and compared by value, by the key
+// kind the compiler gives every map operation (runtime/rt/map.resid): an
+// integer (1, or a box), a string (4), a list of scalars or strings nested
+// up to 25 levels (key_list_kind, read by the list's own slot kind), and
+// any other value -- a record, a sum (an enum, Option, Result), a Dec, a
+// list of those -- by functions the compiler makes for its type
+// (`resid.kh.T` / `resid.ke.T`, lower.resid's kd_*), which the runtime
+// calls through the kind (64-127) each operation registers. The runtime
+// never guesses a key's type from its words: a raw Float slot read as a
+// box's address was an out-of-bounds read, and a record or sum was read as
+// a string, so every record of a type was one key. A type with no value to
+// compare -- a function, a map or set, a builder, a fixed-capacity list or
+// byte string -- is refused (E0302).
+
+// The key kind of a list type (runtime/rt/map.resid, list_kk), which
+// tells the runtime what its elements are: 5 scalars (integers of any
+// width, Float, Bool, secret or not), 6 strings, 16 + 2 (d - 2) + s a list
+// of d levels whose innermost elements are scalars (s = 0) or strings
+// (s = 1); 0 for any other type, a list nested deeper than 25 included
+// (compared by the functions made for its type instead).
+pub Int key_list_kind(Str kt0) {
+    Str kt = str_trim(kt0);
+    if (!str_has_prefix(kt, "List(") || !str_ends_with(kt, ")") || is_list_fixed(kt)) { return 0; }
+    Str e = str_trim(str_slice(kt, 5, str_len(kt) - 1));
+    if (key_str(e)) { return 6; }
+    if (key_scalar(e)) { return 5; }
+    Int ik = key_list_kind(e);
+    if (ik == 0) { return 0; }
+    Int d = if (ik < 16) { 2 } else { (ik - 16) / 2 + 3 };
+    Int leaf = if (ik < 16) { ik - 5 } else { (ik - 16) % 2 };
+    return if (d > 25) { 0 } else { 16 + 2 * (d - 2) + leaf };
+}
+
+// An integer, Float or Bool, secret or not (a secret element is stored
+// as its declassified type's slot).
+pub Bool key_scalar(Str e) {
+    Str t = num_norm(sec_inner(e));
+    return is_int_ty(t) || str_has_prefix(t, "Float(") || t == "Bool";
+}
+
+pub Bool key_str(Str e) { Str t = str_trim(e); return t == "Str" || str_has_prefix(t, "Str("); }
+
+// Why `t` cannot be a key, or "" when it can (or is not known yet: a type
+// parameter is checked in each copy, a secret by E0253). `seen`: the
+// records and sums being checked (a recursive type is a key when its
+// other parts are).
+Str key_bad(Sigs fs, Str t0, Int depth) { return key_bad_in(fs, t0, depth, []); }
+
+Str key_bad_in(Sigs fs, Str t0, Int depth, List(Str) seen) {
+    Str t = str_trim(t0);
+    if (t == "" || sec_is(t) || gm_has_var(t) || key_unresolved(t) || seen.contains(t) || depth > 64) { return ""; }
+    if (key_str(t) || key_scalar(t) || t == "Bytes" || t == "Dec" || str_has_prefix(t, "Dec(")) { return ""; }
+    if (is_fn_type(t)) { return "a function, which has no value to compare"; }
+    if (str_has_prefix(t, "List(")) {
+        if (is_list_fixed(t)) { return "a fixed-capacity list"; }
+        return key_bad_in(fs, str_slice(t, 5, str_len(t) - 1), depth + 1, seen);
+    }
+    Str h = ty_head(t);
+    if (h == "Map" || h == "Set") { return "a map or set, which is compared by no value of its own"; }
+    if (h == "ListBuf" || h == "StrBuf" || h == "Bytes" || h == "Vec") { return "a builder or fixed-capacity value"; }
+    Int ci = key_index(fs.ctn, h, 0);
+    if (ci >= 0) { return key_bad_in(fs, fs.ctb[ci], depth + 1, seen); }
+    List(Str) seen2 = seen.concat([t]);
+    if (h == "Option" || h == "Result") { return key_bad_all(fs, ty_args(t), 0, depth + 1, seen2); }
+    Int si = key_index(fs.sun, h, 0);
+    if (si >= 0) { return key_bad_all(fs, key_payloads(sumv_types(fs.suv[si]), 0, []), 0, depth + 1, seen2); }
+    Int ri = key_index(fs.stn, h, 0);
+    if (ri >= 0) { return key_bad_all(fs, key_field_types(fs.stf[ri], 0, []), 0, depth + 1, seen2); }
+    return "not compared by value";
+}
+
+Str key_bad_all(Sigs fs, List(Str) ts, Int i, Int depth, List(Str) seen) {
+    if (i >= ts.len()) { return ""; }
+    Str w = key_bad_in(fs, ts[i], depth, seen);
+    if (w != "") { return "it holds " + str_trim(ts[i]) + ": " + w; }
+    return key_bad_all(fs, ts, i + 1, depth, seen);
+}
+
+// Every payload type of a sum's variants ("A|B, C|" lanes).
+List(Str) key_payloads(List(Str) vs, Int i, List(Str) acc) {
+    if (i >= vs.len()) { return acc; }
+    Str v = str_trim(vs[i]);
+    return key_payloads(vs, i + 1, if (v == "") { acc } else { acc.concat(ty_args_at(v, 0, str_len(v), [])) });
+}
+
+// The field types of a record's "name:Type,name:Type" table.
+List(Str) key_field_types(Str fields, Int i, List(Str) acc) {
+    Int n = str_len(fields);
+    if (i >= n) { return acc; }
+    Int e = key_comma(fields, i, 0);
+    Str ent = str_slice(fields, i, e);
+    Int co = str_find_char(ent, 58, 0);
+    List(Str) a2 = if (co < 0) { acc } else { acc.concat([str_trim(str_slice(ent, co + 1, str_len(ent)))]) };
+    return key_field_types(fields, e + 1, a2);
+}
+
+// The next comma outside parentheses from i, or the end.
+Int key_comma(Str t, Int i, Int depth) {
+    if (i >= str_len(t)) { return str_len(t); }
+    Int c = str_char_at(t, i);
+    if (c == 44 && depth == 0) { return i; }
+    return key_comma(t, i + 1, if (c == 40) { depth + 1 } else { if (c == 41) { depth - 1 } else { depth } });
+}
+
+Bool key_unresolved(Str t) { return t == "_" || str_contains(t, "Unknown") || str_contains(t, "(_") || str_contains(t, "_)") || str_contains(t, " _"); }
+
+Int key_index(List(Str) ns, Str h, Int i) {
+    if (i >= ns.len()) { return 0 - 1; }
+    return if (ty_head(ns[i]) == h) { i } else { key_index(ns, h, i + 1) };
+}
+
+// The first Map key or Set element in type `t` (from `from`) that cannot
+// be one, as a message, or "".
+Str key_type_err(Sigs fs, Str t, Int from) {
+    Int m = sec_find_head(t, "Map(", from);
+    Int st = sec_find_head(t, "Set(", from);
+    Int at = if (m < 0) { st } else { if (st < 0 || m < st) { m } else { st } };
+    if (at < 0) { return ""; }
+    Int close = key_close(t, at + 4, 1);
+    List(Str) as = ty_args(str_slice(t, at, close + 1));
+    Str why = if (as.len() > 0) { key_bad(fs, as[0], 0) } else { "" };
+    if (why != "") {
+        Str what = if (at == m) { "a Map key" } else { "a Set element" };
+        return str_trim(as[0]) + " cannot be " + what + ": " + why + ". A key is compared by its value: numbers, Bools, strings, records, sums, Options, Results and lists of those (" + t + ")";
+    }
+    return key_type_err(fs, t, at + 4);
+}
+
+// The index of the parenthesis closing the one open before `i`.
+Int key_close(Str t, Int i, Int depth) {
+    if (i >= str_len(t)) { return str_len(t) - 1; }
+    Int c = str_char_at(t, i);
+    if (c == 40) { return key_close(t, i + 1, depth + 1); }
+    if (c == 41) { return if (depth == 1) { i } else { key_close(t, i + 1, depth - 1) }; }
+    return key_close(t, i + 1, depth);
+}
+
+// E0302 over every type the checker gave an expression, when it logs them
+// (a program with secrets); gm_unknown_types checks every written type,
+// generic copies included, in every program.
+Bool key_scan(GK k, List(Int) keys, List(Str) tys, Int i, Str src, Str smap) {
+    if (i >= keys.len()) { return false; }
+    Str t = tys[keys[i] % 4294967296];
+    Str e = if (str_contains(t, "Map(") || str_contains(t, "Set(")) { key_type_err(k.fs, t, 0) } else { "" };
+    if (e != "") {
+        gk_diag("E0302", e, k.g, keys[i] / 4294967296, src, smap);
+        return true;
+    }
+    return key_scan(k, keys, tys, i + 1, src, smap);
 }
 
 // E0253 in a written or inferred type: a secret Bytes or Bytes(N), or "".

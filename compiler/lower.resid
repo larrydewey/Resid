@@ -446,7 +446,7 @@ GT lw_map_lit_put(LW w, Str m, Str kw, GT v, Str kt, Str vt, List(Str) env) {
     GT vw = lin_word("", v, vk, env, w.fs);
     Int t1 = vw.tmp + 1;
     Str reg = f"%t{t1}";
-    return lw_step(vw, reg, "Map(" + kt + ", " + vt + ")", vw.lines.concat([reg + " = call ptr @resid_map_put(ptr " + m + f", i8 0, i8 {lin_key_kind(kt)}, i64 " + kw + f", i8 {vk}, i64 " + vw.val + ")"]), t1);
+    return lw_step(vw, reg, "Map(" + kt + ", " + vt + ")", vw.lines.concat(lin_kk_reg(kt)).concat([reg + " = call ptr @resid_map_put(ptr " + m + ", i8 0, i8 " + lin_kk_txt(kt) + ", i64 " + kw + f", i8 {vk}, i64 " + vw.val + ")"]), t1);
 }
 
 GT lw_map_rest(LW w, Int id, Int i, Str kt, Str vt, List(Str) env, GT m) {
@@ -479,7 +479,7 @@ GT lw_set_lit_put(LW w, Str s, GT e, Str et, List(Str) env) {
     GT kw = lin_word("", e, kk, env, w.fs);
     Int t1 = kw.tmp + 1;
     Str reg = f"%t{t1}";
-    return lw_step(kw, reg, "Set(" + et + ")", kw.lines.concat([reg + " = call ptr @resid_set_put(ptr " + s + f", i8 0, i8 {kk}, i64 " + kw.val + ")"]), t1);
+    return lw_step(kw, reg, "Set(" + et + ")", kw.lines.concat(lin_kk_reg(et)).concat([reg + " = call ptr @resid_set_put(ptr " + s + ", i8 0, i8 " + lin_kk_txt(et) + ", i64 " + kw.val + ")"]), t1);
 }
 
 GT lw_set_rest(LW w, Int id, Int i, Str et, List(Str) env, GT sv) {
@@ -674,7 +674,7 @@ GT lw_get_else(LW w, GT base, GT ka, Str kt, Str vt, Int fb, List(Str) env) {
     Str labf = f"L{l0 + 2}";
     Str labfe = f"L{l0 + 3}";
     Str labm = f"L{l0 + 4}";
-    List(Str) q = kw.lines.concat([fr + " = call i128 @resid_map_find(ptr " + base.val + f", i8 {kk}, i64 " + kw.val + f", i8 {lin_vk(vt)})", fr + "h = lshr i128 " + fr + ", 64", fnd + " = trunc i128 " + fr + "h to i64", ok + " = icmp ne i64 " + fnd + ", 0", wv + " = trunc i128 " + fr + " to i64", lin_from_word(pv, wv, vt), "br i1 " + ok + ", label %" + labp + ", label %" + labf, labf + ":"]);
+    List(Str) q = kw.lines.concat(lin_kk_reg(kt)).concat([fr + " = call i128 @resid_map_find(ptr " + base.val + ", i8 " + lin_kk_txt(kt) + ", i64 " + kw.val + f", i8 {lin_vk(vt)})", fr + "h = lshr i128 " + fr + ", 64", fnd + " = trunc i128 " + fr + "h to i64", ok + " = icmp ne i64 " + fnd + ", 0", wv + " = trunc i128 " + fr + " to i64", lin_from_word(pv, wv, vt), "br i1 " + ok + ", label %" + labp + ", label %" + labf, labf + ":"]);
     GT fv0 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = kw.glines, .lines = q, .tmp = t1 + 4, .lbl = l0 + 4, .tail = false};
     GT fv = lw_arm(w, fb, env, fv0);
     if (fv.err != "") { return fv; }
@@ -1022,6 +1022,325 @@ GT lw_show_nested(LW w, GT v, List(Str) env) {
     Bool strish = num_norm_cg(t) == "Str" || is_str_fixed(t);
     if (strish && b_index(w.fs, "Show", t) < 0) { return lw_rt1(v, "ptr", "@resid_str_quote(ptr " + v.val + ")", "Str"); }
     return lw_show(w, v, false, env);
+}
+
+// ─── Compiled map keys ──────────────────────────────────────────────
+// A key the runtime cannot read (key_custom: a record, a sum, a Dec, a
+// list of those) is hashed and compared by two functions made here per
+// type, `resid.kh.T(i64 key, i64 _) -> i64` and `resid.ke.T(i64 a, i64 b)
+// -> i64` (0 / 1), the key word being the value's pointer (an inline
+// record's, its fields). Their bodies are Resid source over the key's
+// parts, lowered as Show's are (lw_show_fn): `__khash(x)` / `__keq(x, y)`
+// by each part's type (kh_of / ke_of: numbers by value, strings by text,
+// lists by kind through the runtime, other parts by their own functions),
+// `__kmix(h, x)` one FNV step. Every operation that names the kind
+// registers the pair first (lin_kk_reg); kd_module numbers the kinds.
+
+Str kd_key(Str t) { return str_trim(strip_owned_cg(t)); }
+Str kd_name(Str pre, Str t) { return "resid." + pre + "." + show_mangle(kd_key(t), 0, ""); }
+
+// show_mangle's inverse (its spaces dropped: a comma gets one back).
+Str kd_unmangle(Str m, Int i, Str acc) {
+    if (i >= str_len(m)) { return acc; }
+    Int c = str_char_at(m, i);
+    if (c == 95 && i + 1 < str_len(m)) {
+        Int d = str_char_at(m, i + 1);
+        Str p = if (d == 76) { "(" } else if (d == 82) { ")" } else if (d == 67) { ", " } else if (d == 95) { "_" } else { "_" + str_from_code(d) };
+        return kd_unmangle(m, i + 2, acc + p);
+    }
+    return kd_unmangle(m, i + 1, acc + str_from_code(c));
+}
+
+// Both functions of key type t, unless already made (or being made: a
+// recursive type calls its own).
+GT kd_need(LW w, Str t, GT g) {
+    Str hn = kd_name("kh", t);
+    Str key = "@rtg.cmpdef." + hn + " ";
+    Str mark = "@rtg.cmpdef." + hn + ".making ";
+    if (lw_has_gline(g.glines, key, 0) || lw_has_gline(g.glines, mark, 0)) { return g; }
+    GT g1 = GT {.pos = g.pos, .val = g.val, .ty = g.ty, .cnt = g.cnt, .err = "", .glines = g.glines.concat([mark]), .lines = g.lines, .tmp = g.tmp, .lbl = g.lbl, .tail = g.tail};
+    GT h = kd_def(w, t, true, g1);
+    if (h.err != "") { return h; }
+    GT e = kd_def(w, t, false, h);
+    if (e.err != "") { return e; }
+    return GT {.pos = g.pos, .val = g.val, .ty = g.ty, .cnt = g.cnt, .err = "", .glines = e.glines.concat([key]), .lines = g.lines, .tmp = e.tmp, .lbl = g.lbl, .tail = g.tail};
+}
+
+GT kd_def(LW w, Str t, Bool hash, GT g) {
+    Str nm = kd_name(if (hash) { "kh" } else { "ke" }, t);
+    Str ct = ct_base_of(w.fs.ctn, w.fs.ctb, kd_key(t));
+    List(Str) head = ["define internal i64 @\"" + nm + "\"(i64 %ka, i64 %kb) {", "entry:"];
+    // A list the runtime cannot compare by kind: element by element,
+    // through the element type's own functions.
+    if (str_has_prefix(ct, "List(") && key_list_kind(ct) == 0) {
+        Str et = kd_key(elem_type(ct));
+        GT ge = kd_need(w, et, g);
+        if (ge.err != "") { return ge; }
+        Str call = if (hash) { "%kr = call i64 @resid_key_hash_list_f(ptr %kav, ptr @\"" + kd_name("kh", et) + "\")" } else { "%kr = call i64 @resid_key_eq_list_f(ptr %kav, ptr %kbv, ptr @\"" + kd_name("ke", et) + "\")" };
+        Str text = str_join(head.concat(["%kav = inttoptr i64 %ka to ptr", "%kbv = inttoptr i64 %kb to ptr", call, "ret i64 %kr", "}"]), "\n");
+        return GT {.pos = g.pos, .val = g.val, .ty = g.ty, .cnt = g.cnt, .err = "", .glines = ge.glines.concat(["@rtg.cmpdef." + nm + " " + text]), .lines = g.lines, .tmp = ge.tmp, .lbl = g.lbl, .tail = g.tail};
+    }
+    Str src = if (hash) { kd_hash_src(w.fs, ct) } else { kd_eq_src(w.fs, ct) };
+    if (src == "") { return gt_err("no key functions for a map key of type " + ct, g); }
+    GT p = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = g.glines, .lines = ["%kav = inttoptr i64 %ka to ptr", "%kbv = inttoptr i64 %kb to ptr"], .tmp = g.tmp + 1, .lbl = 1, .tail = false};
+    List(Str) env0 = [];
+    List(Str) env = env_add(env_add(env0, "__ka:%kav:" + ct), "__kb:%kbv:" + ct);
+    KP e = kg_expr(src, kg_empty(), 0);
+    if (e.err != "") { return gt_err(e.err, g); }
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro()};
+    GT body = lw_expr(ws, e.id, env, p);
+    if (body.err != "") { return body; }
+    List(Str) ret = if (hash) { ["ret i64 " + body.val, "}"] } else { ["%kr = zext i1 " + body.val + " to i64", "ret i64 %kr", "}"] };
+    Str text = str_join(head.concat(body.lines).concat(ret), "\n");
+    return GT {.pos = g.pos, .val = g.val, .ty = g.ty, .cnt = g.cnt, .err = "", .glines = body.glines.concat(["@rtg.cmpdef." + nm + " " + text]), .lines = g.lines, .tmp = body.tmp, .lbl = g.lbl, .tail = g.tail};
+}
+
+// A sum's variants as "name|payload type\x1fpayload type..." entries.
+List(Str) kd_variants(Funcs fs, Str t) {
+    List(Str) a = ty_args_cg(t);
+    if (str_has_prefix(t, "Option(")) { return if (a.len() == 1) { ["Some|" + a[0], "None|"] } else { [] }; }
+    if (str_has_prefix(t, "Result(")) { return if (a.len() == 2) { ["Ok|" + a[0], "Err|" + a[1]] } else { [] }; }
+    Int sx = sumtype_index_cg(fs, t);
+    if (sx < 0) { return []; }
+    return kd_variants_at(sumv_names_cg(fs.suv[sx]), sum_payloads_cg(fs, sx, t), 0, []);
+}
+
+List(Str) kd_variants_at(List(Str) names, List(Str) pays, Int i, List(Str) acc) {
+    if (i >= names.len()) { return acc; }
+    List(Str) p = if (i < pays.len()) { sum_payload_of_cg(pays[i]) } else { [] };
+    return kd_variants_at(names, pays, i + 1, acc.concat([names[i] + "|" + str_join(p, "\x1f")]));
+}
+
+// The hash of a key's parts as source over `__ka`.
+Str kd_hash_src(Funcs fs, Str t) {
+    Int si = struct_index(fs, t);
+    if (si >= 0) { return kd_fold_fields(fs.stf[si], 0, "7"); }
+    if (lr_is_sum(fs, t)) {
+        List(Str) vs = kd_variants(fs, t);
+        return if (vs.len() == 0) { "" } else { "match __ka { " + kd_hash_arms(vs, 0, "") + " }" };
+    }
+    return "__khash(__ka)";
+}
+
+Str kd_fold_fields(Str fields, Int i, Str acc) {
+    Int n = str_len(fields);
+    if (i >= n) { return acc; }
+    Int cm = _find_comma_at_depth_cg(fields, i, 0, 0);
+    Int e = if (cm < 0) { n } else { cm };
+    Str ent = str_slice(fields, i, e);
+    Str f = str_trim(str_slice(ent, 0, str_find_char(ent, 58, 0)));
+    return kd_fold_fields(fields, e + 1, "__kmix(" + acc + ", __khash(__ka." + f + "))");
+}
+
+Str kd_hash_arms(List(Str) vs, Int i, Str acc) {
+    if (i >= vs.len()) { return acc; }
+    List(Str) q = str_split(vs[i], "|");
+    List(Str) ps = if (q[1] == "") { [] } else { str_split(q[1], "\x1f") };
+    Str arm = if (ps.len() == 0) { q[0] + f" => {i}" } else { q[0] + kd_binds("__kp", ps.len(), 0, "") + " => " + kd_fold_binds(ps.len(), 0, f"{i + 1}") };
+    return kd_hash_arms(vs, i + 1, if (acc == "") { arm } else { acc + ", " + arm });
+}
+
+// `(<p>0, <p>1, ...)`.
+Str kd_binds(Str p, Int n, Int j, Str acc) {
+    if (j >= n) { return acc + ")"; }
+    return kd_binds(p, n, j + 1, acc + (if (j == 0) { "(" } else { ", " }) + p + f"{j}");
+}
+
+Str kd_fold_binds(Int n, Int j, Str acc) {
+    if (j >= n) { return acc; }
+    return kd_fold_binds(n, j + 1, "__kmix(" + acc + f", __khash(__kp{j}))");
+}
+
+// The equality of two keys' parts as source over `__ka` and `__kb`.
+Str kd_eq_src(Funcs fs, Str t) {
+    Int si = struct_index(fs, t);
+    if (si >= 0) { return kd_eq_fields(fs.stf[si], 0, ""); }
+    if (lr_is_sum(fs, t)) {
+        List(Str) vs = kd_variants(fs, t);
+        return if (vs.len() == 0) { "" } else { "match __ka { " + kd_eq_arms(vs, 0, "") + " }" };
+    }
+    return "__keq(__ka, __kb)";
+}
+
+Str kd_eq_fields(Str fields, Int i, Str acc) {
+    Int n = str_len(fields);
+    if (i >= n) { return if (acc == "") { "true" } else { acc }; }
+    Int cm = _find_comma_at_depth_cg(fields, i, 0, 0);
+    Int e = if (cm < 0) { n } else { cm };
+    Str ent = str_slice(fields, i, e);
+    Str f = str_trim(str_slice(ent, 0, str_find_char(ent, 58, 0)));
+    Str one = "__keq(__ka." + f + ", __kb." + f + ")";
+    return kd_eq_fields(fields, e + 1, if (acc == "") { one } else { acc + " && " + one });
+}
+
+Str kd_eq_arms(List(Str) vs, Int i, Str acc) {
+    if (i >= vs.len()) { return acc; }
+    List(Str) q = str_split(vs[i], "|");
+    Int n = if (q[1] == "") { 0 } else { str_split(q[1], "\x1f").len() };
+    Str pa = if (n == 0) { "" } else { kd_binds("__kp", n, 0, "") };
+    Str pb = if (n == 0) { "" } else { kd_binds("__kq", n, 0, "") };
+    Str same = if (n == 0) { "true" } else { kd_eq_binds(n, 0, "") };
+    // The other variants, each by name (an Option's or Result's match
+    // takes no `_`).
+    Str rest = kd_other_arms(vs, i, 0, "");
+    Str arm = q[0] + pa + " => match __kb { " + q[0] + pb + " => " + same + rest + " }";
+    return kd_eq_arms(vs, i + 1, if (acc == "") { arm } else { acc + ", " + arm });
+}
+
+Str kd_other_arms(List(Str) vs, Int skip, Int j, Str acc) {
+    if (j >= vs.len()) { return acc; }
+    if (j == skip) { return kd_other_arms(vs, skip, j + 1, acc); }
+    List(Str) q = str_split(vs[j], "|");
+    Int n = if (q[1] == "") { 0 } else { str_split(q[1], "\x1f").len() };
+    Str pr = if (n == 0) { "" } else { kd_binds("__kr", n, 0, "") };
+    return kd_other_arms(vs, skip, j + 1, acc + ", " + q[0] + pr + " => false");
+}
+
+Str kd_eq_binds(Int n, Int j, Str acc) {
+    if (j >= n) { return acc; }
+    Str one = f"__keq(__kp{j}, __kq{j})";
+    return kd_eq_binds(n, j + 1, if (acc == "") { one } else { acc + " && " + one });
+}
+
+// The width of an LLVM integer type ("i64" -> 64), 0 for any other.
+Int kd_iwidth(Str l) {
+    if (!str_has_prefix(l, "i") || str_len(l) < 2) { return 0; }
+    Str d = str_slice(l, 1, str_len(l));
+    return if (str_is_int(d)) { str_parse_int(d) } else { 0 };
+}
+
+Bool kd_float(Str l) { return l == "double" || l == "float" || l == "half" || l == "fp128"; }
+
+// The words of a wide integer folded into one (from bit `at`).
+List(Str) kd_wide_fold(Str l, Str x, Str r, Int at, Int n, Str acc, List(Str) out) {
+    if (at >= n) { return out.concat([r + " = add i64 " + acc + ", 0"]); }
+    Str s = r + f"s{at}";
+    Str p = r + f"p{at}";
+    Str m = r + f"m{at}";
+    List(Str) ls = [s + " = lshr " + l + " " + x + f", {at}", p + " = trunc " + l + " " + s + " to i64", m + "x = xor i64 " + acc + ", " + p, m + " = mul i64 " + m + "x, 1099511628211"];
+    return kd_wide_fold(l, x, r, at + 64, n, m, out.concat(ls));
+}
+
+// __khash(x): a key part's hash, by its type.
+GT kh_of(LW w, GT v) {
+    Str t = ct_base_of(w.fs.ctn, w.fs.ctb, kd_key(v.ty));
+    Str l = ll_ty(num_norm_cg(t));
+    Int t1 = v.tmp + 1;
+    Str r = f"%t{t1}";
+    Int iw = kd_iwidth(l);
+    if (l == "i1") { return lw_step(v, r, "Int", v.lines.concat([r + " = zext i1 " + v.val + " to i64"]), t1); }
+    if (iw == 64) { return lw_step(v, r, "Int", v.lines.concat([r + " = add i64 " + v.val + ", 0"]), t1); }
+    if (iw > 0 && iw < 64) { return lw_step(v, r, "Int", v.lines.concat([r + " = sext " + l + " " + v.val + " to i64"]), t1); }
+    if (iw > 64) { return lw_step(v, r, "Int", kd_wide_fold(l, v.val, r, 0, iw, "0", v.lines), t1); }
+    if (kd_float(l)) {
+        Str cv = if (l == "double") { "" } else { if (l == "fp128") { r + "d = fptrunc fp128 " + v.val + " to double" } else { r + "d = fpext " + l + " " + v.val + " to double" } };
+        Str dv = if (l == "double") { v.val } else { r + "d" };
+        List(Str) pre = if (cv == "") { [] } else { [cv] };
+        return lw_step(v, r, "Int", v.lines.concat(pre).concat([r + " = call i64 @resid_key_hash_f64(double " + dv + ")"]), t1);
+    }
+    if (l != "ptr") { return gt_err("no hash for a map key part of type " + t, v); }
+    if (key_str(t) || t == "Bytes") { return lw_step(v, r, "Int", v.lines.concat([r + " = call i64 @resid_key_hash_str(ptr " + v.val + ")"]), t1); }
+    Int lk = key_list_kind(t);
+    if (lk != 0) { return lw_step(v, r, "Int", v.lines.concat([r + " = call i64 @resid_key_hash_list(ptr " + v.val + f", i8 {lk})"]), t1); }
+    // A Dec by its trimmed text, which equal values share (resid_decp_cmp).
+    if (is_dec_cg(t)) { return lw_step(v, r, "Int", v.lines.concat([r + "s = call ptr @resid_decp_to_str(ptr " + v.val + ", i8 1)", r + " = call i64 @resid_key_hash_str(ptr " + r + "s)"]), t1); }
+    GT g = kd_need(w, t, v);
+    if (g.err != "") { return g; }
+    Int t2 = imax(t1, g.tmp + 1);
+    Str r2 = f"%t{t2}";
+    return GT {.pos = 0, .val = r2, .ty = "Int", .cnt = 0, .err = "", .glines = g.glines, .lines = v.lines.concat([r2 + "p = ptrtoint ptr " + v.val + " to i64", r2 + " = call i64 @\"" + kd_name("kh", t) + "\"(i64 " + r2 + "p, i64 0)"]), .tmp = t2, .lbl = v.lbl, .tail = false};
+}
+
+// __keq(a, b): whether two key parts of one type are equal, b lowered
+// after a (b's GT carries both).
+GT ke_of(LW w, Str av, Str aty, GT b) {
+    Str t = ct_base_of(w.fs.ctn, w.fs.ctb, kd_key(aty));
+    Str l = ll_ty(num_norm_cg(t));
+    Int t1 = b.tmp + 1;
+    Str r = f"%t{t1}";
+    if (kd_iwidth(l) > 0) { return lw_step(b, r, "Bool", b.lines.concat([r + " = icmp eq " + l + " " + av + ", " + b.val]), t1); }
+    if (kd_float(l)) { return lw_step(b, r, "Bool", b.lines.concat([r + " = fcmp oeq " + l + " " + av + ", " + b.val]), t1); }
+    if (l != "ptr") { return gt_err("no equality for a map key part of type " + t, b); }
+    Int lk = key_list_kind(t);
+    Str call = if (key_str(t) || t == "Bytes") { "call i64 @resid_key_eq_str(ptr " + av + ", ptr " + b.val + ")" } else { if (lk != 0) { "call i64 @resid_key_eq_list(ptr " + av + ", ptr " + b.val + f", i8 {lk})" } else { "" } };
+    if (call != "") { return lw_step(b, r, "Bool", b.lines.concat([r + "w = " + call, r + " = icmp ne i64 " + r + "w, 0"]), t1); }
+    if (is_dec_cg(t)) { return lw_step(b, r, "Bool", b.lines.concat([r + "w = call i64 @resid_decp_cmp(ptr " + av + ", ptr " + b.val + ")", r + " = icmp eq i64 " + r + "w, 0"]), t1); }
+    GT g = kd_need(w, t, b);
+    if (g.err != "") { return g; }
+    Int t2 = imax(t1, g.tmp + 1);
+    Str r2 = f"%t{t2}";
+    return GT {.pos = 0, .val = r2, .ty = "Bool", .cnt = 0, .err = "", .glines = g.glines, .lines = b.lines.concat([r2 + "x = ptrtoint ptr " + av + " to i64", r2 + "y = ptrtoint ptr " + b.val + " to i64", r2 + "w = call i64 @\"" + kd_name("ke", t) + "\"(i64 " + r2 + "x, i64 " + r2 + "y)", r2 + " = icmp ne i64 " + r2 + "w, 0"]), .tmp = t2, .lbl = b.lbl, .tail = false};
+}
+
+// After lowering: number the compiled key kinds the module names (64 on,
+// one per type, its numeric aliases spelled out), make their functions
+// and put the numbers in.
+PG kd_module(LW w, PG r) {
+    if (r.err != "") { return r; }
+    Map(Str, Int) e0 = {};
+    Map(Str, Int) ms = kd_refs(r.lines, 0, kd_refs(r.glines, 0, kd_refs(r.hlines, 0, e0)));
+    if (ms.len() == 0) { return r; }
+    List(Str) mk = ms.keys();
+    Map(Str, Int) kinds = kd_kinds(mk, 0, e0, e0);
+    if (kd_count(kinds) > 64) { return PG {.pos = r.pos, .err = "more than 64 types of compiled map keys (records, sums, ...) in one program", .glines = r.glines, .hlines = r.hlines, .lines = r.lines, .tmp = r.tmp, .lbl = r.lbl}; }
+    GT g0 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = [], .lines = [], .tmp = 3000000000, .lbl = 1, .tail = false};
+    GT g = kd_gen(w, mk, 0, g0);
+    if (g.err != "") { return PG {.pos = r.pos, .err = g.err, .glines = r.glines, .hlines = r.hlines, .lines = r.lines, .tmp = r.tmp, .lbl = r.lbl}; }
+    return PG {.pos = r.pos, .err = "", .glines = kd_subst_all(r.glines, kinds, 0, []).concat(g.glines), .hlines = kd_subst_all(r.hlines, kinds, 0, []), .lines = kd_subst_all(r.lines, kinds, 0, []), .tmp = r.tmp, .lbl = r.lbl};
+}
+
+Str kd_kk_pre() { return "ptrtoint (ptr @\"resid.kk."; }
+
+// Every mangled key type the lines name in a kind constant.
+Map(Str, Int) kd_refs(List(Str) ls, Int i, Map(Str, Int) acc) {
+    if (i >= ls.len()) { return acc; }
+    Map(Str, Int) a2 = if (str_contains(ls[i], "@\"resid.kk.")) { kd_refs_in(ls[i], 0, acc) } else { acc };
+    return kd_refs(ls, i + 1, a2);
+}
+
+Map(Str, Int) kd_refs_in(Str l, Int from, Map(Str, Int) acc) {
+    Int k = str_index_of(l, kd_kk_pre(), from);
+    if (k < 0) { return acc; }
+    Int s0 = k + str_len(kd_kk_pre());
+    Int e = str_find_char(l, 34, s0);
+    if (e < 0) { return acc; }
+    return kd_refs_in(l, e + 1, acc.insert(str_slice(l, s0, e), 1));
+}
+
+// Mangled type -> kind; `byc` the kinds given so far by canonical type.
+Map(Str, Int) kd_kinds(List(Str) mk, Int i, Map(Str, Int) byc, Map(Str, Int) acc) {
+    if (i >= mk.len()) { return acc.insert("\x01n", byc.len()); }
+    Str c = str_replace(ty_canon_cg(kd_unmangle(mk[i], 0, "")), " ", "");
+    Int k = byc.get(c) else { 64 + byc.len() };
+    return kd_kinds(mk, i + 1, byc.insert(c, k), acc.insert(mk[i], k));
+}
+
+Int kd_count(Map(Str, Int) kinds) { return kinds.get("\x01n") else { 0 }; }
+
+GT kd_gen(LW w, List(Str) mk, Int i, GT g) {
+    if (i >= mk.len()) { return g; }
+    GT n = kd_need(w, kd_unmangle(mk[i], 0, ""), g);
+    if (n.err != "") { return n; }
+    return kd_gen(w, mk, i + 1, n);
+}
+
+List(Str) kd_subst_all(List(Str) ls, Map(Str, Int) kinds, Int i, List(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    Str l2 = if (str_contains(l, "@\"resid.kk.")) { kd_subst(l, kinds) } else { l };
+    return kd_subst_all(ls, kinds, i + 1, acc.concat([l2]));
+}
+
+// `ptrtoint (ptr @"resid.kk.M" to i8)` -> M's kind.
+Str kd_subst(Str l, Map(Str, Int) kinds) {
+    Int k = str_index_of(l, kd_kk_pre(), 0);
+    if (k < 0) { return l; }
+    Int s0 = k + str_len(kd_kk_pre());
+    Int e = str_find_char(l, 34, s0);
+    Str tail = "\" to i8)";
+    if (e < 0 || str_slice(l, e, e + str_len(tail)) != tail) { return l; }
+    Int kind = kinds.get(str_slice(l, s0, e)) else { 0 };
+    return kd_subst(str_slice(l, 0, k) + f"{kind}" + str_slice(l, e + str_len(tail), str_len(l)), kinds);
 }
 
 // A synthesized lambda (its closure value). Its function name must be
@@ -1651,7 +1970,7 @@ GT lw_list_push(LW w, Int id, GT base, GT ka, Int cv, Int sid, Str kt, Str vt, B
     Int dk = lst_kind(et);
     List(Str) dl = if (dk > 0) { [r + "d = call ptr @resid_list_rawify(ptr " + d.val + f", i64 {dk})"] } else { [] };
     Str dv = if (dk > 0) { r + "d" } else { d.val };
-    return lw_step(d, r, base.ty, d.lines.concat(dl).concat([r + " = call ptr @resid_map_list_push(ptr " + base.val + ", i8 " + own + f", i8 {kk}, i64 " + kw.val + ", ptr " + bx + ", ptr " + dv + ")"]), t);
+    return lw_step(d, r, base.ty, d.lines.concat(dl).concat(lin_kk_reg(kt)).concat([r + " = call ptr @resid_map_list_push(ptr " + base.val + ", i8 " + own + ", i8 " + lin_kk_txt(kt) + ", i64 " + kw.val + ", ptr " + bx + ", ptr " + dv + ")"]), t);
 }
 
 // ─── Vectors (spec §46) ─────────────────────────────────────────────
@@ -2350,14 +2669,42 @@ GT lw_builder(LW w, Int id, GT base, Str m, List(Str) env) {
     return lw_step(a, reg, base.ty, l1.concat([reg + " = call ptr " + pf + "(ptr " + base.val + ", ptr " + bx + ")"]), t2);
 }
 
-// Int and Str keys cross as words of their kind (1 / 4); others boxed.
-Bool lin_typed_key(Str kt) { return lin_kk(kt) == 1 || kt == "Str" || lr_list_key(kt); }
+// Int and Str keys cross as words of their kind (1 / 4), lists by their
+// elements' kind and compiled keys (key_custom) as kind 64-127; others
+// (Floats, Bools, other integers) boxed.
+pub Bool lin_typed_key(Str kt) { return lin_kk(kt) == 1 || key_str(kt) || lr_list_key(kt) || key_custom(kt); }
 
-/// A list that is a map key by its elements: of words, strings or bytes, or of 33..64-bit integers.
-Bool lr_list_key(Str kt) { return lr_list_word(kt) || lr_list_wide(kt); }
-// A list of words, strings or bytes as a key is kind 5 for every map
-// operation (it was 5 only where a key was put, and looked up as 0).
-Int lin_key_kind(Str kt) { return if (kt == "Str") { 4 } else { if (lr_list_key(kt)) { 5 } else { lin_kk(kt) } }; }
+// A key the runtime compares through functions the compiler makes for its
+// type (kd_* below): a record, a sum (an enum, Option, Result), a Dec,
+// Bytes, a list of those or a list nested deeper than key_list_kind goes.
+// gcheck's key_bad refuses a type that has no value to compare (E0302).
+pub Bool key_custom(Str kt0) {
+    Str kt = str_trim(strip_owned_cg(kt0));
+    if (kt == "" || lin_kk(kt) == 1 || key_str(kt) || key_scalar(kt) || key_list_kind(kt) != 0) { return false; }
+    return !str_contains(kt, "Unknown") && !is_fn_type(kt) && !str_has_prefix(kt, "Map(") && !str_has_prefix(kt, "Set(") && !str_has_prefix(kt, "Secret(");
+}
+
+// The key kind of kt as IR text: a number, or for a compiled key a
+// constant the module pass (kd_module) replaces with the kind it gives
+// the type (64-127).
+pub Str lin_kk_txt(Str kt) { return if (key_custom(kt)) { "ptrtoint (ptr @\"resid.kk." + show_mangle(str_trim(strip_owned_cg(kt)), 0, "") + "\" to i8)" } else { f"{lin_key_kind(kt)}" }; }
+
+// Before an operation on a map of compiled keys: register the type's
+// functions under its kind (runtime/rt/map.resid, resid_key_ops).
+pub List(Str) lin_kk_reg(Str kt) {
+    if (!key_custom(kt)) { return []; }
+    Str m = show_mangle(str_trim(strip_owned_cg(kt)), 0, "");
+    return ["call void @resid_key_ops(i8 " + lin_kk_txt(kt) + ", ptr @\"resid.kh." + m + "\", ptr @\"resid.ke." + m + "\")"];
+}
+
+/// A list that is a map key by its elements: of scalars, strings or
+/// bytes, or lists of them (key_list_kind in compiler/gcheck.resid, which
+/// refuses any other list as a key, E0302).
+Bool lr_list_key(Str kt) { return key_list_kind(kt) != 0; }
+// A list as a key has its kind for every map operation (it was 5 only
+// where a key was put, and looked up as 0). A Str(N) is a bare string as
+// a Str is (kind 4): boxed as kind 0 it was guessed at by its first byte.
+pub Int lin_key_kind(Str kt) { return if (key_str(kt)) { 4 } else { if (lr_list_key(kt)) { key_list_kind(kt) } else { if (key_custom(kt)) { 64 } else { lin_kk(kt) } } }; }
 
 // m.get(k) / m[k]: the stored value boxed, as an Option.
 GT lw_map_get(GT base, GT arg, Str kt, Str vt, List(Str) env, Funcs fs) {
@@ -2368,7 +2715,7 @@ GT lw_map_get(GT base, GT arg, Str kt, Str vt, List(Str) env, Funcs fs) {
         Str fr = f"%t{tg}";
         Str wv = f"%t{tg + 1}";
         Str rawp = f"%t{tg + 2}";
-        GT rawg = lw_step(kw, rawp, "", kw.lines.concat([fr + " = call i128 @resid_map_find(ptr " + base.val + f", i8 {kk}, i64 " + kw.val + ", i8 0)", wv + " = trunc i128 " + fr + " to i64", rawp + " = inttoptr i64 " + wv + " to ptr"]), tg + 2);
+        GT rawg = lw_step(kw, rawp, "", kw.lines.concat(lin_kk_reg(kt)).concat([fr + " = call i128 @resid_map_find(ptr " + base.val + ", i8 " + lin_kk_txt(kt) + ", i64 " + kw.val + ", i8 0)", wv + " = trunc i128 " + fr + " to i64", rawp + " = inttoptr i64 " + wv + " to ptr"]), tg + 2);
         return wrap_map_get_option(rawp, vt, rawg);
     }
     GT kb = box_heap_("", arg, env, fs);
@@ -2381,7 +2728,8 @@ GT lw_map_get(GT base, GT arg, Str kt, Str vt, List(Str) env, Funcs fs) {
 GT lw_map_has(GT base, GT arg, Str kt, List(Str) env, Funcs fs) {
     Int kk = lin_key_kind(kt);
     GT kw = lin_word("", arg, kk, env, fs);
-    return lw_rtb(kw, "@resid_map_has(ptr " + base.val + f", i8 {kk}, i64 " + kw.val + ")");
+    GT kr = lw_step(kw, kw.val, kw.ty, kw.lines.concat(lin_kk_reg(kt)), kw.tmp);
+    return lw_rtb(kr, "@resid_map_has(ptr " + base.val + ", i8 " + lin_kk_txt(kt) + ", i64 " + kw.val + ")");
 }
 
 GT lw_map_method(LW w, Int id, GT base, Str m, List(Str) env) {
@@ -2399,7 +2747,7 @@ GT lw_map_method(LW w, Int id, GT base, Str m, List(Str) env) {
     Int fv = if (m == "insert") { lw_kid(w, id, 2) } else { -1 };
     Int fsid = if (fv >= 0 && lw_kind(w, fv) == "mcall" && lw_text(w, fv) == "concat" && lw_kind(w, lw_kid(w, fv, 0)) == "ref") { lp_fuse_sid(env, lw_text(w, lw_kid(w, fv, 0))) } else { -1 };
     if (fsid >= 0 && lst_rec(fs, elem_type(strip_owned_cg(vt))) == 0) { return lw_list_push(w, id, base, arg, fv, fsid, kt, vt, m_owned, env); }
-    if (m == "insert" && (m_owned || lin_kk(kt) == 1 || lin_vk(vt) != 0 || kt == "Str" || vt == "Str" || lr_list_word(vt))) {
+    if (m == "insert" && (m_owned || lin_kk(kt) == 1 || lin_vk(vt) != 0 || key_str(kt) || vt == "Str" || lr_list_word(vt) || lr_list_key(kt) || key_custom(kt))) {
         GT kw = lin_word(src, arg, lin_key_kind(kt), env, fs);
         GT tva = lw_marg_as(w, id, 1, vt, env, kw);
         if (tva.err != "") { return tva; }
@@ -2407,7 +2755,7 @@ GT lw_map_method(LW w, Int id, GT base, Str m, List(Str) env) {
         Int ti = vw.tmp + 1;
         Str treg = f"%t{ti}";
         Str own = if (m_owned) { "1" } else { "0" };
-        return lw_step(vw, treg, base.ty, vw.lines.concat([treg + " = call ptr @resid_map_put(ptr " + base.val + ", i8 " + own + f", i8 {lin_key_kind(kt)}, i64 " + kw.val + f", i8 {lo_put_kind(lin_vk(vt), vt)}, i64 " + vw.val + ")"]), ti);
+        return lw_step(vw, treg, base.ty, vw.lines.concat(lin_kk_reg(kt)).concat([treg + " = call ptr @resid_map_put(ptr " + base.val + ", i8 " + own + ", i8 " + lin_kk_txt(kt) + ", i64 " + kw.val + f", i8 {lo_put_kind(lin_vk(vt), vt)}, i64 " + vw.val + ")"]), ti);
     }
     if (m == "insert") {
         GT va0 = lw_marg_as(w, id, 1, vt, env, arg);
@@ -2425,7 +2773,7 @@ GT lw_map_method(LW w, Int id, GT base, Str m, List(Str) env) {
         Int ti = kw.tmp + 1;
         Str treg = f"%t{ti}";
         Str own = if (m_owned) { "1" } else { "0" };
-        return lw_step(kw, treg, base.ty, kw.lines.concat([treg + " = call ptr @resid_map_del(ptr " + base.val + ", i8 " + own + f", i8 {lin_key_kind(kt)}, i64 " + kw.val + ")"]), ti);
+        return lw_step(kw, treg, base.ty, kw.lines.concat(lin_kk_reg(kt)).concat([treg + " = call ptr @resid_map_del(ptr " + base.val + ", i8 " + own + ", i8 " + lin_kk_txt(kt) + ", i64 " + kw.val + ")"]), ti);
     }
     if (m == "remove") {
         GT kb = box_heap_(src, arg, env, fs);
@@ -2460,7 +2808,7 @@ GT lw_set_method(LW w, Int id, GT base, Str m, List(Str) env) {
         Str treg = f"%t{ti}";
         Str own = if (s_owned) { "1" } else { "0" };
         Str fnm = if (m == "insert") { "@resid_set_put" } else { "@resid_map_del" };
-        return lw_step(kw, treg, base.ty, kw.lines.concat([treg + " = call ptr " + fnm + "(ptr " + base.val + ", i8 " + own + f", i8 {sk}, i64 " + kw.val + ")"]), ti);
+        return lw_step(kw, treg, base.ty, kw.lines.concat(lin_kk_reg(set_et)).concat([treg + " = call ptr " + fnm + "(ptr " + base.val + ", i8 " + own + ", i8 " + lin_kk_txt(set_et) + ", i64 " + kw.val + ")"]), ti);
     }
     if (m == "contains") {
         GT eb = box_heap_(src, arg, env, fs);
@@ -3315,6 +3663,22 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
         GT sv = lw_expr(w, lw_kid(w, id, 0), env, c);
         if (sv.err != "") { return sv; }
         return lw_show_nested(w, sv, env);
+    }
+    // The parts of a compiled map key (kd_def's sources only).
+    if (n == "__khash" && na == 1) {
+        GT hv = lw_expr(w, lw_kid(w, id, 0), env, c);
+        if (hv.err != "") { return hv; }
+        return kh_of(w, hv);
+    }
+    if ((n == "__keq" || n == "__kmix") && na == 2) {
+        GT ka = lw_expr(w, lw_kid(w, id, 0), env, c);
+        if (ka.err != "") { return ka; }
+        GT kb = lw_expr(w, lw_kid(w, id, 1), env, ka);
+        if (kb.err != "") { return kb; }
+        if (n == "__keq") { return ke_of(w, ka.val, ka.ty, kb); }
+        Int km = kb.tmp + 1;
+        Str kr = f"%t{km}";
+        return lw_step(kb, kr, "Int", kb.lines.concat([kr + "x = xor i64 " + ka.val + ", " + kb.val, kr + " = mul i64 " + kr + "x, 1099511628211"]), km);
     }
     if (is_debug_builtin(n) && !user_fn) { return lw_debug_builtin(w, id, n, env, c); }
     if (n == "comptime_print" && !user_fn) {
@@ -5716,7 +6080,7 @@ Bool lr_call_allocs(LW w, Str f, Str l) {
         Int o = str_find(l, ", i8 ");
         return o < 0 || str_char_at(l, o + 5) != 49;
     }
-    if (str_starts_with(f, "resid_unbox_") || f == "resid_map_contains" || f == "resid_set_contains" || f == "resid_box_tag") { return false; }
+    if (str_starts_with(f, "resid_unbox_") || f == "resid_map_contains" || f == "resid_set_contains" || f == "resid_box_tag" || f == "resid_key_ops") { return false; }
     // An owned list update writes in place (its first copy is moved out of
     // the region at the back edge like any carried list); a freeze writes
     // nothing.
@@ -11064,7 +11428,8 @@ pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts,
     // graphs share; the copies on g with their fn nodes added.
     LW w = LW {.g = g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own, .hz = su_novars(), .ocall = lw_noro()};
     LW wc = LW {.g = sx.g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own, .hz = su_novars(), .ocall = lw_noro()};
-    PG r0 = su_lower_clones(wc, sx.ids, 0, lw_decls(w, unit, 0, g0));
+    // Compiled map keys: their kinds numbered, their functions made.
+    PG r0 = kd_module(w, su_lower_clones(wc, sx.ids, 0, lw_decls(w, unit, 0, g0)));
     // Record moves for loop regions (lr_move): only where none are inside.
     List(Str) rfs = if (r0.err != "" || resid_rtmod()) { [] } else { lr_rec_fns(fs, lo.hdr, 0, []) };
     List(Str) ffs = if (r0.err != "") { [] } else { lo_freeze_fns(fs, lo, 0, []) };
