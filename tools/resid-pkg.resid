@@ -312,9 +312,20 @@ Bool any_unsafe_seg(List(Str) segs, Int i) {
     if (segs[i] == "") { return true; }
     return any_unsafe_seg(segs, i + 1);
 }
+// A name with a control character is refused too: a dependency's root
+// is written into the depmap one line per dependency, and an entry named
+// "src/m.resid<LF>..." would let a manifest's root carry a line break.
 Bool is_unsafe_path(Str rel) {
     if (str_starts_with(rel, "/")) { return true; }
+    if (has_control_at(rel, 0, str_len(rel))) { return true; }
     return any_unsafe_seg(str_split(rel, "/"), 0);
+}
+
+Bool has_control_at(Str s, Int i, Int n) {
+    if (i >= n) { return false; }
+    Int c = str_char_at(s, i);
+    if (c < 32 || c == 127) { return true; }
+    return has_control_at(s, i + 1, n);
 }
 
 Int last_slash_idx(Str s, Int i, Int n, Int last) {

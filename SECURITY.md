@@ -373,6 +373,7 @@ name, version, dependencies and capabilities, and `resid.lock`.
 | A modified archive is rejected. | tamperidx, tamperpin |
 | The archive must hold the package that was requested (name and version), not another package signed by the same key. | subst |
 | A path dependency with a pinned key must match what `resid-pkg sign-dir` signed. | pathapp |
+| A dependency's package name and `root` are each one field of a depmap line: a name or root with a control character or `::` is refused, as is a name starting with `@`, so a manifest cannot write depmap lines of its own (a second entry with no ceiling, another standard library). Extraction refuses an archive entry whose name holds a control character. The driver's own `@stdlib::` line comes before the file's. | injapp, depmap line injection, extract control character in a name |
 | Extraction never writes outside the target directory. | extract path traversal |
 | A registry package names its own dependencies by version only: a `path` inside a verified archive would reach source outside what was verified, so it is refused (with a `version` too, the version is used). | sealed path dependency |
 | A dependency declared by several packages gets the meet of the ceilings they give, whichever declaration is reached first; one without a ceiling adds no bound and drops none. | unbounded declaration first |

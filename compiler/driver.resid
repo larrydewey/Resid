@@ -10676,7 +10676,9 @@ Int main() {
     if (_gsp0 != 0) { return _gsp0; }
     Str depmap_path  =  pick_opt(argc, "-depmap", "");
     Str depmap0  =  if (depmap_path == "") { "" } else { filesystem.read_all(depmap_path) };
-    Str depmap1  =  depmap0 + "\n@stdlib::" + stdlib_dir();
+    // The driver's own `@stdlib::` line comes first: the first one is the
+    // one used, and the file's lines are written from dependency manifests.
+    Str depmap1  =  "@stdlib::" + stdlib_dir() + "\n" + depmap0;
     // Import resolution: the merged compilation text is the importing
     // file (its own import lines replaced) followed by each import's body.
     // A bare `import "pkgname";` that has no relative file falls back to
