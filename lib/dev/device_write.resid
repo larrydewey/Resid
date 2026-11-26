@@ -141,7 +141,7 @@ pub Result(List(DevOut), DeviceError) device_engine_session_open_w(MmioWin op, L
 /// has ended, or one that only loads.
 @requires(device)
 pub Result(List(DevOut), DeviceError) device_session_store(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes, UInt(64) value) {
-    if (off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
+    if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
     // In a driver's host the store is made here, with no request.
     if (resid_device_drv_can(0, 0, 0, 0) == 1) {
         if (resid_device_drv_store(map, base + off, bytes, value) != 1) { return Err(BadInput(name, "the session's host refused the access")); }
@@ -229,7 +229,7 @@ pub Result(List(UInt(8)), DeviceError) driver_call(DriverLink d, List(UInt(8)) r
 /// elsewhere a message, as device_session_store.
 @requires(device)
 pub Result(Bool, DeviceError) device_session_put(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes, UInt(64) value) {
-    if (off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
+    if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
     if (resid_device_drv_store(map, base + off, bytes, value) == 1) { return Ok(true); }
     if (resid_device_drv_can(0, 0, 0, 0) == 1) { return Err(BadInput(name, "the session's host refused the access")); }
     DvReq r = dv_prep_session_access(id, map, true, base + off, bytes, value);

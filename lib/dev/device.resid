@@ -1003,16 +1003,22 @@ pub Result(Int, DeviceError) dma_wait(DmaRegion r, Int timeout_ms) {
 /// (milliseconds), or one that cannot be made, with why.
 pub type DevOp = OpLoad(Int, Int, Int) | OpStore(Int, Int, Int, UInt(64)) | OpRead(Int, Int, Int) | OpWrite(Int, Int, List(UInt(8))) | OpWait(Int) | OpBad(Str);
 
+/// Whether a window names one of a session's resources (0 to 255, the
+/// byte the request carries it in) and lies at or after its start: a
+/// number out of range would be cut to a byte, or name nothing in a
+/// driver's host.
+pub Bool dv_window_ok(Int map, Int base, Int len) { return map >= 0 && map <= 255 && base >= 0 && len >= 0; }
+
 /// The load of `bytes` bytes at `off` of the window of `len` bytes at
 /// `base` in resource number `map`.
 pub DevOp device_op_load(Int map, Int base, Int len, Int off, Int bytes) {
-    if (off < 0 || off + bytes > len) { return OpBad("the access is not inside the window"); }
+    if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return OpBad("the access is not inside the window"); }
     return OpLoad(map, base + off, bytes);
 }
 
 /// The store of the low `bytes` bytes of `value` there.
 pub DevOp device_op_store(Int map, Int base, Int len, Int off, Int bytes, UInt(64) value) {
-    if (off < 0 || off + bytes > len) { return OpBad("the access is not inside the window"); }
+    if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return OpBad("the access is not inside the window"); }
     return OpStore(map, base + off, bytes, value);
 }
 
@@ -1112,7 +1118,7 @@ pub DvReq dv_prep_session_access(Int id, Int map, Bool store, Int off, Int bytes
 /// outside the window or a session that has ended. `name` labels errors.
 @requires(device(readonly))
 pub Result(List(DevOut), DeviceError) device_session_load(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes) {
-    if (off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
+    if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
     // In a driver's host the device is this process's own: the load is
     // made here, with no request.
     if (resid_device_drv_can(0, 0, 0, 0) == 1) {
@@ -1130,7 +1136,7 @@ pub Result(List(DevOut), DeviceError) device_session_load(Str name, Int id, Int 
 /// device_session_load.
 @requires(device(readonly))
 pub Result(Int, DeviceError) device_session_word(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes) {
-    if (off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
+    if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
     if (resid_device_drv_can(map, base + off, bytes, 1) == 1) { return Ok(resid_device_drv_load(map, base + off, bytes)); }
     if (resid_device_drv_can(0, 0, 0, 0) == 1) { return Err(BadInput(name, "the session's host refused the access")); }
     DvReq r = dv_prep_session_access(id, map, false, base + off, bytes, 0);

@@ -231,6 +231,18 @@ static int64_t driver(int64_t which, int64_t unused) {
             uint32_t reg = (uint32_t)resid_device_drv_load(0, 16, 4);
             uint32_t none = (uint32_t)resid_device_drv_load(0, 4096, 4);
             memcpy(out + 8, &back, 8); memcpy(out + 16, &reg, 4); memcpy(out + 20, &none, 4); on = 24;
+        } else if (len >= 1 && msg[0] == 'N') {
+            /* resources before the first: a negative number names none
+             * (red team DRV-1: only the upper bound was checked, so the
+             * table was read before its start). Asked of, never made. */
+            int hits = 0;
+            for (int m = -1; m >= -64; m--)
+                for (int k = 1; k <= 2; k++)
+                    for (uint32_t o = 0; o < 64; o += 8) hits += (int)resid_device_drv_can(m, o, 8, k);
+            hits += (int)resid_device_drv_can(-1, 0, 1, 1) + (int)resid_device_drv_can(INT64_MIN / 16, 0, 1, 1);
+            out[0] = (uint8_t)(hits > 255 ? 255 : hits);
+            out[1] = (uint8_t)resid_device_drv_can(0, 16, 4, 1);
+            on = 2;
         } else if (len >= 1 && msg[0] == 'B') {
             batch_begin(&q, 1, 1);
             batch_op(&q, 2, 4, 1, 2000, 0x0badcafe, NULL);
@@ -625,6 +637,11 @@ int main(int argc, char** argv, char** envp) {
     check("driver_batch", bytes_are(&r, (const uint8_t*)&cafe, 4));
     /* Direct accesses, which build no request: what may be made, and that
      * a refused one loads 0 and stores nothing. */
+    mm[0] = 'N';
+    req_msg(&q, dv, mm, 1);
+    r = call(&q, 1);
+    uint8_t want_n[2] = {0, 1};
+    check("driver_negative_resource_refused", bytes_are(&r, want_n, 2));
     mm[0] = 'S';
     req_msg(&q, dv, mm, 1);
     r = call(&q, 1);

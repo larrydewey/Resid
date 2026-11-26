@@ -3217,14 +3217,16 @@ Int ds_msg_room() { return 131200; }
 // one of the session's, a store needs a session that writes, the width
 // is 1, 2, 4 or 8 and the word lies at a multiple of it inside.
 Int ds_word_at(Int tab, Int maps, Int wr, Int op, Int w, Int mi, Int off) {
-    if (mi >= maps) { return 0; }
+    // A resource number is the caller's: it names one of the session's
+    // maps only from 0 up, never an entry before the table.
+    if (mi < 0 || mi >= maps) { return 0; }
     Bool ok = (op == 1 || (op == 2 && wr == 1)) && (w == 1 || w == 2 || w == 4 || w == 8) && off >= 0 && off % w == 0 && off + w <= ld64(tab + mi * 16 + 8);
     return if (ok) { ld64(tab + mi * 16) + off } else { 0 };
 }
 
 // Where a run of `len` bytes of the device's memory is, or 0.
 Int ds_run_at(Int tab, Int maps, Int dmai, Int mi, Int off, Int len) {
-    Bool fits = mi < maps && mi == dmai && off >= 0 && len >= 1 && len <= 65536 && off + len <= ld64(tab + mi * 16 + 8);
+    Bool fits = mi >= 0 && mi < maps && mi == dmai && off >= 0 && len >= 1 && len <= 65536 && off + len <= ld64(tab + mi * 16 + 8);
     return if (fits) { ld64(tab + mi * 16) + off } else { 0 };
 }
 
