@@ -1,0 +1,4 @@
+// A declared type may not take a built-in type's name.
+type Int = { Int a; };
+
+Int main() { return 0; }

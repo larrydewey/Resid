@@ -1,0 +1,16 @@
+// A declared type may not take a built-in type's name. Lowering knows a
+// built-in type by its name: a record named Dec, returned out of a loop,
+// was moved as a decimal (its first words copied), and the strings and
+// lists its fields held were freed with the loop's region.
+type DV = DStr(Str) | DByte(Int);
+type Dec = { Bool ok; Str why; DV v; Int at; };
+
+Dec step(Int at, Int k, List(DV) acc) {
+    if (k >= 2) { return Dec { .ok = true, .why = "", .v = DStr(f"w{at}"), .at = at }; }
+    return step(at + 1, k + 1, acc.concat([DByte(k)]));
+}
+
+Int main() {
+    Dec d = step(0, 0, []);
+    return d.at;
+}

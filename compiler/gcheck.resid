@@ -5078,6 +5078,11 @@ Str gk_case_msg(Kg g, Int id) {
     KN n = g.ns[id];
     Bool tdecl = n.kind == "struct_t" || n.kind == "sum_t" || n.kind == "alias_t";
     if (tdecl && n.text == "Vec") { return "`Vec` is the built-in vector type (spec §46); give the type another name"; }
+    // Lowering knows a built-in type by its name (a record named Dec was
+    // moved out of a loop's region as a decimal: its fields were left
+    // behind and freed), so no declared type may take one.
+    Bool anyt = tdecl || n.kind == "ctype_t" || n.kind == "cwhere_t";
+    if (anyt && gm_builtin_type(n.text)) { return "`" + n.text + "` is a built-in type; give the type another name"; }
     Str k = n.kind;
     Bool ty = k == "struct_t" || k == "sum_t" || k == "alias_t" || k == "ctype_t" || k == "cwhere_t" || k == "bdecl";
     if (ty && !gk_upper_name(n.text)) { return "type name `" + n.text + "` must start with an uppercase letter"; }
