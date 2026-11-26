@@ -1,0 +1,2 @@
+E0302
+Int closure(Int) cannot be a Map key: a function

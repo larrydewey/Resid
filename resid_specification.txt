@@ -2076,6 +2076,15 @@ Core types: Bool, full Int/UInt/Float/Dec family,
 ISize, USize, Str, Bytes, Option, Result, List, Map,
 Set, RegionError, SourceLoc.
 
+A Map key or Set element is compared by value: a number,
+Bool, Str, Str(N), Bytes or Dec, a record (field by field),
+a sum, Option or Result (variant, then payloads), or a List
+of those (element by element). Floats compare as `==`
+does (-0.0 is 0.0; a NaN is equal to no other Float).
+A type with no value to compare -- a function, a Map or
+Set, a builder, a fixed-capacity List(T, N) or Bytes(N) --
+cannot be a key, nor can a type holding one (E0302).
+
 Fixed-capacity forms (see §44): Str(N), Bytes(N),
 List(T, N) — statically bounded, never heap-allocated.
 

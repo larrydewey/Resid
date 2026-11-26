@@ -1,0 +1,20 @@
+// Confinement holds outside the file tree and tells nothing about paths:
+// - a regular file given as a read-only path is allowed to be read (with
+//   a directory's rights the kernel refused the rule, so the call returned
+//   -1 for an existing file and 1 for a missing one, and the program went
+//   on unconfined);
+// - no Unix socket can be connected to afterwards, even one listening
+//   outside the allowed tree (Landlock does not mediate connect: a session
+//   bus or a container daemon would run commands on request), and no other
+//   socket than an Internet one can be made.
+@requires(process, network, filesystem)
+Int main() {
+    Int l = resid_unix_listen("@TMP@/sock/s.sock");
+    List(Str) rw = [];
+    Int c = resid_sandbox_confine(rw, ["@TMP@/in.txt", "@TMP@/missing"]);
+    Str got = filesystem.read_all("@TMP@/in.txt");
+    Int fd = resid_unix_connect("@TMP@/sock/s.sock");
+    Bool other = str_len(filesystem.read_all("/etc/passwd")) > 0;
+    println(f"{l >= 0} {c} {str_trim(got)} {fd < 0} {other}");
+    return 0;
+}

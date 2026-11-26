@@ -1,0 +1,7 @@
+// A record holding a map cannot be a Set element (E0302): a map has no
+// value of its own to compare.
+type Bag = { Str name; Map(Str, Int) counts; };
+Int main() {
+    Set(Bag) s = {};
+    return s.len();
+}

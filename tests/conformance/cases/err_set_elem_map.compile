@@ -1,0 +1,2 @@
+E0302
+Bag cannot be a Set element: it holds Map(Str, Int): a map or set
