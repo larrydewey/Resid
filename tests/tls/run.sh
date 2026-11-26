@@ -118,6 +118,21 @@ probe "$PC/root.pem" "$PC/wild_partial.der" a.oo.example.test; want partial-wild
 probe "$PC/root.pem" "$PC/pl0_leaf.der" api.example.test "$PC/inters_pl0"; want pathlen-0-exceeded false
 probe "$PC/root.pem" "$PC/pl1_leaf.der" api.example.test "$PC/inters_pl1"; want pathlen-1-ok true
 
+# ── host forms (fixtures/hostcheck, gen_hostcheck.py) ───────────────
+# An iPAddress SAN is matched against the bytes the host literal names.
+# A compressed IPv6 host names the address the socket goes to, so `::1` is
+# the loopback and `2001:db8::1` ends in 1: a certificate for `1::` or
+# `2001:db8:1::` is for another machine.
+HC="$F/hostcheck"
+probe "$HC/v6_root.pem" "$HC/v6_loop.der" ::1; want v6-loopback true
+probe "$HC/v6_root.pem" "$HC/v6_loop.der" 0:0:0:0:0:0:0:1; want v6-loopback-long true
+probe "$HC/v6_root.pem" "$HC/v6_1colon.der" ::1; want v6-1colon-not-loopback false
+probe "$HC/v6_root.pem" "$HC/v6_1colon.der" 1::; want v6-1colon true
+probe "$HC/v6_root.pem" "$HC/v6_db8_1.der" 2001:db8::1; want v6-db8-1 true
+probe "$HC/v6_root.pem" "$HC/v6_db8_1.der" 2001:DB8:0::0:1; want v6-db8-1-other-spelling true
+probe "$HC/v6_root.pem" "$HC/v6_db8_1_left.der" 2001:db8::1; want v6-db8-1-left-refused false
+probe "$HC/v6_root.pem" "$HC/v6_loop.der" "::1%lo"; want v6-zone-refused false
+
 # ── Certificate message framing (tm_cert_list) ──────────────────────
 # A server's chain arrives as one message; the intermediates in it are
 # what the trust store walks. Getting the walk wrong here is not cosmetic:
@@ -559,10 +574,15 @@ grep -q "^DIAL-OK alpn=$" "$W/client_noalpn.out" && ok \
 grep -q "^127.0.0.1 -> 4 bytes 7f000001$" "$W/ip.out" \
 && grep -q "^127.0.0.10 -> 4 bytes 7f00000a$" "$W/ip.out" \
 && grep -q "^:: -> 16 bytes 00000000000000000000000000000000$" "$W/ip.out" \
-&& grep -q "^2001:db8::1 -> 16 bytes 20010db8000100000000000000000000$" "$W/ip.out" \
+&& grep -q "^2001:db8::1 -> 16 bytes 20010db8000000000000000000000001$" "$W/ip.out" \
 && grep -q "^1:2:3:4:5:6:7:8 -> 16 bytes 00010002000300040005000600070008$" "$W/ip.out" \
 && [ "$(grep -cE '^(256\.1\.1\.1|1\.2\.3|cafe|1:2:3:4:5:6:7|localhost) -> 0 bytes $' "$W/ip.out")" = 5 ] && ok \
     || bad "address literals: $(tr '\n' ' ' < "$W/ip.out")"
+# IPv6 forms byte for byte: the `::` closes the zero run where it is
+# written, not at the end, so `::1` is the loopback and not `1::`. A
+# certificate for one of these must never be matched against the other.
+[ "$(grep -c '^IPV6 ok ' "$W/ip.out")" = 43 ] && [ "$(grep -c '^IPV6 BAD ' "$W/ip.out")" = 0 ] && ok \
+    || bad "IPv6 literals: $(grep '^IPV6 BAD' "$W/ip.out" | tr '\n' ' ')"
 
 # A trust store that does not contain the issuer is refused, and the
 # handshake says which name it could not verify rather than hanging up

@@ -180,76 +180,89 @@ pub List(Int) ip_v4_at(List(Int) h, Int i, Int n, Int val, Int digits, List(Int)
     return ip_v4_at(h, i + 1, n, val * 10 + (c - 48), digits + 1, acc);
 }
 
-/// State of the IPv6 literal scanner: bytes before and after a `::`
-/// (`left`, `right`), whether a `::` was seen (`gap`), whether the literal
-/// is malformed (`bad`), and the group being read (`val`, `digits`).
-type IpScan = { List(Int) left; List(Int) right; Bool gap; Bool bad; Int val; Int digits; };
+/// One side of a `::` in an IPv6 literal, read: its bytes, or `ok` false
+/// when the side is malformed.
+type V6Side = { Bool ok; List(Int) b; };
 
-/// The 16 bytes of the IPv6 literal `host`, or an empty list. A single `::`
-/// expands to at least one zero group; dotted IPv4 tails and zone suffixes
-/// are not accepted.
+/// The 16 bytes of the IPv6 literal `host` (RFC 4291 §2.2), or an empty
+/// list. Groups are one to four hex digits in either case; at most one
+/// `::` stands for one or more zero groups, at the start, the end or
+/// anywhere between; the last 32 bits may be written as a dotted IPv4
+/// address (`::ffff:10.0.0.1`). A zone (`fe80::1%eth0`), brackets, a
+/// single leading or trailing `:` and a `:::` are not literals here.
 pub List(Int) ip_v6_bytes(List(Int) host) {
-    IpScan s = ip_v6_scan(host, 0, host.len(), IpScan { .left = [], .right = [], .gap = false, .bad = false, .val = 0, .digits = 0 });
-    if (s.bad) { return []; }
-    List(Int) l = ip_v6_end(s.left, s.val, s.digits);
-    List(Int) r = s.right;
-    if (s.gap) {
-        if (l.len() + r.len() > 14) { return []; }
-        return l.concat(ip_zero_bytes(16 - l.len() - r.len())).concat(r);
+    Int n = host.len();
+    if (n < 2) { return []; }
+    Int g = ip_find_dcolon(host, 0, n);
+    if (g < 0) {
+        V6Side all = ip_v6_side(host, 0, n, []);
+        if (!all.ok || all.b.len() != 16) { return []; }
+        return all.b;
     }
-    if (l.len() + r.len() != 16) { return []; }
-    return l.concat(r);
+    // A second `::` is ambiguous; `:::` leaves a `:` with no group on the
+    // right, which the side reader refuses.
+    if (ip_find_dcolon(host, g + 2, n) >= 0) { return []; }
+    V6Side l = if (g == 0) { V6Side { .ok = true, .b = [] } } else { ip_v6_side(host, 0, g, []) };
+    V6Side r = if (g + 2 == n) { V6Side { .ok = true, .b = [] } } else { ip_v6_side(host, g + 2, n, []) };
+    if (!l.ok || !r.ok) { return []; }
+    // A dotted IPv4 part ends the address, so it may only be on the right
+    // (or, with no `::`, last): a left side holding one is refused.
+    if (ip_has_dot(host, 0, g)) { return []; }
+    if (l.b.len() + r.b.len() > 14) { return []; }
+    return l.b.concat(ip_zero_bytes(16 - l.b.len() - r.b.len())).concat(r.b);
 }
 
-/// `acc` with the pending group `val` appended as two bytes; unchanged when
-/// no digits were read, empty when more than four were.
-pub List(Int) ip_v6_end(List(Int) acc, Int val, Int digits) {
-    if (digits == 0) { return acc; }
-    if (digits > 4) { return []; }
-    return acc.concat([(val >> 8) & 255, val & 255]);
+/// The index of the first `::` in `h[i..n)`, or -1.
+pub Int ip_find_dcolon(List(Int) h, Int i, Int n) {
+    if (i + 1 >= n) { return 0 - 1; }
+    if (h[i] == 58 && h[i + 1] == 58) { return i; }
+    return ip_find_dcolon(h, i + 1, n);
 }
 
-/// Scanner behind `ip_v6_bytes`: reads `h[i..n)` into `s`, setting `bad` on
-/// a malformed literal. The last group is left pending in `val`/`digits`.
-pub IpScan ip_v6_scan(List(Int) h, Int i, Int n, IpScan s) {
-    if (i >= n) { return s; }
-    Int c = h[i];
-    if (c == 58) {
-        Bool twice = i + 1 < n && h[i + 1] == 58;
-        if (twice) {
-            if (s.gap) { return ip_bad(s); }
-            // The group in hand closes on the left of the `::`, whatever
-            // is read after it belongs on the right.
-            IpScan closed = if (s.digits > 0) { ip_v6_push(s) } else { s };
-            return ip_v6_scan(h, i + 2, n, ip_v6_gap(closed));
-        }
-        if (i == 0) { return ip_bad(s); }
-        if (s.digits == 0) { return ip_bad(s); }
-        return ip_v6_scan(h, i + 1, n, ip_v6_push(s));
+/// Whether `h[i..n)` holds a `.`.
+pub Bool ip_has_dot(List(Int) h, Int i, Int n) {
+    if (i >= n) { return false; }
+    if (h[i] == 46) { return true; }
+    return ip_has_dot(h, i + 1, n);
+}
+
+/// The index of the first `:` in `h[i..n)`, or `n`.
+pub Int ip_group_end(List(Int) h, Int i, Int n) {
+    if (i >= n || h[i] == 58) { return i; }
+    return ip_group_end(h, i + 1, n);
+}
+
+/// `acc` and then the `:`-separated groups of `h[i..n)` as bytes. Every
+/// group is one to four hex digits, except that the last may be a dotted
+/// IPv4 address (four bytes); an empty group -- a leading, trailing or
+/// doubled `:` -- makes the side malformed.
+pub V6Side ip_v6_side(List(Int) h, Int i, Int n, List(Int) acc) {
+    V6Side bad = V6Side { .ok = false, .b = [] };
+    if (i >= n || acc.len() > 16) { return bad; }
+    Int e = ip_group_end(h, i, n);
+    if (e == n && ip_has_dot(h, i, n)) {
+        List(Int) v4 = ip_v4_bytes(h, i, n);
+        if (v4.len() != 4) { return bad; }
+        return V6Side { .ok = true, .b = acc.concat(v4) };
     }
-    Int d = ip_hex_digit(c);
-    if (d < 0) { return ip_bad(s); }
-    if (s.digits >= 4) { return ip_bad(s); }
-    Int v = s.val * 16 + d;
-    Int dg = s.digits + 1;
-    return ip_v6_scan(h, i + 1, n, IpScan { .left = s.left, .right = s.right, .gap = s.gap, .bad = false, .val = v, .digits = dg });
+    Int v = ip_hex_group(h, i, e);
+    if (v < 0) { return bad; }
+    List(Int) acc2 = acc.concat([(v >> 8) & 255, v & 255]);
+    if (e == n) { return V6Side { .ok = true, .b = acc2 }; }
+    return ip_v6_side(h, e + 1, n, acc2);
 }
 
-/// Close the group being read, on whichever side of a `::` we are.
-pub IpScan ip_v6_push(IpScan s) {
-    List(Int) done = s.left.concat([(s.val >> 8) & 255, s.val & 255]);
-    if (s.gap) { return IpScan { .left = s.left, .right = s.right.concat([(s.val >> 8) & 255, s.val & 255]), .gap = true, .bad = false, .val = 0, .digits = 0 }; }
-    return IpScan { .left = done, .right = s.right, .gap = s.gap, .bad = false, .val = 0, .digits = 0 };
+/// The value of the one to four hex digits `h[i..e)`, or -1.
+pub Int ip_hex_group(List(Int) h, Int i, Int e) {
+    return ip_hex_group_at(h, i, e, i, 0);
 }
 
-/// `s` marked as past its `::`, with a fresh empty group.
-pub IpScan ip_v6_gap(IpScan s) {
-    return IpScan { .left = s.left, .right = s.right, .gap = true, .bad = false, .val = 0, .digits = 0 };
-}
-
-/// `s` marked as malformed.
-pub IpScan ip_bad(IpScan s) {
-    return IpScan { .left = s.left, .right = s.right, .gap = s.gap, .bad = true, .val = s.val, .digits = s.digits };
+Int ip_hex_group_at(List(Int) h, Int s, Int e, Int i, Int acc) {
+    if (e <= s || e - s > 4) { return 0 - 1; }
+    if (i >= e) { return acc; }
+    Int d = ip_hex_digit(h[i]);
+    if (d < 0) { return 0 - 1; }
+    return ip_hex_group_at(h, s, e, i + 1, acc * 16 + d);
 }
 
 /// The value of hex digit `c` in either case, or -1.

@@ -37,6 +37,52 @@ Int main() {
         println(ip_check("1:2:3:4:5:6:7:8", 16));
         println(ip_check("1:2:3:4:5:6:7", 0));
         println(ip_check("localhost", 0));
+        // IPv6 text forms, byte for byte (RFC 4291 §2.2, RFC 5952): a
+        // `::` anywhere, either case, a dotted IPv4 tail; a zone, brackets
+        // and every malformed shape name no address.
+        println(ip_exact("::1", "00000000000000000000000000000001"));
+        println(ip_exact("::", "00000000000000000000000000000000"));
+        println(ip_exact("2001:db8::1", "20010db8000000000000000000000001"));
+        println(ip_exact("1::2:3", "00010000000000000000000000020003"));
+        println(ip_exact("a:b:c::d", "000a000b000c0000000000000000000d"));
+        println(ip_exact("1::", "00010000000000000000000000000000"));
+        println(ip_exact("1:2:3:4:5:6:7:8", "00010002000300040005000600070008"));
+        println(ip_exact("1:2:3:4:5:6:7::", "00010002000300040005000600070000"));
+        println(ip_exact("::2:3:4:5:6:7:8", "00000002000300040005000600070008"));
+        println(ip_exact("1:2:3::5:6:7:8", "00010002000300000005000600070008"));
+        println(ip_exact("2001:DB8::AbCd", "20010db800000000000000000000abcd"));
+        println(ip_exact("2001:0db8:0000:0000:0000:0000:0000:0001", "20010db8000000000000000000000001"));
+        println(ip_exact("::ffff:10.0.0.1", "00000000000000000000ffff0a000001"));
+        println(ip_exact("::FFFF:a00:1", "00000000000000000000ffff0a000001"));
+        println(ip_exact("64:ff9b::192.0.2.33", "0064ff9b0000000000000000c0000221"));
+        println(ip_exact("1:2:3:4:5:6:1.2.3.4", "00010002000300040005000601020304"));
+        println(ip_exact("::1.2.3.4", "00000000000000000000000001020304"));
+        println(ip_exact("fe80::1%eth0", ""));
+        println(ip_exact("fe80::1%25eth0", ""));
+        println(ip_exact("[::1]", ""));
+        println(ip_exact("[::1]:443", ""));
+        println(ip_exact("1:2:3:4:5:6:7:8:9", ""));
+        println(ip_exact("1:2:3:4:5:6:7", ""));
+        println(ip_exact("1::2::3", ""));
+        println(ip_exact(":::", ""));
+        println(ip_exact(":::1", ""));
+        println(ip_exact("1:::2", ""));
+        println(ip_exact(":1::", ""));
+        println(ip_exact("1:", ""));
+        println(ip_exact(":1", ""));
+        println(ip_exact(":1:2:3:4:5:6:7:8", ""));
+        println(ip_exact("1:2:3:4:5:6:7:8:", ""));
+        println(ip_exact("1:2:3:4::5:6:7:8", ""));
+        println(ip_exact("12345::", ""));
+        println(ip_exact("g::", ""));
+        println(ip_exact("1.2.3.4::", ""));
+        println(ip_exact("::1.2.3", ""));
+        println(ip_exact("::256.0.0.1", ""));
+        println(ip_exact("1:2:3:4:5:6:7:1.2.3.4", ""));
+        println(ip_exact("::ffff:1.2.3.4:5", ""));
+        println(ip_exact(" ::1", ""));
+        println(ip_exact("::1 ", ""));
+        println(ip_exact(":", ""));
         return 0;
     }
 
@@ -102,4 +148,12 @@ Str ip_check(Str host, Int n) {
     Str hexed = hex_encode(b);
     if (b.len() == n) { return host + " -> " + f"{b.len()}" + " bytes " + hexed; }
     return host + " -> " + f"{b.len()}" + " bytes (wanted " + f"{n}" + ")";
+}
+
+// `host` against the exact bytes it has to name, `want` in hex ("" for
+// none). One line, `IPV6 ok` or `IPV6 BAD`, per case.
+Str ip_exact(Str host, Str want) {
+    Str got = hex_encode(ip_addr_bytes(str_to_bytes(host)));
+    if (got == want) { return "IPV6 ok " + host; }
+    return "IPV6 BAD " + host + " got " + got + " want " + want;
 }
