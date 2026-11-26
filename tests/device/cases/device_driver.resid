@@ -7,6 +7,7 @@
 // A real driver runs in tests/device/virtio_vm.sh; the host's side is
 // tests/runtime/device_session.c.
 import "dev/fx_device_virtio_window.resid";
+import "dev/fx_device_driver.resid";
 
 @word(16) type Half = { UInt(16) v; };
 
@@ -39,7 +40,7 @@ Int main() {
     PciAddr gone = PciAddr {.domain = 0xffff, .bus = 255, .device = 31, .function = 7};
     println(got(card_driver(CardWindows {.common = PciWindow {.addr = gone, .resource = 4, .base = 0, .len = 0x38}}, lambda(d) { driver_call(d, [1, 2, 3]) })));
     // A link to no session; a driver's calls where there is no driver's host.
-    println(match (driver_call(DriverLink {.id = 12345}, [1])) { Ok(b) => "answered", Err(e) => device_error_text(e) });
+    println(match (driver_call(fx_stale_link(), [1])) { Ok(b) => "answered", Err(e) => device_error_text(e) });
     println(match (driver_next(10)) { Ok(ev) => "an event", Err(e) => device_error_text(e) });
     println(match (driver_reply([1])) { Ok(b) => "replied", Err(e) => device_error_text(e) });
     println(f"started with {driver_started_with().len()} numbers");

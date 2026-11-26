@@ -1,0 +1,6 @@
+E0260
+a `SessionKey` literal outside lib/dev/
+a `DmaRegion` literal outside lib/dev/
+a `DriverLink` literal outside lib/dev/
+a `CommonSession` literal outside lib/dev/
+a `DevOp` literal outside lib/dev/

@@ -1240,10 +1240,10 @@ Int dp_judge(Int d, Int st, Int rb, Int got, Int cap) {
 // and found the function's ids to be the descriptor's; then one message
 // each way for every access (kind 12), until the program ends it (kind
 // 13) or exits (the host sees its socket close and exits). The sessions
-// of a thread are 8 slots of four words -- number (0: free), socket, the
-// host's pid, its pidfd -- and then the last number given out; a session
-// is used on the thread that opened it. A number is never given twice, so
-// one kept past its session's end names nothing.
+// of a thread are 8 slots of four words -- key (0: free), socket, the
+// host's pid, its pidfd; a session is used on the thread that opened it.
+// A key is 62 random bits (ds_new_key), so one kept past its session's
+// end names nothing, and one that was never given out cannot be guessed.
 Int ds_tab() { return resid_raw_tls("dv_sess", 264); }
 
 Int ds_find(Int id, Int i) {
@@ -1290,17 +1290,35 @@ Int ds_open(Int d, Int req, Int n) {
     _ = c_free(hdr);
     Int rb = xmalloc(16);
     Int got = if (s1) { hs_recv_until(a, rb, 0, 10, dl) } else { 0 };
-    if (got == 10 && ld8(rb) == 0) {
-        Int tab = ds_tab();
-        Int id = ld64(tab + 256) + 1;
-        _ = st64(tab + 256, id) + st64(e, id) + st64(e + 8, a) + st64(e + 16, pid) + st64(e + 24, pfd);
+    Bool up = got == 10 && ld8(rb) == 0;
+    Int id = if (up) { ds_new_key(rb + 8, 0) } else { 0 };
+    if (id > 0) {
+        _ = st64(e, id) + st64(e + 8, a) + st64(e + 16, pid) + st64(e + 24, pfd);
         return c_free(rb) * 0 + ds_num_reply(id);
+    }
+    if (up) {
+        // No key to give it: the host is told to end, as at a close.
+        _ = sys_close(a);
+        _ = hs_finish(pid, pfd, hs_deadline(2000));
+        return c_free(rb) * 0 + dev_err_reply(de_host(), 5 * 256);
     }
     // No session: the host said why and exits, or it is gone.
     _ = sys_close(a);
     Int st = hs_finish(pid, pfd, dl);
     Int out = dp_judge(d, st, rb, got, 16);
     return c_free(rb) * 0 + out;
+}
+
+// A new session's key: 62 bits of getrandom, not 0 and no open
+// session's, so that code which was not handed a session's key cannot
+// name it (a counter's next number could be guessed). 0 when getrandom
+// fails, and the session is not opened. `b` is 8 bytes of room.
+Int ds_new_key(Int b, Int tries) {
+    if (tries >= 4 || resid_raw_syscall(318, b, 8, 0, 0, 0, 0) != 8) { return 0; }   // getrandom
+    Int k = ld64(b) & 4611686018427387903;
+    _ = st64(b, 0);
+    if (k == 0 || ds_find(k, 0) != 0) { return ds_new_key(b, tries + 1); }
+    return k;
 }
 
 // End session slot e: close its socket (the host exits when it reads the

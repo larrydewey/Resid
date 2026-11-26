@@ -258,6 +258,7 @@ Result(Status, DeviceError) r = common_session(w, lambda(s) { common_read_device
 | `common_session(w, f)` | opens a session that loads and stores, calls `f` with it, ends it; `Ok` of what `f` gave, or why no session opened | `device` |
 | `common_session_ro(w, f)` | the same, for loads only | `device(readonly)` |
 | `common_read_r(s)`, `common_write_r(s, v)`, `common_take_r(s)` | the accessors, over the session | as for any block |
+| `common_at(s, off)` | the block's session at `off` of `s`'s window (a queue's doorbell in a notify window), or a session of no bytes when the window does not hold it | |
 
 Only these scoped functions open a session: `device.session_open`
 written by hand is `E0260`, so every session has an end. The session
@@ -267,6 +268,17 @@ it gives `BadInput`. The host checks the device's ids once, when the
 session opens, and every access against the window it mapped and
 whether the session may store. A thread holds at most eight sessions,
 and uses only the ones it opened.
+
+A session's records -- the generated session types, `DmaRegion`,
+`DriverLink`, `DevOp` and the `SessionKey` they carry -- are handles:
+only lib/dev/ and the code the compiler generates write one (`E0260`),
+and the runtime names a session by a key of 62 random bits, so code
+reaches a session only when it is handed one. lib/dev/'s raw accesses
+(`device_session_word` and the like) are for the generated accessors
+alone (`E0260`). A dependency that reaches a function acting on a
+session (`dma_read`, `device_batch`, `driver_call`, an accessor) counts
+against its manifest's `devices = [...]` bound as reaching every
+descriptor the program opens sessions under (`E0261`).
 
 A device with several blocks names them in a `@device` declaration, and
 one host serves them all:
@@ -443,16 +455,17 @@ Half used = ring_head_idx_of(outs, 1)?;               // output 0 is the wait's 
 
 | Generated for register `r` of block `T` | |
 |---|---|
-| `t_r_load(s)` | the load as a `DevOp` |
+| `t_r_load(s)` | the load as a `DevOp` (for a `@clears_on_read` register a take, which only `device_batch` makes) |
 | `t_r_store(s, v)` | the store as a `DevOp` |
 | `t_r_of(outs, i)` | the load's answer, output `i` of the batch, as the register's type |
 
 `dma_read_op`, `dma_write_op` and `dma_wait_op` are the other
 operations. The outputs are one for each load and wait (a number) and
 each read (bytes), in the order of the operations; stores and writes
-give none. `device_batch(id, ops)` needs `device`;
-`device_batch_ro(id, ops)` takes a batch that neither stores nor writes
-under `device(readonly)`. A batch is at most 256 operations, 64 KiB of
+give none. `device_batch(key, ops)` (the session's `s.dma.id` or a
+block's `s.id`) needs `device`; `device_batch_ro(key, ops)` takes a
+batch that neither stores, writes nor takes a register that clears when
+read, under `device(readonly)`. A batch is at most 256 operations, 64 KiB of
 them and 64 KiB of answers. When the host refuses an operation, the
 batch stops there and those before it were made.
 

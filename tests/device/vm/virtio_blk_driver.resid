@@ -342,7 +342,7 @@ Int disk_driver(BlkSession s) {
 
 @requires(device)
 Int start(BlkSession s, Int noff, Int step) {
-    NotifySession bell = NotifySession {.id = s.notify.id, .map = s.notify.map, .base = s.notify.base + noff * step, .len = 2};
+    NotifySession bell = notify_at(s.notify, noff * step);
     return match (blk_answer(BlkReady)) { Ok(b) => serve(Disk {.s = s, .bell = bell}, 0), Err(e) => 6 };
 }
 

@@ -1,0 +1,7 @@
+// Fixture for device_dma (installed as lib/dev/fx_device_dma.resid): a
+// DMA session's memory that belongs to no session. A handle is written
+// only in lib/dev/ and generated code (E0260), so the case gets its stale
+// one here.
+import "device.resid";
+
+pub DmaRegion fx_stale_region() { return DmaRegion {.id = SessionKey {.v = 12345}, .map = 1, .iova = 0x100000, .len = 16384}; }

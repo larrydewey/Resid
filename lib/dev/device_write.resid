@@ -139,15 +139,16 @@ pub Result(List(DevOut), DeviceError) device_engine_session_open_w(MmioWin op, L
 /// `len` bytes at `base` in session `id`, which must have been opened to
 /// write. Err(BadInput) for an access outside the window, a session that
 /// has ended, or one that only loads.
+@descriptor(session_raw)
 @requires(device)
-pub Result(List(DevOut), DeviceError) device_session_store(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes, UInt(64) value) {
+pub Result(List(DevOut), DeviceError) device_session_store(Str name, SessionKey key, Int map, Int base, Int len, Int off, Int bytes, UInt(64) value) {
     if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
     // In a driver's host the store is made here, with no request.
     if (resid_device_drv_can(0, 0, 0, 0) == 1) {
         if (resid_device_drv_store(map, base + off, bytes, value) != 1) { return Err(BadInput(name, "the session's host refused the access")); }
         return Ok([]);
     }
-    DvReq r = dv_prep_session_access(id, map, true, base + off, bytes, value);
+    DvReq r = dv_prep_session_access(key.v, map, true, base + off, bytes, value);
     if (r.err != "") { return Err(BadInput(name, r.err)); }
     return dv_session_answer(name, dv_answer(name, r, resid_device_call_w(r.req)));
 }
@@ -177,7 +178,7 @@ Result(Bool, DeviceError) dma_write_from(DmaRegion r, Int off, List(UInt(8)) byt
     if (i >= bytes.len()) { return Ok(true); }
     Int n = if (bytes.len() - i > 65536) { 65536 } else { bytes.len() - i };
     ListBuf(Int) none = ListBuf();
-    ListBuf(Int) head = dv_u(dv_u(dv_u(dv_u(none.push(82).push(68).push(86).push(1).push(16).push(1), r.id, 8), r.map, 1), off + i, 4), n, 4);
+    ListBuf(Int) head = dv_u(dv_u(dv_u(dv_u(none.push(82).push(68).push(86).push(1).push(16).push(1), r.id.v, 8), r.map, 1), off + i, 4), n, 4);
     List(DevOut) o = dv_session_answer("dma", dv_answer("dma", DvReq {.err = "", .req = [], .outs = []}, resid_device_call_w(dma_bytes(head, bytes, i, i + n).finish())))?;
     return dma_write_from(r, off, bytes, i + n);
 }
@@ -187,13 +188,13 @@ ListBuf(Int) dma_bytes(ListBuf(Int) b, List(UInt(8)) bytes, Int i, Int end) {
     return dma_bytes(b.push((Int) bytes[i]), bytes, i + 1, end);
 }
 
-/// Makes the operations `ops` on session `id`, in one message to its
+/// Makes the operations `ops` on the session `key` names, in one message to its
 /// host: stores, writes, loads, reads and waits, in order. Returns an
 /// output for each load and wait (OutNum) and each read (OutBytes), in
 /// order. When the host refuses one, those before it were made.
 @requires(device)
-pub Result(List(DevOut), DeviceError) device_batch(Int id, List(DevOp) ops) {
-    DvReq r = dv_prep_batch(id, ops);
+pub Result(List(DevOut), DeviceError) device_batch(SessionKey key, List(DevOp) ops) {
+    DvReq r = dv_prep_batch(key, ops);
     if (r.err != "") { return Err(BadInput("batch", r.err)); }
     return dv_session_answer("batch", dv_answer("batch", r, if (dv_ops_write(ops, 0)) { resid_device_call_w(r.req) } else { resid_device_call(r.req) }));
 }
@@ -218,7 +219,7 @@ pub Result(List(DevOut), DeviceError) device_engine_driver_open_w(DmaDev op, Lis
 pub Result(List(UInt(8)), DeviceError) driver_call(DriverLink d, List(UInt(8)) request) {
     if (request.len() > 65536) { return Err(BadInput("driver", "a message is at most 65536 bytes")); }
     ListBuf(Int) none = ListBuf();
-    List(Int) req = dma_bytes(dv_u(none.push(82).push(68).push(86).push(1).push(20).push(1), d.id, 8), request, 0, request.len()).finish();
+    List(Int) req = dma_bytes(dv_u(none.push(82).push(68).push(86).push(1).push(20).push(1), d.id.v, 8), request, 0, request.len()).finish();
     List(DevOut) o = dv_driver_answer(dv_answer("driver", DvReq {.err = "", .req = [], .outs = [DvSlot {.num = false, .max = 65536, .secret = false}]}, resid_device_call_w(req)))?;
     List(UInt(8)) empty = [];
     return Ok(match (dv_out_bytes(o, 0)) { Some(b) => b, None => empty });
@@ -227,12 +228,13 @@ pub Result(List(UInt(8)), DeviceError) driver_call(DriverLink d, List(UInt(8)) r
 /// The same store, answered with whether it was made: what a register
 /// block's accessor calls. In a driver's host it is one checked store;
 /// elsewhere a message, as device_session_store.
+@descriptor(session_raw)
 @requires(device)
-pub Result(Bool, DeviceError) device_session_put(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes, UInt(64) value) {
+pub Result(Bool, DeviceError) device_session_put(Str name, SessionKey key, Int map, Int base, Int len, Int off, Int bytes, UInt(64) value) {
     if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
     if (resid_device_drv_store(map, base + off, bytes, value) == 1) { return Ok(true); }
     if (resid_device_drv_can(0, 0, 0, 0) == 1) { return Err(BadInput(name, "the session's host refused the access")); }
-    DvReq r = dv_prep_session_access(id, map, true, base + off, bytes, value);
+    DvReq r = dv_prep_session_access(key.v, map, true, base + off, bytes, value);
     if (r.err != "") { return Err(BadInput(name, r.err)); }
     List(DevOut) o = dv_session_answer(name, dv_answer(name, r, resid_device_call_w(r.req)))?;
     return Ok(o.len() == 0);

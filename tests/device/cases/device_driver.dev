@@ -1,0 +1,6 @@
+// Fixture for device_driver (installed as lib/dev/fx_device_driver.resid):
+// a link to a driver that is not running. A handle is written only in
+// lib/dev/ and generated code (E0260), so the case gets its stale one here.
+import "device.resid";
+
+pub DriverLink fx_stale_link() { return DriverLink {.id = SessionKey {.v = 12345}}; }

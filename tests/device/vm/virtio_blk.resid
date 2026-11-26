@@ -318,7 +318,7 @@ Result(Str, DeviceError) drive(BlkSession s, Int step) {
     Half noff = common_read_queue_notify_off(c)?;
     Bool q5 = common_write_queue_enable(c, Half {.v = 1})?;
     Bool q6 = common_write_device_status(c, status(true, true, true, true))?;
-    Queue q = Queue {.s = s, .size = (Int) size.v, .bell = NotifySession {.id = s.notify.id, .map = s.notify.map, .base = s.notify.base + (Int) noff.v * step, .len = 2}};
+    Queue q = Queue {.s = s, .size = (Int) size.v, .bell = notify_at(s.notify, (Int) noff.v * step)};
     // Read sector 3, which the test wrote a line of text into.
     Int r3 = request(q, 0, false, 3)?;
     List(UInt(8)) three = dma_read(s.dma, at_data(), 512)?;

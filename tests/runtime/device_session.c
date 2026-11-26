@@ -751,7 +751,24 @@ int main(int argc, char** argv, char** envp) {
     req_open(&q, 0, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041);
     r = call(&q, 0);
     uint64_t again = number(&r);
-    check("session_slot_reused_number_not", again > ids[7]);
+    int fresh = again > 0;
+    for (int i = 0; i < 8; i++) if (again == ids[i]) fresh = 0;
+    check("session_slot_reused_number_not", fresh);
+    /* A key is not a counter (red team DH-1): numbers 1, 2, ... were the
+     * thread's sessions in order, so code handed none named them. Nine
+     * keys, none small, no two adjacent, none past 62 bits. */
+    int guessable = again < 65536 || again >> 62;
+    for (int i = 0; i < 8; i++) {
+        if (ids[i] < 65536 || ids[i] >> 62) guessable = 1;
+        for (int j = 0; j < 8; j++) if (i != j && (ids[i] == ids[j] + 1 || ids[i] == ids[j])) guessable = 1;
+    }
+    check("session_keys_unguessable", !guessable);
+    for (uint64_t k = 1; k <= 64; k++) {
+        req_access(&q, k, 0, 16, 4, 0);
+        r = call(&q, 0);
+        if (!(code(&r) == 10 && value(&r) == 71)) guessable = 1;
+    }
+    check("session_small_numbers_name_nothing", !guessable);
     req_close(&q, again);
     r = call(&q, 0);
 

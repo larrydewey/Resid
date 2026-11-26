@@ -1,0 +1,34 @@
+// lib/dev/'s raw session accesses take a key, a window and an offset as
+// numbers, with no register's read/write split: only lib/dev/ and the
+// accessors a register block generates call them (E0260). Red team
+// DH-1: under device(readonly), device_session_word loaded a register
+// that clears when read, which its block reads only with `_take_` and the
+// full grant; and its window was the caller's to choose.
+import "dev/fx_device_virtio_window.resid";
+
+@word(8) @clears_on_read
+type Isr = { DeviceOwned(Bool) queue; DeviceOwned(Bool) config; @reserved(6); };
+
+@registers(size = 1, session = device)
+type IsrBlock = { @at(0) Isr isr; };
+
+@device(session = fx_rng, session_write = fx_rng_w)
+type Card = { IsrBlock isr; };
+
+@requires(device(readonly))
+Int peek(CardSession s) {
+    return match (device_session_word("isr", s.isr.id, s.isr.map, 0, 65536, 0, 1)) { Ok(v) => v, Err(e) => 0 - 1 };
+}
+
+@requires(device)
+Int main() {
+    PciAddr a = PciAddr {.domain = 0, .bus = 0, .device = 4, .function = 0};
+    Result(Int, DeviceError) r = card_session(CardWindows {.isr = PciWindow {.addr = a, .resource = 4, .base = 0, .len = 1}}, lambda(s) {
+        DevOp o = device_op_load(s.isr.map, 0, 65536, 0x14, 4);
+        Result(Bool, DeviceError) w = device_session_put("isr", s.isr.id, s.isr.map, 0, 65536, 0x14, 1, (UInt(64)) 0);
+        Result(Bool, DeviceError) e = device_session_end("isr", s.isr.id);
+        peek(s)
+    });
+    println(match (r) { Ok(v) => f"{v}", Err(e) => device_error_text(e) });
+    return 0;
+}

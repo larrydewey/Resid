@@ -203,10 +203,20 @@ pub type PciWindow = { PciAddr addr; Int resource; Int base; Int len; };
 @descriptor(dma_dev)
 type DmaDev = { Str name; Int vendor; Int device; Int size; Int dma; Int iova; Stability stability; };
 
+/// What names one open session to the runtime: a number it chose at
+/// random when the session opened (runtime/rt/device.resid's ds_open). A
+/// handle (`@descriptor(handle)`): only lib/dev/ and the code a register
+/// block or device generates write one (E0260), so a key comes from the
+/// scope that opened its session, and code that was not handed one
+/// cannot make one up.
+@descriptor(handle)
+pub type SessionKey = { Int v; };
+
 /// The memory of a DMA session: `len` bytes that the device sees at
-/// `iova`. Run-time data, made by the scope a `@device(dma = ...)`
-/// declaration generates.
-pub type DmaRegion = { Int id; Int map; Int iova; Int len; };
+/// `iova`. A handle, made by the scope a `@device(dma = ...)` declaration
+/// generates.
+@descriptor(handle)
+pub type DmaRegion = { SessionKey id; Int map; Int iova; Int len; };
 
 /// The PCI functions present: the names under /sys/bus/pci/devices, at
 /// most `max` bytes of them. `device.pci_list` returns them as OutBytes, a
@@ -881,8 +891,10 @@ ListBuf(Int) dv_driver_args(ListBuf(Int) b, List(PciWindow) ws, Int i) {
 // (driver_next) and answers a message (driver_reply). A driver holds no
 // capability but its device.
 
-/// A driver running in a session's host, as the program holds it.
-pub type DriverLink = { Int id; };
+/// A driver running in a session's host, as the program holds it. A
+/// handle, made by the scope `@device(dma = ..., driver = f)` generates.
+@descriptor(handle)
+pub type DriverLink = { SessionKey id; };
 
 /// What a driver is told happened: nothing within the time, a message
 /// from the program (to be answered with driver_reply), or the device's
@@ -967,7 +979,7 @@ Result(List(UInt(8)), DeviceError) dma_read_from(DmaRegion r, Int off, Int left,
     if (left <= 0) { return Ok(acc); }
     Int n = if (left > 65536) { 65536 } else { left };
     ListBuf(Int) none = ListBuf();
-    List(Int) req = dv_u(dv_u(dv_u(dv_u(none.push(82).push(68).push(86).push(1).push(15).push(0), r.id, 8), r.map, 1), off, 4), n, 4).finish();
+    List(Int) req = dv_u(dv_u(dv_u(dv_u(none.push(82).push(68).push(86).push(1).push(15).push(0), r.id.v, 8), r.map, 1), off, 4), n, 4).finish();
     List(DevOut) o = dv_session_answer("dma", dv_reply("dma", [DvSlot {.num = false, .max = n, .secret = false}], resid_device_call(req)))?;
     List(UInt(8)) empty = [];
     List(UInt(8)) part = if (o.len() == 1) { dv_out_raw(o[0]) } else { empty };
@@ -985,7 +997,7 @@ Result(List(UInt(8)), DeviceError) dma_read_from(DmaRegion r, Int off, Int left,
 pub Result(Int, DeviceError) dma_wait(DmaRegion r, Int timeout_ms) {
     if (timeout_ms < 0 || timeout_ms > 60000) { return Err(BadInput("dma", "a wait is at most 60000 milliseconds")); }
     ListBuf(Int) none = ListBuf();
-    List(Int) req = dv_u(dv_u(none.push(82).push(68).push(86).push(1).push(17).push(0), r.id, 8), timeout_ms, 4).finish();
+    List(Int) req = dv_u(dv_u(none.push(82).push(68).push(86).push(1).push(17).push(0), r.id.v, 8), timeout_ms, 4).finish();
     List(DevOut) o = dv_session_answer("dma", dv_reply("dma", [DvSlot {.num = true, .max = 8, .secret = false}], resid_device_call(req)))?;
     return match (dv_out_num(o, 0)) { Some(n) => Ok(n), None => Err(BadReply("dma", "no count")) };
 }
@@ -997,11 +1009,22 @@ pub Result(Int, DeviceError) dma_wait(DmaRegion r, Int timeout_ms) {
 // with sessions writes an operation for each register (`t_r_load(s)`,
 // `t_r_store(s, v)`) and the reader of its answer (`t_r_of(outs, i)`).
 
-/// One operation of a batch: a word loaded or stored (resource, offset
-/// in it, bytes, value), bytes of a device's memory read or written
-/// (resource, offset, length or the bytes), a wait for the interrupt
-/// (milliseconds), or one that cannot be made, with why.
-pub type DevOp = OpLoad(Int, Int, Int) | OpStore(Int, Int, Int, UInt(64)) | OpRead(Int, Int, Int) | OpWrite(Int, Int, List(UInt(8))) | OpWait(Int) | OpBad(Str);
+/// What an operation of a batch is: a word loaded or stored (resource,
+/// offset in it, bytes, value), bytes of a device's memory read or
+/// written (resource, offset, length or the bytes), a wait for the
+/// interrupt (milliseconds), or one that cannot be made, with why.
+/// OpTake is a load of a register that clears when it is read: a write
+/// to the device, which needs the full `device` grant (device_batch).
+pub type DevOpKind = OpLoad(Int, Int, Int) | OpTake(Int, Int, Int) | OpStore(Int, Int, Int, UInt(64)) | OpRead(Int, Int, Int) | OpWrite(Int, Int, List(UInt(8))) | OpWait(Int) | OpBad(Str);
+
+/// One operation of a batch. A handle: made only by lib/dev/'s functions
+/// (dma_read_op, ...) and the operations a register block generates
+/// (`t_r_load(s)`), so an operation stays inside the window and keeps
+/// the read/write split its register declares.
+@descriptor(handle)
+pub type DevOp = { DevOpKind k; };
+
+DevOp dv_opk(DevOpKind k) { return DevOp {.k = k}; }
 
 /// Whether a window names one of a session's resources (0 to 255, the
 /// byte the request carries it in) and lies at or after its start: a
@@ -1011,50 +1034,61 @@ pub Bool dv_window_ok(Int map, Int base, Int len) { return map >= 0 && map <= 25
 
 /// The load of `bytes` bytes at `off` of the window of `len` bytes at
 /// `base` in resource number `map`.
+@descriptor(session_raw)
 pub DevOp device_op_load(Int map, Int base, Int len, Int off, Int bytes) {
-    if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return OpBad("the access is not inside the window"); }
-    return OpLoad(map, base + off, bytes);
+    if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return dv_opk(OpBad("the access is not inside the window")); }
+    return dv_opk(OpLoad(map, base + off, bytes));
+}
+
+/// The load of a register that clears when it is read: an operation that
+/// needs device_batch and the full `device` grant.
+@descriptor(session_raw)
+pub DevOp device_op_take(Int map, Int base, Int len, Int off, Int bytes) {
+    if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return dv_opk(OpBad("the access is not inside the window")); }
+    return dv_opk(OpTake(map, base + off, bytes));
 }
 
 /// The store of the low `bytes` bytes of `value` there.
+@descriptor(session_raw)
 pub DevOp device_op_store(Int map, Int base, Int len, Int off, Int bytes, UInt(64) value) {
-    if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return OpBad("the access is not inside the window"); }
-    return OpStore(map, base + off, bytes, value);
+    if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return dv_opk(OpBad("the access is not inside the window")); }
+    return dv_opk(OpStore(map, base + off, bytes, value));
 }
 
 /// The read of `n` bytes (1 to 65536) at `off` of a DMA session's memory.
 pub DevOp dma_read_op(DmaRegion r, Int off, Int n) {
-    if (off < 0 || n < 1 || n > 65536 || off + n > r.len) { return OpBad("the bytes are not inside the memory"); }
-    return OpRead(r.map, off, n);
+    if (off < 0 || n < 1 || n > 65536 || off + n > r.len) { return dv_opk(OpBad("the bytes are not inside the memory")); }
+    return dv_opk(OpRead(r.map, off, n));
 }
 
 /// The write of `bytes` (1 to 65536 of them) at `off` of that memory.
 pub DevOp dma_write_op(DmaRegion r, Int off, List(UInt(8)) bytes) {
-    if (off < 0 || bytes.len() < 1 || bytes.len() > 65536 || off + bytes.len() > r.len) { return OpBad("the bytes are not inside the memory"); }
-    return OpWrite(r.map, off, bytes);
+    if (off < 0 || bytes.len() < 1 || bytes.len() > 65536 || off + bytes.len() > r.len) { return dv_opk(OpBad("the bytes are not inside the memory")); }
+    return dv_opk(OpWrite(r.map, off, bytes));
 }
 
 /// A wait for the device's interrupt, at most `timeout_ms` milliseconds.
 pub DevOp dma_wait_op(Int timeout_ms) {
-    if (timeout_ms < 0 || timeout_ms > 60000) { return OpBad("a wait is at most 60000 milliseconds"); }
-    return OpWait(timeout_ms);
+    if (timeout_ms < 0 || timeout_ms > 60000) { return dv_opk(OpBad("a wait is at most 60000 milliseconds")); }
+    return dv_opk(OpWait(timeout_ms));
 }
 
-Bool dv_op_writes(DevOp o) { return match (o) { OpStore(m, a, b, v) => true, OpWrite(m, a, bs) => true, _ => false }; }
+Bool dv_op_writes(DevOp o) { return match (o.k) { OpStore(m, a, b, v) => true, OpWrite(m, a, bs) => true, OpTake(m, a, b) => true, _ => false }; }
 
 /// Whether any of `ops` stores or writes.
 pub Bool dv_ops_write(List(DevOp) ops, Int i) { return i < ops.len() && (dv_op_writes(ops[i]) || dv_ops_write(ops, i + 1)); }
 
 Str dv_ops_bad(List(DevOp) ops, Int i) {
     if (i >= ops.len()) { return ""; }
-    return match (ops[i]) { OpBad(why) => f"operation {i}: " + why, _ => dv_ops_bad(ops, i + 1) };
+    return match (ops[i].k) { OpBad(why) => f"operation {i}: " + why, _ => dv_ops_bad(ops, i + 1) };
 }
 
 // One operation as the host takes it: what, the width, which resource, a
 // zero, the offset (4), the value, length or time (8), a write's bytes.
 ListBuf(Int) dv_op(ListBuf(Int) b, DevOp o) {
-    return match (o) {
+    return match (o.k) {
         OpLoad(m, off, n) => dv_u(dv_u(b.push(1).push(n).push(m).push(0), off, 4), 0, 8),
+        OpTake(m, off, n) => dv_u(dv_u(b.push(1).push(n).push(m).push(0), off, 4), 0, 8),
         OpStore(m, off, n, v) => dv_u64(dv_u(b.push(2).push(n).push(m).push(0), off, 4), v, 8),
         OpRead(m, off, n) => dv_u(dv_u(b.push(3).push(0).push(m).push(0), off, 4), n, 8),
         OpWrite(m, off, bs) => dv_op_bytes(dv_u(dv_u(b.push(4).push(0).push(m).push(0), off, 4), bs.len(), 8), bs, 0),
@@ -1070,8 +1104,9 @@ ListBuf(Int) dv_ops(ListBuf(Int) b, List(DevOp) ops, Int i) { return if (i >= op
 // What comes back: a number for each load and wait, bytes for each read.
 List(DvSlot) dv_op_slots(List(DevOp) ops, Int i, List(DvSlot) acc) {
     if (i >= ops.len()) { return acc; }
-    List(DvSlot) one = match (ops[i]) {
+    List(DvSlot) one = match (ops[i].k) {
         OpLoad(m, off, n) => [DvSlot {.num = true, .max = 8, .secret = false}],
+        OpTake(m, off, n) => [DvSlot {.num = true, .max = 8, .secret = false}],
         OpWait(ms) => [DvSlot {.num = true, .max = 8, .secret = false}],
         OpRead(m, off, n) => [DvSlot {.num = false, .max = n, .secret = false}],
         _ => [],
@@ -1079,25 +1114,26 @@ List(DvSlot) dv_op_slots(List(DevOp) ops, Int i, List(DvSlot) acc) {
     return dv_op_slots(ops, i + 1, acc.concat(one));
 }
 
-/// The request for the batch `ops` on session `id`. `err` is set for no
-/// operation or more than 256, and for one that cannot be made.
-pub DvReq dv_prep_batch(Int id, List(DevOp) ops) {
+/// The request for the batch `ops` on the session `key` names. `err` is
+/// set for no operation or more than 256, and for one that cannot be made.
+pub DvReq dv_prep_batch(SessionKey key, List(DevOp) ops) {
     if (ops.len() == 0 || ops.len() > 256) { return dv_bad("a batch is 1 to 256 operations"); }
     Str bad = dv_ops_bad(ops, 0);
     if (bad != "") { return dv_bad(bad); }
     ListBuf(Int) none = ListBuf();
     List(DvSlot) no = [];
-    return DvReq {.err = "", .req = dv_ops(dv_u(none.push(82).push(68).push(86).push(1).push(18).push(dv_bool(dv_ops_write(ops, 0))), id, 8), ops, 0).finish(), .outs = dv_op_slots(ops, 0, no)};
+    return DvReq {.err = "", .req = dv_ops(dv_u(none.push(82).push(68).push(86).push(1).push(18).push(dv_bool(dv_ops_write(ops, 0))), key.v, 8), ops, 0).finish(), .outs = dv_op_slots(ops, 0, no)};
 }
 
-/// Makes the operations `ops`, none of which stores or writes, on
-/// session `id`, in one message. Returns an output for each load and
+/// Makes the operations `ops`, none of which stores, writes or loads a
+/// register that clears when read, on the session `key` names, in one
+/// message. Returns an output for each load and
 /// wait (OutNum) and each read (OutBytes), in order; Err(BadInput) for a
 /// batch that writes, one the host refuses, or a session that has ended.
 @requires(device(readonly))
-pub Result(List(DevOut), DeviceError) device_batch_ro(Int id, List(DevOp) ops) {
-    if (dv_ops_write(ops, 0)) { return Err(BadInput("batch", "a batch that stores or writes needs device_batch and the `device` grant")); }
-    DvReq r = dv_prep_batch(id, ops);
+pub Result(List(DevOut), DeviceError) device_batch_ro(SessionKey key, List(DevOp) ops) {
+    if (dv_ops_write(ops, 0)) { return Err(BadInput("batch", "a batch that stores, writes or takes a register that clears when read needs device_batch and the `device` grant")); }
+    DvReq r = dv_prep_batch(key, ops);
     if (r.err != "") { return Err(BadInput("batch", r.err)); }
     return dv_session_answer("batch", dv_answer("batch", r, resid_device_call(r.req)));
 }
@@ -1116,8 +1152,9 @@ pub DvReq dv_prep_session_access(Int id, Int map, Bool store, Int off, Int bytes
 /// Loads `bytes` bytes at `off` of the window of `len` bytes at `base`
 /// in resource number `map` of session `id`: the word as OutNum. Err(BadInput) for an access
 /// outside the window or a session that has ended. `name` labels errors.
+@descriptor(session_raw)
 @requires(device(readonly))
-pub Result(List(DevOut), DeviceError) device_session_load(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes) {
+pub Result(List(DevOut), DeviceError) device_session_load(Str name, SessionKey key, Int map, Int base, Int len, Int off, Int bytes) {
     if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
     // In a driver's host the device is this process's own: the load is
     // made here, with no request.
@@ -1125,7 +1162,7 @@ pub Result(List(DevOut), DeviceError) device_session_load(Str name, Int id, Int 
         if (resid_device_drv_can(map, base + off, bytes, 1) != 1) { return Err(BadInput(name, "the session's host refused the access")); }
         return Ok([OutNum(resid_device_drv_load(map, base + off, bytes))]);
     }
-    DvReq r = dv_prep_session_access(id, map, false, base + off, bytes, 0);
+    DvReq r = dv_prep_session_access(key.v, map, false, base + off, bytes, 0);
     if (r.err != "") { return Err(BadInput(name, r.err)); }
     return dv_session_answer(name, dv_answer(name, r, resid_device_call(r.req)));
 }
@@ -1134,23 +1171,25 @@ pub Result(List(DevOut), DeviceError) device_session_load(Str name, Int id, Int 
 /// In a driver's host it is one checked load of the device's memory, with
 /// nothing built for the answer; elsewhere a message, as
 /// device_session_load.
+@descriptor(session_raw)
 @requires(device(readonly))
-pub Result(Int, DeviceError) device_session_word(Str name, Int id, Int map, Int base, Int len, Int off, Int bytes) {
+pub Result(Int, DeviceError) device_session_word(Str name, SessionKey key, Int map, Int base, Int len, Int off, Int bytes) {
     if (!dv_window_ok(map, base, len) || off < 0 || off + bytes > len) { return Err(BadInput(name, "the access is not inside the window")); }
     if (resid_device_drv_can(map, base + off, bytes, 1) == 1) { return Ok(resid_device_drv_load(map, base + off, bytes)); }
     if (resid_device_drv_can(0, 0, 0, 0) == 1) { return Err(BadInput(name, "the session's host refused the access")); }
-    DvReq r = dv_prep_session_access(id, map, false, base + off, bytes, 0);
+    DvReq r = dv_prep_session_access(key.v, map, false, base + off, bytes, 0);
     if (r.err != "") { return Err(BadInput(name, r.err)); }
     List(DevOut) o = dv_session_answer(name, dv_answer(name, r, resid_device_call(r.req)))?;
     return match (dv_out_num(o, 0)) { Some(v) => Ok(v), None => Err(BadReply(name, "no word")) };
 }
 
-/// Ends session `id`: its host exits. Err(BadInput) when it has ended
-/// already.
+/// Ends the session `key` names: its host exits. Err(BadInput) when it
+/// has ended already.
+@descriptor(session_raw)
 @requires(device(readonly))
-pub Result(Bool, DeviceError) device_session_end(Str name, Int id) {
+pub Result(Bool, DeviceError) device_session_end(Str name, SessionKey key) {
     ListBuf(Int) none = ListBuf();
-    List(Int) req = dv_u(none.push(82).push(68).push(86).push(1).push(13).push(0), id, 8).finish();
+    List(Int) req = dv_u(none.push(82).push(68).push(86).push(1).push(13).push(0), key.v, 8).finish();
     List(DevOut) o = dv_session_answer(name, dv_reply(name, [], resid_device_call(req)))?;
     return Ok(o.len() == 0);
 }
