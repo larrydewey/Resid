@@ -3083,6 +3083,19 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (a.len() == 4 && a[0] == "ListBuf(UInt(8))" && a[1] == "List(UInt(8))" && bx_int(a[2]) && bx_int(a[3])) { return ERes {.pos = pos, .ty = a[0], .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects (ListBuf(UInt(8)), List(UInt(8)), Int, Int), got (" + argtys + ")"};
     }
+    // resid_bytes_append_str(b, s): builder b with the UTF-8 bytes of s
+    // pushed in one copy. resid_str_from_bytes(xs, from, n): bytes from..from
+    // + n of xs read as UTF-8 (a malformed byte, and NUL, as U+FFFD).
+    if (name == "resid_bytes_append_str") {
+        List(Str) a = str_split(argtys, ",");
+        if (a.len() == 2 && a[0] == "ListBuf(UInt(8))" && a[1] == "Str") { return ERes {.pos = pos, .ty = a[0], .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (ListBuf(UInt(8)), Str), got (" + argtys + ")"};
+    }
+    if (name == "resid_str_from_bytes") {
+        List(Str) a = str_split(argtys, ",");
+        if (a.len() == 3 && a[0] == "List(UInt(8))" && bx_int(a[1]) && bx_int(a[2])) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (List(UInt(8)), Int, Int), got (" + argtys + ")"};
+    }
     if (name == "resid_crc32c") {
         List(Str) a = str_split(argtys, ",");
         if (a.len() == 4 && a[0] == "List(UInt(8))" && bx_int(a[1]) && bx_int(a[2]) && bx_int(a[3])) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
