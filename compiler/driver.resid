@@ -1494,7 +1494,8 @@ Bool scope_arith_builtin(Str n) {
 List(Str) leaf_calls(Str s, Int pos, Int end, List(Str) ptrs, Str prev, Bool pdot, List(Str) acc) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof" || t.pos > end) { return acc; }
-    if (t.kind == "str" || t.kind == "raw" || t.kind == "bytes") { return ["!"]; }
+    // An f-string makes a new Str (resid_str_concat, e.itoa): never a leaf.
+    if (t.kind == "str" || t.kind == "raw" || t.kind == "bytes" || t.kind == "fstring") { return ["!"]; }
     if (t.text == "lambda" || t.text == "closure" || t.text == "spawn") { return ["!"]; }
     if (t.text == "[") {
         // Indexing follows a value; anything else opens a list literal.

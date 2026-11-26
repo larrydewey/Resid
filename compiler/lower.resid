@@ -4520,7 +4520,8 @@ SW lw_scope_wants(LW w, Int id, SW acc) {
     if (k == "try" || k == "tern" || k == "ret" || k == "brk" || k == "cont") { return SW {.found = acc.found, .no = true}; }
     Map(Str, Int) lf = w.fs.leaf;
     Int lv = lf.get(lw_text(w, id)) else { 1 };
-    Bool call = (k == "call" || k == "mcall") && lv == 0;
+    // An f-string makes a Str (lw_fstr), as a non-leaf call may.
+    Bool call = ((k == "call" || k == "mcall") && lv == 0) || k == "fstr";
     return lw_scope_kids(w, id, 0, SW {.found = acc.found || call, .no = false});
 }
 
@@ -11643,7 +11644,8 @@ List(Str) lf_node(Kg g, Int id, List(Str) ptrs, Funcs fs, List(Str) acc) {
         if (a == "str" || a == "raw" || a == "bytes") { return lf_no(); }
         return acc;
     }
-    if (k == "fstr") { return acc; }
+    // An f-string makes a new Str (lw_fstr: resid_str_concat, e.itoa).
+    if (k == "fstr") { return lf_no(); }
     if (k == "lambda" || k == "spawn" || k == "list") { return lf_no(); }
     // A bare variant name is a constant box (lw_box_n): no allocation.
     if (k == "ref" && lf_upper(t)) { return acc; }

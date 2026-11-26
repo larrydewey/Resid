@@ -403,6 +403,17 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/generations.resid -o "$W/generat
 else
     fail=$((fail + 1)); echo "FAIL loop generations: $(tail -1 "$W/generations.out" "$W/generations.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# Helpers that only format with an f-string are not leaves (codegen.resid's
+# leaf_calls, lower.resid's lf_node): a tail loop calling one gets a region,
+# a scalar binding a scope, an Int recursion a scope per call; each at n
+# and 10 n. Measured: 8 MB; taken for leaves, 126, 220 and 79 MB at a
+# million steps and 1.25 GB, 2.2 GB and 781 MB at ten million.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/fstr_leaf.resid -o "$W/fstr_leaf") > "$W/fstr_leaf.log" 2>&1 \
+    && [ "$(for fl in "count 1000000" "count 10000000" "sum 1000000" "sum 10000000" "walk 1000000" "walk 10000000"; do RESID_MEM_LIMIT=40 timeout 120 "$W/fstr_leaf" $fl 2>&1; done | tr '\n' ' ')" = "918920 18918920 3785855 7497175 9888890 108888890 " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL f-string helpers are not leaves: $(for fl in "count 10000000" "sum 10000000" "walk 10000000"; do RESID_MEM_LIMIT=40 timeout 120 "$W/fstr_leaf" $fl 2>&1 | tail -1; done | tr '\n' ' ') $(grep -m1 -i error "$W/fstr_leaf.log")"
+fi
 # Volatile raw loads and stores (lower.resid): two processes pass a counter
 # through a shared page, each polling with resid_raw_loadv64; a plain load
 # is hoisted out of the loop and the program never ends. Built from its own

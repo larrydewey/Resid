@@ -1,0 +1,44 @@
+// A function that allocates only through an f-string is not a leaf
+// (codegen.resid's leaf_calls, lower.resid's lf_node): a tail loop calling
+// one gets a region, a scalar binding of one a scope, and so does a
+// recursion that returns an Int. run.sh runs each at n and 10 n under
+// RESID_MEM_LIMIT; the compiler that took such helpers for leaves kept
+// every call's string (79 to 220 MB at a million steps, 0.8 to 2.2 GB at
+// ten million).
+//
+// Usage: fstr_leaf SHAPE N; prints the shape's total.
+
+Str key_f(Int i) { return f"user:{i}:session"; }
+Int klen(Int i) { return str_len(f"request {i} from client {i % 97}"); }
+
+// A tail loop with a scalar carry.
+Int count_f(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Str k = key_f(i);
+    return count_f(i + 1, n, acc + str_len(k) % 3);
+}
+
+// A scalar binding of a helper in a tail loop.
+Int sum_f(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Int z = klen(i);
+    return sum_f(i + 1, n, acc + z % 5);
+}
+
+// Divide and conquer returning an Int, its leaves formatting.
+Int walk(Int lo, Int hi) {
+    if (hi - lo <= 1) { return str_len(f"leaf{lo}"); }
+    Int mid = (lo + hi) / 2;
+    Int a = walk(lo, mid);
+    Int b = walk(mid, hi);
+    return a + b;
+}
+
+@requires(args)
+Int main() {
+    Str w = args.get(1);
+    Int n = str_parse_int(args.get(2));
+    Int r = if (w == "count") { count_f(0, n, 0) } else { if (w == "sum") { sum_f(0, n, 0) } else { walk(0, n) } };
+    println(f"{r}");
+    return 0;
+}
