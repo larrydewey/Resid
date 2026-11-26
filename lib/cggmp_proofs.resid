@@ -41,8 +41,11 @@ BnInt fac_challenge(Transcript tr, List(UInt(64)) n, Pedersen aux, List(UInt(64)
 }
 
 /// Whether `pf` proves that the factors of N are not small, bound to `tr`.
+/// N must have zk_bits_n() bits: the response bound below is fixed for that
+/// size, so a smaller N with a tiny factor would pass it.
 pub Bool fac_verify(List(UInt(64)) n, Pedersen aux, FacProof pf, Transcript tr) {
-    if (!pedersen_valid(aux)) { return false; }
+    if (bn_bit_len(n) != zk_bits_n() || !bn_is_odd(n)) { return false; }
+    if (!zk_n_size_ok(aux.n) || !pedersen_valid(aux)) { return false; }
     BnInt e = fac_challenge(tr, n, aux, pf.p, pf.q, pf.a, pf.b, pf.t);
     if (!ped_verify(aux, pf.z1, pf.w1, e, pf.a, pf.p)) { return false; }
     if (!ped_verify(aux, pf.z2, pf.w2, e, pf.b, pf.q)) { return false; }

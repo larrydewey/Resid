@@ -27,6 +27,11 @@ pub Bool zk_valid_mod_n(List(UInt(64)) x, List(UInt(64)) n) {
     return bn_cmp(bn_gcd(x, n), [1]) == 0;
 }
 
+/// Whether `n` has exactly the CGGMP21 modulus size, 2048 bits (zk_bits_n in
+/// cggmp_prim.resid). The proofs' ranges are fixed for that size: a smaller N
+/// passes them with a small factor.
+pub Bool zk_n_size_ok(List(UInt(64)) n) { return bn_bit_len(n) == 2048; }
+
 /// Pedersen parameters are valid when s and t are units mod N and differ.
 pub Bool pedersen_valid(Pedersen p) {
     return zk_valid_mod_n(p.s, p.n) && zk_valid_mod_n(p.t, p.n) && bn_cmp(p.s, p.t) != 0;
@@ -88,10 +93,10 @@ Bool prm_check_all(BnMont c, Pedersen ped, PrmProof pf, List(Int) es, Int i) {
 }
 
 /// Whether `pf` proves that the prover knows lam with s = t^lam mod N
-/// for these parameters, bound to the transcript `tr`.
+/// for these parameters (N of 2048 bits), bound to the transcript `tr`.
 pub Bool prm_verify(Pedersen ped, PrmProof pf, Transcript tr) {
     if (pf.as.len() != zk_stat() || pf.zs.len() != zk_stat()) { return false; }
-    if (!bn_is_odd(ped.n) || !pedersen_valid(ped)) { return false; }
+    if (!zk_n_size_ok(ped.n) || !bn_is_odd(ped.n) || !pedersen_valid(ped)) { return false; }
     return prm_check_all(bn_mont_new(ped.n), ped, pf, prm_challenge(tr, ped, pf.as), 0);
 }
 
@@ -179,11 +184,11 @@ Bool mod_check_all(BnMont c, ModProof pf, List(List(UInt(64))) ys, Int i) {
     return mod_check_all(c, pf, ys, i + 1);
 }
 
-/// Whether `pf` proves that N is a product of two primes that are both 3 mod
-/// 4 (a Paillier-Blum modulus), bound to `tr`.
+/// Whether `pf` proves that N is a 2048-bit product of two primes that are
+/// both 3 mod 4 (a Paillier-Blum modulus), bound to `tr`.
 pub Bool mod_verify(List(UInt(64)) n, ModProof pf, Transcript tr) {
     if (pf.responses.len() != zk_stat()) { return false; }
-    if (!bn_is_odd(n) || bn_cmp(n, [1]) <= 0) { return false; }
+    if (!zk_n_size_ok(n) || !bn_is_odd(n)) { return false; }
     // N must not be prime.
     if (bn_miller_rabin(n, bn_mr_bases())) { return false; }
     if (bn_jacobi(pf.w, n) != -1) { return false; }

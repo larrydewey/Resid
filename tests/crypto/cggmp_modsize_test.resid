@@ -1,0 +1,36 @@
+// The no-small-factor and Paillier-Blum proofs bind the modulus size: an
+// N of 1100 bits with a 64-bit factor, both primes 3 mod 4, has honest mod
+// and fac proofs, and neither verifier accepts it (CGGMP21 fixes N at 2048
+// bits; the fac bound l + eps + 1024 means nothing for a smaller N).
+
+import "../../lib/cggmp.resid";
+import "../../lib/cose.resid";
+
+List(UInt(64)) nat(Str hex) { return bn_from_be(cose_hex_decode(hex)); }
+
+List(UInt(64)) small_p() { return nat("f1e273a87984a8ab"); }
+List(UInt(64)) big_q() { return nat("0dd454c4dd1f43e17d39982e326463faaa89edc76ea2b69ed06aa9922272bce4d7f3d4e54b9e955fb4f3c2b99cccd44640c544a923c9593090d1694821fdb056e9110e88b2171e259b275ff3cff49e3dbae362f1828938c37073d553945604d351330d7387aceb20be36594f05b55143e190d96a354e0f6014bc98e932fb7ee56deb"); }
+Pedersen aux() {
+    return Pedersen {.n = nat("8052dd0be3c0c4a2463bd2f74371ec96274c169a7eb128e695e420e0cafde6f2a5c74ebcc055076e3031deebe213c125ef0128e0383560cdbc945c73c8ef02b8ffb132d0dac3653fb15403afa1962cae44d744808a0b7423a3aa4e2d4dd2ce2d4ba788b44b2bb2af70f2c6e1e4d00914f89d445976f7ae9a600279fbc8f580a642c1e94ae8641bc5cb59cc354653705137500ea099e525ab0003db5bfdc4e2879fd92ecf96cab13d029481a735c27a4876be8f42a7dc766adb84cb88dfde5f7a6b425efac5fad4e84b92bbd65d7eb451a6b6f698e438594f0bb955c3395a5ea2bc8d5f2246d9e7ddb73e933806b1e5681847618c96e688c6ddd7022f5f979195"),
+        .s = nat("6458b71a64d76e1e49c7881cbfe075aa1ad002d786a76455fb709cd5309a0a7cb013faae2da5c99270252cacdea7e341dc750cd21f99d5ace032f1e996a40037b7f6537dfce52cfd5d1158da1d18f26fcbd761c9a82fda127e199b3dc3e8a0339edc684f18e3bcc3a08a27cb3373cff4b36cbb354e57a54249205a4391556712ac2a52a8280dd348b5e69d922415b5f2cd6708e7977484823838c5d8300d5d07042fc7016d50ec749b6dde684753dcc9f27d1b8a30b946ee7d1e281c80b9a87073cfe9dbbcd3e97ee274086946ac6434aac755dd9baca540349c43a7dfb8a3f63184c8bfae785717b693d9265f6094889f0ece57b36c8e30a16780e131e41856"),
+        .t = nat("2486eae31efc6cd5a7e4523aa2365945de1707668eb9c8c6bb02dd59f3742c20b725fd74d25ac0106a0efabb7ebee2377f10ec3d2428deff5b3ec18627bbbbc7d3398826123e013a13e0f1770c87dd97316ec91645a141a1bec4bf091cd5c82f354f575f9b334c438ca45746822124af3d64549ceb6e3f6e317378e89cfc41150d9975e7e919a99c23f575aa88d70d96d64089719992b45174d21fbc5996cfca577de58e99f7d09e52993e9eaf0f7ed3f9eafdb78a9e391f2b89f2e7bae43f8d30ce6445fdf0aa3226ebd9ad1768f2f88b2064be7c32f6abe7af962469535d68701ce7d00ce7dfbb0348bbbbb184fced5db93b54b4e191735ac4e0949634d7f3")};
+}
+
+test "a 1100-bit modulus with a 64-bit factor fails the mod proof" {
+    List(UInt(64)) n = bn_mul(small_p(), big_q());
+    expect(bn_bit_len(n)).toEqual(1100);
+    Option(ModProof) md = mod_prove(small_p(), big_q(), tr_new(), cg_rng([5], "mod", 256 * 96));
+    Bool made = match md { Some(_) => true, None => false };
+    expect(made).toBeTrue();
+    Bool ok = match md { Some(pf) => mod_verify(n, pf, tr_new()), None => true };
+    expect(ok).toBeFalse();
+}
+
+test "a 1100-bit modulus with a 64-bit factor fails the fac proof" {
+    List(UInt(64)) n = bn_mul(small_p(), big_q());
+    Option(FacProof) fp = fac_prove(small_p(), big_q(), aux(), tr_new(), cg_rng([6], "fac", 4 * 4300));
+    Bool made = match fp { Some(_) => true, None => false };
+    expect(made).toBeTrue();
+    Bool ok = match fp { Some(pf) => fac_verify(n, aux(), pf, tr_new()), None => true };
+    expect(ok).toBeFalse();
+}
