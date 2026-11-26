@@ -427,6 +427,29 @@ expect_ok pathapp
 printf '// changed\n' >> "$W/local/src/main.resid"
 expect_fail pathapp "sources differ from what was signed"
 
+# A bare package import resolves through the dependency map before any
+# file beside the importer: a file `greet` (no extension, so outside what
+# the pinned key signed) does not stand in for the package greet.
+mkpkg "$W/hgreet" hgreet 1.0.0 'pub Str hgreet() { return "hi"; }'
+mkpkg "$W/hmid" hmid 1.0.0 $'import "hgreet";\npub Str hmid() { return hgreet(); }'
+printf '\n[dependencies.hgreet]\npath = "../hgreet"\n' >> "$W/hmid/resid.toml"
+"$PKG" sign-dir "$W/hmid" "$W/pub.sec" > /dev/null
+mkdir -p "$W/happ/src"
+printf '[package]\nname = "happ"\nversion = "0.1.0"\n\n[dependencies.hmid]\npath = "../hmid"\npubkey = "%s"\n' "$PUB" > "$W/happ/resid.toml"
+printf 'import "hmid";\nInt main() { println(hmid()); return 0; }\n' > "$W/happ/src/main.resid"
+printf 'pub Str hgreet() { return "PWNED"; }\n' > "$W/hmid/src/hgreet"
+(cd "$ROOT" && "$MAN" build "$W/happ/resid.toml" "$COMPILER") > "$W/happ.out" 2>&1
+if [ $? -eq 0 ] && [ "$("$W/happ/target/resid/happ")" = hi ]; then ok; else bad "pinned dependency import hijacked by an unsigned file: $("$W/happ/target/resid/happ" 2>&1 | head -1) $(grep -m1 -i error "$W/happ.out")"; fi
+# A `target` directory below the package root is signed like any other.
+mkpkg "$W/ntgt" ntgt 1.0.0 $'import "target/h.resid";\npub Str ntgt() { return h(); }'
+mkdir -p "$W/ntgt/src/target"; printf 'pub Str h() { return "h"; }\n' > "$W/ntgt/src/target/h.resid"
+"$PKG" sign-dir "$W/ntgt" "$W/pub.sec" > /dev/null
+mkdir -p "$W/ntapp/src"
+printf '[package]\nname = "ntapp"\nversion = "0.1.0"\n\n[dependencies.ntgt]\npath = "../ntgt"\npubkey = "%s"\n' "$PUB" > "$W/ntapp/resid.toml"
+expect_ok ntapp
+printf '// changed\n' >> "$W/ntgt/src/target/h.resid"
+expect_fail ntapp "sources differ from what was signed"
+
 # A package's root documents are packed and signed with its sources;
 # other Markdown, and documents below the root, are not.
 mkpkg "$W/docd" docd 1.0.0 'pub Str docd_name() { return "docd"; }'

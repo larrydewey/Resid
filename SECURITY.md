@@ -372,7 +372,8 @@ name, version, dependencies and capabilities, and `resid.lock`.
 | `[signing] require_signatures = true` refuses the index on its own: a detached signature under a pinned or keyring key is then required, because a hash somebody wrote down is not a signature over it. | reqsig_noanchor, reqsig_keyring, reqsig_wrongkey, reqsig_nopubkey |
 | A modified archive is rejected. | tamperidx, tamperpin |
 | The archive must hold the package that was requested (name and version), not another package signed by the same key. | subst |
-| A path dependency with a pinned key must match what `resid-pkg sign-dir` signed. | pathapp |
+| A path dependency with a pinned key must match what `resid-pkg sign-dir` signed. Only the package's own top-level `target/` is left out of the signed set, not a `target` directory below it. | pathapp, ntapp |
+| A bare import of a dependency's name (`import "greet"`, or `greet/m.resid`) resolves through the dependency map before any file beside the importer, so a file outside the signed set (`greet`, no extension) cannot stand in for the package. | pinned dependency import hijacked by an unsigned file |
 | A dependency's package name and `root` are each one field of a depmap line: a name or root with a control character or `::` is refused, as is a name starting with `@`, so a manifest cannot write depmap lines of its own (a second entry with no ceiling, another standard library). Extraction refuses an archive entry whose name holds a control character. The driver's own `@stdlib::` line comes before the file's. | injapp, depmap line injection, extract control character in a name |
 | Extraction never writes outside the target directory. | extract path traversal |
 | A registry package names its own dependencies by version only: a `path` inside a verified archive would reach source outside what was verified, so it is refused (with a `version` too, the version is used). | sealed path dependency |

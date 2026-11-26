@@ -144,7 +144,7 @@ Int str_cmp(Str a, Str b) {
 
 // ─── source-file discovery (mirrors archive.rs's walk_sources: only
 // .resid/.toml files, recurse into subdirectories, skip a directory
-// literally named "target"; plus the package's documents at its root) ─
+// named "target" at the package root; plus the package's documents at its root) ─
 
 type FileRef = { Str abs; Str rel; };
 
@@ -213,7 +213,8 @@ List(FileRef) walk_dir(Str dir_abs, Str dir_rel) {
 @requires(filesystem(readonly))
 List(FileRef) entries_for_child(Str name, Str child_abs, Str child_rel, List(FileRef) acc) {
     if (filesystem.is_dir(child_abs)) {
-        if (name == "target") { return acc; }
+        // The package's own build directory, not a `target` below it.
+        if (name == "target" && child_rel == name) { return acc; }
         return acc.concat(walk_dir(child_abs, child_rel));
     }
     if (is_source_name(name) || (child_rel == name && is_doc_name(name))) {

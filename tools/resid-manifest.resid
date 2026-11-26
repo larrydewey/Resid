@@ -1482,7 +1482,7 @@ Str check_dep_capabilities(List(ResolvedDep) deps, List(Str) grants) {
 
 // ─── deterministic pack of a source directory (resid-pkg's `pack`) ──
 // Duplicated from tools/resid-pkg.resid (its names collide here): every
-// .resid/.toml file, sorted by path, skipping directories named "target".
+// .resid/.toml file, sorted by path, skipping the package's own "target" directory.
 type PkFile = { Str abs; Str rel; };
 
 // A package's documents at its root: README, LICENSE (or LICENCE),
@@ -1510,7 +1510,10 @@ List(PkFile) pk_walk(Str dir_abs, Str dir_rel, List(Str) names, Int i, List(PkFi
     Str rel = if (dir_rel == "") { name } else { dir_rel + "/" + name };
     Bool dir = filesystem.is_dir(abs);
     Bool src = str_ends_with(name, ".resid") || str_ends_with(name, ".toml") || str_ends_with(name, ".ll") || (dir_rel == "" && is_doc_name(name));
-    List(PkFile) acc2 = if (dir && name != "target") { pk_walk(abs, rel, sort(filesystem.list_dir(abs)), 0, acc) } else { if (!dir && src) { acc.concat([PkFile {.abs = abs, .rel = rel}]) } else { acc } };
+    // Only the package's own build directory is skipped: a `target`
+    // below it holds sources an import can reach.
+    Bool skip = dir_rel == "" && name == "target";
+    List(PkFile) acc2 = if (dir && !skip) { pk_walk(abs, rel, sort(filesystem.list_dir(abs)), 0, acc) } else { if (!dir && src) { acc.concat([PkFile {.abs = abs, .rel = rel}]) } else { acc } };
     return pk_walk(dir_abs, dir_rel, names, i + 1, acc2);
 }
 

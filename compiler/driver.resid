@@ -5531,13 +5531,17 @@ Str imp_resolve_target(Str dir, Str name, Str depmap) {
     // Normalized, so one file reached along two relative paths
     // ("../a/../lib/x.resid" and "../lib/x.resid") is one module.
     Str full = imp_normalize(if (ck_str_starts_with(name, "/")) { name } else { dir + "/" + name });
-    if (filesystem.exists(full)) { return full; }
-    Str dep = depmap_lookup(depmap, name);
+    // A dependency's name resolves through the dependency map before any
+    // file beside the importer: a file named like the package (signed or
+    // not, `greet` with no extension) must not stand in for it.
+    Bool rel = ck_str_starts_with(name, "/") || ck_str_starts_with(name, ".");
+    Str dep = if (rel) { "" } else { depmap_lookup(depmap, name) };
     if (dep != "") { return dep; }
     // `pkg/sub/m.resid`: a module of dependency pkg, beside its root.
     Str pkg = depmap_pkg_of(name);
     Str proot = if (pkg == "") { "" } else { depmap_lookup(depmap, pkg) };
     if (proot != "") { return imp_normalize(imp_dir_of(proot, str_len(proot) - 1) + "/" + str_slice(name, str_len(pkg) + 1, str_len(name))); }
+    if (filesystem.exists(full)) { return full; }
     // Not beside the importer: the standard library (an `@stdlib::dir`
     // line the driver adds to the dependency map).
     Str sd = depmap_stdlib(str_split(depmap, "\n"), 0);
