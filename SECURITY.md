@@ -215,7 +215,8 @@ Not guaranteed:
   blocked: OS randomness is not a capability.
 - **The build tree.** `-rt` still links an arbitrary extra C file without
   checks. It is a builder's flag, and an attacker who can write the build
-  tree is out of scope.
+  tree is out of scope. The provenance record names the file by SHA-256,
+  and `residc verify` prints it.
 
 ### resid-gui's font and image modules
 
@@ -394,7 +395,10 @@ name, version, dependencies and capabilities, and `resid.lock`.
 | `[signing] require_signatures = true` refuses the index on its own: a detached signature under a pinned or keyring key is then required, because a hash somebody wrote down is not a signature over it. | reqsig_noanchor, reqsig_keyring, reqsig_wrongkey, reqsig_nopubkey |
 | A modified archive is rejected. | tamperidx, tamperpin |
 | The archive must hold the package that was requested (name and version), not another package signed by the same key. | subst |
-| A path dependency with a pinned key must match what `resid-pkg sign-dir` signed. | pathapp |
+| A path dependency with a pinned key must match what `resid-pkg sign-dir` signed. Only the package's own top-level `target/` is left out of the signed set, not a `target` directory below it. | pathapp, ntapp |
+| A bare import of a dependency's name (`import "greet"`, or `greet/m.resid`) resolves through the dependency map before any file beside the importer, so a file outside the signed set (`greet`, no extension) cannot stand in for the package. | pinned dependency import hijacked by an unsigned file |
+| A dependency's package name and `root` are each one field of a depmap line: a name or root with a control character or `::` is refused, as is a name starting with `@`, so a manifest cannot write depmap lines of its own (a second entry with no ceiling, another standard library). Extraction refuses an archive entry whose name holds a control character. The driver's own `@stdlib::` line comes before the file's. | injapp, depmap line injection, extract control character in a name |
+| A dependency's `root` is a relative path inside the package: an absolute root or one with a `..` segment is refused, so a registry package's root is covered by its archive's hash, as its sources are (the sealed-path rule). | outapp, absapp |
 | Extraction never writes outside the target directory. | extract path traversal |
 | A registry package names its own dependencies by version only: a `path` inside a verified archive would reach source outside what was verified, so it is refused (with a `version` too, the version is used). | sealed path dependency |
 | A dependency declared by several packages gets the meet of the ceilings they give, whichever declaration is reached first; one without a ceiling adds no bound and drops none. | unbounded declaration first |
@@ -573,15 +577,16 @@ provenance themselves; run `residc verify` before trusting their inputs.
 | The record's `grant` is `main`'s declared `@requires`, not an empty list; a program without authority records `[]`. | grant is main's @requires, empty grant for a main without @requires |
 | When the graph artifact is signed, its sources must be the record's and every capability its nodes use must lie within the grant, with its mode: a node writing with a family the grant holds only read-only is refused. A record that lies about either, under a valid signature, is refused. | graph capability outside the signed grant, graph sources differ from the signed record |
 | The verdict says which keyring the key came from: `anchored` (`$RESID_HOME/keys`), `supplied` (`--pub`, `RESID_VERIFY_PUB`) or `local` (`keys/*.pub` in the current directory). A key found in both the install and the current directory is reported as anchored. `--anchored` refuses anything but the install's keyring. | supplied key is reported, cwd keys/ is local, RESID_HOME/keys is anchored, --anchored refuses a supplied key, --anchored refuses a local key |
-| Evidence and attestation are printed apart. The code hash, the sidecars, the detached copy, the builder (when the verifying `residc` is the one recorded) and the graph cross-checks are evidence; toolchain, profile, output and grant are attestation; sources are attestation unless `--sources DIR` re-hashes them, and then a changed or missing file is a failure. | code hash is evidence, builder compiler is evidence, another compiler: builder is attested, sources are attested without a tree, --sources re-derives, --sources catches a changed source |
+| Evidence and attestation are printed apart. The code hash, the sidecars, the detached copy and the graph cross-checks are evidence; the compiler hash (verify does not rebuild the binary, so a match with its own hash is still the signer's word), toolchain, profile, output and grant are attestation; sources are attestation unless `--sources DIR` re-hashes them, and then a changed or missing file is a failure. | code hash is evidence, builder compiler is attested, another compiler: builder is attested, sources are attested without a tree, --sources re-derives, --sources catches a changed source |
+| A C file linked with `-rt`, and a runtime IR named with `-rtr`, are recorded by path and SHA-256 (`rt`), and verify prints them as unchecked native code. | -rt build is signed, -rt file is in the record |
 | The trailer is readable by an independent implementation (Python `cbor2` + `cryptography`), which also verifies the signature and the code hash. | independent reader accepts the genuine trailer |
 | CBOR one-, two- and four-byte length forms read back; a head whose length runs past the buffer is refused. | two sources use the two-byte length form, cbor one-, two- and four-byte lengths read back |
 | A concealed payload needs `RESID_PROV_KEY`, and a wrong key fails authentication. | concealed verify without key, concealed wrong key |
 | Rebuilding the same source with the same key gives the same bytes. | reproducible |
 
-Not guaranteed: `toolchain` and `profile` are attestation only, and
-`compiler` is evidence only when the `residc` running `verify` is the
-builder (otherwise it is a hash the reader may compare by hand); a
+Not guaranteed: `toolchain`, `profile` and `compiler` are attestation
+only: a signer using another toolchain can write the stock compiler's
+hash, and only rebuilding the sources shows what produced the binary; a
 `local` key verifies the signature exactly as an anchored one does, and
 is only *named* as local -- `--anchored` is the switch that refuses it;
 the graph cross-check applies only to builds that carry a signed graph

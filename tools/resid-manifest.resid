@@ -1172,6 +1172,34 @@ DepResolveResult dep_error(DepResolveResult acc, Str err) {
     return DepResolveResult {.ok = false, .err = err, .deps = acc.deps, .seen = acc.seen};
 }
 
+// True when `s` cannot be a depmap field: it holds a control character
+// (a newline would start a line of its own) or "::", the field separator.
+Bool depmap_unsafe(Str s) {
+    return str_contains(s, "::") || has_control(s, 0, str_len(s));
+}
+
+Bool any_depmap_unsafe(List(Str) xs, Int i) {
+    if (i >= xs.len()) { return false; }
+    if (depmap_unsafe(xs[i])) { return true; }
+    return any_depmap_unsafe(xs, i + 1);
+}
+
+Bool has_control(Str s, Int i, Int n) {
+    if (i >= n) { return false; }
+    Int c = str_char_at(s, i);
+    if (c < 32 || c == 127) { return true; }
+    return has_control(s, i + 1, n);
+}
+
+// Why a dependency manifest's `root` is refused, or "".
+Str dep_root_err(Str r) {
+    if (r == "") { return "is empty"; }
+    if (depmap_unsafe(r)) { return "contains a control character or '::'"; }
+    if (str_starts_with(r, "/")) { return "'" + r + "' is absolute"; }
+    if (str_split(r, "/").contains("..")) { return "'" + r + "' leaves the package (a '..' segment)"; }
+    return "";
+}
+
 @requires(filesystem, network, clock(readonly), declassify)
 DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Bool has_caps, Str devs, Str pinned_key, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth, Bool sealed) {
     // One directory reached along two relative paths is one dependency.
@@ -1193,7 +1221,27 @@ DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Bool h
     if (dm.name == "") {
         return dep_error(acc, "dependency '" + name + "': invalid resid.toml (missing [package] name)");
     }
+    // The name and root go into the depmap as "name::root" lines, so a
+    // newline or "::" in either would write lines of its own (another
+    // dependency's root, no ceiling, another standard library).
+    if (depmap_unsafe(dm.name) || str_starts_with(dm.name, "@")) {
+        return dep_error(acc, "dependency '" + name + "': invalid package name (a control character, '::' or a leading '@')");
+    }
+    // The ceiling and the device bound are fields of the same lines; a
+    // parent's manifest writes them for its own dependencies.
+    if (any_depmap_unsafe(caps, 0) || (devs != "\x01" && depmap_unsafe(devs))) {
+        return dep_error(acc, "dependency '" + name + "': a capability or device contains a control character or '::'");
+    }
+    // The root lies inside the package: a registry archive's root is
+    // covered by its hash only there, as its sources are (sealed path).
+    Str rerr = dep_root_err(dm.root);
+    if (rerr != "") {
+        return dep_error(acc, "dependency '" + name + "': root " + rerr + "; it must be a relative path inside the package");
+    }
     Str root = dep_dir + "/" + dm.root;
+    if (depmap_unsafe(root)) {
+        return dep_error(acc, "dependency '" + name + "': directory contains a control character or '::'");
+    }
     if (!filesystem.exists(root)) {
         return dep_error(acc, "dependency '" + name + "': root source '" + root + "' not found");
     }
@@ -1437,7 +1485,7 @@ Str check_dep_capabilities(List(ResolvedDep) deps, List(Str) grants) {
 
 // ─── deterministic pack of a source directory (resid-pkg's `pack`) ──
 // Duplicated from tools/resid-pkg.resid (its names collide here): every
-// .resid/.toml file, sorted by path, skipping directories named "target".
+// .resid/.toml file, sorted by path, skipping the package's own "target" directory.
 type PkFile = { Str abs; Str rel; };
 
 // A package's documents at its root: README, LICENSE (or LICENCE),
@@ -1465,7 +1513,10 @@ List(PkFile) pk_walk(Str dir_abs, Str dir_rel, List(Str) names, Int i, List(PkFi
     Str rel = if (dir_rel == "") { name } else { dir_rel + "/" + name };
     Bool dir = filesystem.is_dir(abs);
     Bool src = str_ends_with(name, ".resid") || str_ends_with(name, ".toml") || str_ends_with(name, ".ll") || (dir_rel == "" && is_doc_name(name));
-    List(PkFile) acc2 = if (dir && name != "target") { pk_walk(abs, rel, sort(filesystem.list_dir(abs)), 0, acc) } else { if (!dir && src) { acc.concat([PkFile {.abs = abs, .rel = rel}]) } else { acc } };
+    // Only the package's own build directory is skipped: a `target`
+    // below it holds sources an import can reach.
+    Bool skip = dir_rel == "" && name == "target";
+    List(PkFile) acc2 = if (dir && !skip) { pk_walk(abs, rel, sort(filesystem.list_dir(abs)), 0, acc) } else { if (!dir && src) { acc.concat([PkFile {.abs = abs, .rel = rel}]) } else { acc } };
     return pk_walk(dir_abs, dir_rel, names, i + 1, acc2);
 }
 

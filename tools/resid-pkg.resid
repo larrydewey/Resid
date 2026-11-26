@@ -144,7 +144,7 @@ Int str_cmp(Str a, Str b) {
 
 // ─── source-file discovery (mirrors archive.rs's walk_sources: only
 // .resid/.toml files, recurse into subdirectories, skip a directory
-// literally named "target"; plus the package's documents at its root) ─
+// named "target" at the package root; plus the package's documents at its root) ─
 
 type FileRef = { Str abs; Str rel; };
 
@@ -213,7 +213,8 @@ List(FileRef) walk_dir(Str dir_abs, Str dir_rel) {
 @requires(filesystem(readonly))
 List(FileRef) entries_for_child(Str name, Str child_abs, Str child_rel, List(FileRef) acc) {
     if (filesystem.is_dir(child_abs)) {
-        if (name == "target") { return acc; }
+        // The package's own build directory, not a `target` below it.
+        if (name == "target" && child_rel == name) { return acc; }
         return acc.concat(walk_dir(child_abs, child_rel));
     }
     if (is_source_name(name) || (child_rel == name && is_doc_name(name))) {
@@ -312,9 +313,20 @@ Bool any_unsafe_seg(List(Str) segs, Int i) {
     if (segs[i] == "") { return true; }
     return any_unsafe_seg(segs, i + 1);
 }
+// A name with a control character is refused too: a dependency's root
+// is written into the depmap one line per dependency, and an entry named
+// "src/m.resid<LF>..." would let a manifest's root carry a line break.
 Bool is_unsafe_path(Str rel) {
     if (str_starts_with(rel, "/")) { return true; }
+    if (has_control_at(rel, 0, str_len(rel))) { return true; }
     return any_unsafe_seg(str_split(rel, "/"), 0);
+}
+
+Bool has_control_at(Str s, Int i, Int n) {
+    if (i >= n) { return false; }
+    Int c = str_char_at(s, i);
+    if (c < 32 || c == 127) { return true; }
+    return has_control_at(s, i + 1, n);
 }
 
 Int last_slash_idx(Str s, Int i, Int n, Int last) {

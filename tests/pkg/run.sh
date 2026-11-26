@@ -427,6 +427,29 @@ expect_ok pathapp
 printf '// changed\n' >> "$W/local/src/main.resid"
 expect_fail pathapp "sources differ from what was signed"
 
+# A bare package import resolves through the dependency map before any
+# file beside the importer: a file `greet` (no extension, so outside what
+# the pinned key signed) does not stand in for the package greet.
+mkpkg "$W/hgreet" hgreet 1.0.0 'pub Str hgreet() { return "hi"; }'
+mkpkg "$W/hmid" hmid 1.0.0 $'import "hgreet";\npub Str hmid() { return hgreet(); }'
+printf '\n[dependencies.hgreet]\npath = "../hgreet"\n' >> "$W/hmid/resid.toml"
+"$PKG" sign-dir "$W/hmid" "$W/pub.sec" > /dev/null
+mkdir -p "$W/happ/src"
+printf '[package]\nname = "happ"\nversion = "0.1.0"\n\n[dependencies.hmid]\npath = "../hmid"\npubkey = "%s"\n' "$PUB" > "$W/happ/resid.toml"
+printf 'import "hmid";\nInt main() { println(hmid()); return 0; }\n' > "$W/happ/src/main.resid"
+printf 'pub Str hgreet() { return "PWNED"; }\n' > "$W/hmid/src/hgreet"
+(cd "$ROOT" && "$MAN" build "$W/happ/resid.toml" "$COMPILER") > "$W/happ.out" 2>&1
+if [ $? -eq 0 ] && [ "$("$W/happ/target/resid/happ")" = hi ]; then ok; else bad "pinned dependency import hijacked by an unsigned file: $("$W/happ/target/resid/happ" 2>&1 | head -1) $(grep -m1 -i error "$W/happ.out")"; fi
+# A `target` directory below the package root is signed like any other.
+mkpkg "$W/ntgt" ntgt 1.0.0 $'import "target/h.resid";\npub Str ntgt() { return h(); }'
+mkdir -p "$W/ntgt/src/target"; printf 'pub Str h() { return "h"; }\n' > "$W/ntgt/src/target/h.resid"
+"$PKG" sign-dir "$W/ntgt" "$W/pub.sec" > /dev/null
+mkdir -p "$W/ntapp/src"
+printf '[package]\nname = "ntapp"\nversion = "0.1.0"\n\n[dependencies.ntgt]\npath = "../ntgt"\npubkey = "%s"\n' "$PUB" > "$W/ntapp/resid.toml"
+expect_ok ntapp
+printf '// changed\n' >> "$W/ntgt/src/target/h.resid"
+expect_fail ntapp "sources differ from what was signed"
+
 # A package's root documents are packed and signed with its sources;
 # other Markdown, and documents below the root, are not.
 mkpkg "$W/docd" docd 1.0.0 'pub Str docd_name() { return "docd"; }'
@@ -442,6 +465,57 @@ printf 'import "docd";\nInt main() { return 0; }\n' > "$W/docapp/src/main.resid"
 expect_ok docapp
 printf 'changed\n' >> "$W/docd/README.md"
 expect_fail docapp "sources differ from what was signed"
+
+# A dependency's root is one depmap field: a line break in it would write
+# depmap lines of its own (a second entry for it with no ceiling, another
+# standard library), so a root with a control character is refused.
+mkpkg "$W/inj" inj 1.0.0 $'@requires(filesystem(readonly))\npub Bool inj_etc() { return filesystem.exists("/etc"); }'
+printf 'root = "src/main.resid\\n#.resid"\n' >> "$W/inj/resid.toml"
+cp "$W/inj/src/main.resid" "$W/inj/src/main.resid"$'\n''#.resid'
+mkdir -p "$W/injapp/src"
+printf '[package]\nname = "injapp"\nversion = "0.1.0"\n\n[capabilities]\ngrant = ["filesystem"]\n\n[dependencies.inj]\npath = "../inj"\ncapabilities = []\n' > "$W/injapp/resid.toml"
+printf 'import "inj";\n@requires(filesystem(readonly))\nInt main() { if (inj_etc()) { println("yes"); } return 0; }\n' > "$W/injapp/src/main.resid"
+expect_fail injapp "root contains a control character"
+(cd "$ROOT" && "$MAN" depmap "$W/injapp/resid.toml" "$W/injapp.depmap") > /dev/null 2>&1
+if [ ! -s "$W/injapp.depmap" ]; then ok; else bad "depmap line injection: $(cat "$W/injapp.depmap")"; fi
+# The driver's own `@stdlib::` line comes before the depmap file's, so a
+# `@stdlib::` line in the file cannot replace the standard library.
+mkdir -p "$W/fakestd" "$W/stdh"
+printf 'pub Int clock_now_seconds() { return 0; }\npub Str stdh_mark() { return "HIJACKED"; }\n' > "$W/fakestd/clock.resid"
+printf '@stdlib::%s\n' "$W/fakestd" > "$W/stdh/depmap"
+printf 'import "clock.resid";\nInt main() { println(stdh_mark()); return 0; }\n' > "$W/stdh/main.resid"
+(cd "$W/stdh" && "$COMPILER" main.resid -o stdh -depmap depmap --profile debug) > "$W/stdh.out" 2>&1
+if [ ! -x "$W/stdh/stdh" ] && grep -q "unknown function stdh_mark" "$W/stdh.out"; then ok; else bad "depmap @stdlib line replaced the standard library: $("$W/stdh/stdh" 2>&1 | head -1) $(grep -m1 -i error "$W/stdh.out")"; fi
+# ... and an archive entry with one is not extracted.
+python3 - "$W/ctl.resid-pkg" <<'PY'
+import struct, sys
+entries = [(b"ok.resid", b"z"), (b"src/m.resid\n#.resid", b"x")]
+out = b"RESIDPKG1" + struct.pack("<I", len(entries))
+for p, c in entries:
+    out += struct.pack("<H", len(p)) + p + struct.pack("<Q", len(c)) + c
+open(sys.argv[1], "wb").write(out)
+PY
+mkdir -p "$W/ctl"
+"$PKG" extract "$W/ctl" "$W/ctl" > /dev/null 2>&1
+if [ -f "$W/ctl/ok.resid" ] && [ ! -e "$W/ctl/src/m.resid"$'\n''#.resid' ]; then ok; else bad "extract control character in a name"; fi
+
+# A registry package's root lies inside its verified archive (the sealed
+# path rule): a root that leaves it would compile source nobody hashed.
+mkpkg "$W/outr" outr 1.0.0 'pub Str outr() { return "inside"; }'
+printf 'root = "../../../../../outside.resid"\n' >> "$W/outr/resid.toml"
+mkdir -p "$W/outreg"; "$PKG" publish "$W/outr" "$W/outreg" > /dev/null 2>&1
+mkdir -p "$W/outapp/src"
+printf '[package]\nname = "outapp"\nversion = "0.1.0"\n\n[registry]\npath = "../outreg"\n\n[signing]\nallow_unsigned = true\n\n[dependencies.outr]\nversion = "1.0.0"\n' > "$W/outapp/resid.toml"
+printf 'import "outr";\nInt main() { println(outr()); return 0; }\n' > "$W/outapp/src/main.resid"
+# From the cache (outapp/target/resid/deps/outr-1.0.0-<h>), five up is $W.
+printf 'pub Str outr() { return "outside"; }\n' > "$W/outside.resid"
+expect_fail outapp "leaves the package"
+# A path dependency's root, likewise: absolute, or above the package.
+mkpkg "$W/absr" absr 1.0.0 'pub Str absr() { return "x"; }'
+printf 'root = "%s"\n' "$W/absr/src/main.resid" >> "$W/absr/resid.toml"
+mkdir -p "$W/absapp/src"
+printf '[package]\nname = "absapp"\nversion = "0.1.0"\n\n[dependencies.absr]\npath = "../absr"\n' > "$W/absapp/resid.toml"
+expect_fail absapp "is absolute"
 
 # Extraction never writes outside the target directory.
 python3 - "$W/trav.resid-pkg" <<'PY'
