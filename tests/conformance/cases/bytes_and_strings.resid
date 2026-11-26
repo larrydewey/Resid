@@ -1,0 +1,46 @@
+// resid_bytes_append_str pushes a string's UTF-8 bytes onto a builder;
+// resid_str_from_bytes reads a byte range as UTF-8, a malformed byte (and
+// NUL) as U+FFFD: checked against the same decoder written out here.
+Str slow(List(UInt(8)) b, Int i, Int end, StrBuf acc) {
+    if (i >= end) { return acc.finish(); }
+    Int c = (Int) b[i];
+    Int m = if (c < 128) { 0 } else if (c >= 240 && c < 248) { 3 } else if (c >= 224) { 2 } else if (c >= 192) { 1 } else { -1 };
+    Int mask = if (m == 0) { 127 } else if (m == 1) { 31 } else if (m == 2) { 15 } else { 7 };
+    Int cp = if (m < 0 || i + m >= end + (if (m == 0) { 1 } else { 0 })) { -1 } else { cont(b, i + 1, m, c & mask) };
+    if (cp <= 0) { return slow(b, i + 1, end, acc.push_char(65533)); }
+    return slow(b, i + 1 + m, end, acc.push_char(cp));
+}
+
+Int cont(List(UInt(8)) b, Int i, Int m, Int acc) {
+    if (m == 0) { return acc; }
+    Int c = (Int) b[i];
+    if ((c & 192) != 128) { return -1; }
+    return cont(b, i + 1, m - 1, (acc << 6) | (c & 63));
+}
+
+List(UInt(8)) bytes(List(Int) xs, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return bytes(xs, i + 1, acc.push((UInt(8)) xs[i]));
+}
+
+Int agree(List(List(Int)) cases, Int i, Int bad) {
+    if (i >= cases.len()) { return bad; }
+    List(UInt(8)) b = bytes(cases[i], 0, ListBuf());
+    Bool whole = resid_str_from_bytes(b, 0, b.len()) == slow(b, 0, b.len(), StrBuf());
+    Bool tail = b.len() < 2 || resid_str_from_bytes(b, 1, b.len() - 1) == slow(b, 1, b.len(), StrBuf());
+    return agree(cases, i + 1, bad + (if (whole && tail) { 0 } else { 1 }));
+}
+
+Int main() {
+    Str s = "plain text, then é, € and 😀";
+    ListBuf(UInt(8)) b0 = ListBuf();
+    List(UInt(8)) b = resid_bytes_append_str(resid_bytes_append_str(b0, s), "!").finish();
+    println(f"{b.len()} {resid_str_from_bytes(b, 0, b.len()) == s + "!"} {resid_str_from_bytes(b, 0, 5)} {str_len(resid_str_from_bytes(b, 17, b.len() - 17))}");
+    ListBuf(UInt(8)) e0 = ListBuf();
+    println(f"{resid_bytes_append_str(e0, "").finish().len()} {str_len(resid_str_from_bytes(b, 3, 0))}");
+    List(List(Int)) cases = [[104, 105], [195, 169], [226, 130, 172], [240, 159, 152, 128], [255], [195], [226, 130], [0, 65], [237, 160, 128],
+        [192, 128], [193, 129], [248, 129, 130], [128, 191, 65], [65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 0, 76], [65, 66, 67, 68, 69, 70, 71, 72, 200, 65, 66]];
+    println(f"{agree(cases, 0, 0)} of {cases.len()} differ");
+    println(resid_str_from_bytes(bytes([65, 255, 66, 0, 67], 0, ListBuf()), 0, 5));
+    return 0;
+}
