@@ -24,7 +24,7 @@ pub List(Str) vp_pins() {
         "cosesig.resid=965b0656df16640e83eec2a692ae8b3473b792ab91624c64377b0e78ecf672bd",
         "crypto.resid=7605b9a725d6509b172c2ce884fa755a4e6d0ceaca89aa2d48dbb8f6ab587954",
         "der.resid=1f9c52245ced499a287e6fa954fc3003cbe7af2018e61097dd4a662cc54b2be6",
-        "dev/device.resid=5eb9a5193df8579425529610cbc6b5094685e82751da23f7e74e4be059bd516c",
+        "dev/device.resid=f4e4158ba85ffeb5901501159af4af25cfe9742ba4d389dc799d6aa160203344",
         "dev/device_write.resid=4d3caa2d08b98bdb89bc3d2a27aab60b357cb7616f1df9952c856d242ea39710",
         "dev/sev_guest.resid=3e6353b34826a5a9e5d7e5074e62ad16bc0fce1ad09e81fa5f52d1180cd3f546",
         "dev/sev_guest_key.resid=127d5b0fbe9351d2d7f51f24e2ebfa54193875f6f9d2404a655f0ba6a7243848",

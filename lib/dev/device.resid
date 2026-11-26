@@ -1213,6 +1213,7 @@ pub Result(List(DevOut), DeviceError) dv_session_answer(Str name, Result(List(De
 
 Str dv_session_why(Str why) {
     if (str_ends_with(why, "request (71)")) { return "the session has ended"; }
+    if (str_ends_with(why, "request (80)")) { return "a kernel driver holds the function, or it masters the bus: its registers are written outside VFIO only when neither is so"; }
     if (str_ends_with(why, "request (70)")) { return "eight sessions are open on this thread already"; }
     if (str_ends_with(why, "request (72)")) { return "the session's host refused the access"; }
     if (str_ends_with(why, "request (76)")) { return "the batch is not 1 to 256 whole operations within 64 KiB, with 64 KiB of answers at most"; }
