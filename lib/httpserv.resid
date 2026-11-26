@@ -277,6 +277,10 @@ HsHeaders hs_headers(List(Str) lines, Int i, Map(Str, Str) acc, Int limit) {
     Str value = str_trim(str_slice(line, colon + 1, str_len(line)));
     Str key = str_to_lower(name);
     Option(Str) prior = acc.get(key);
+    // A second Host is refused, not merged (RFC 9112 §3.2): a proxy that
+    // routes on one and a handler that reads both would disagree.
+    Bool dup_host = match prior { Some(old) => key == "host", None => false };
+    if (dup_host) { return hs_headers_err("400"); }
     Str merged = match prior { Some(old) => old + ", " + value, None => value };
     return hs_headers(lines, i + 1, acc.insert(key, merged), limit);
 }
@@ -337,6 +341,9 @@ HttpRequest hs_parse_head(List(UInt(8)) b, Int end) {
     if (hh.err != "") { return hs_reject(str_parse_int(hh.err)); }
     Map(Str, Str) headers = hh.map;
     if (version == "HTTP/1.1" && !headers.contains("host")) { return hs_reject(400); }
+    // One authority: a list or a value with whitespace inside is no host.
+    Str host = headers.get("host") else { "" };
+    if (str_index_of(host, ",", 0) >= 0 || str_index_of(host, " ", 0) >= 0 || str_index_of(host, "\t", 0) >= 0) { return hs_reject(400); }
     Int q = str_index_of(target, "?", 0);
     Str path = if (q >= 0) { str_slice(target, 0, q) } else { target };
     Str query = if (q >= 0) { str_slice(target, q + 1, str_len(target)) } else { "" };
@@ -427,9 +434,7 @@ HsReq(T) hs_read_chunked(HttpRequest r, HsBuf(T) b0, Int at, HttpLimits lim, Lis
     // differently.
     if (!hs_ctl_free(b.data, at, ln.end)) { return hs_fail(400, b); }
     Str line = hs_ascii(b.data, at, ln.end, StrBuf());
-    Int semi = str_index_of(line, ";", 0);
-    Str hexs = str_trim(if (semi >= 0) { str_slice(line, 0, semi) } else { line });
-    Int size = hs_hex(hexs, 0, 0);
+    Int size = hs_chunk_size(line);
     if (size < 0) { return hs_fail(400, b); }
     Int data_at = ln.end + 2;
     if (size == 0) {
@@ -514,6 +519,24 @@ HsHead(T) hs_read_line_at(HsBuf(T) b, Int start, Int from, Int max) {
 }
 
 // Hex digits to a value; -1 on a non-digit or an empty string.
+// The size on a chunk-size line, or -1. The hex digits start the line;
+// only SP or HTAB (BWS) may follow them, before a `;` extension or the
+// end (RFC 9112 §7.1). Whitespace before the size is refused: a proxy
+// that reads ` 5` differently frames the body differently.
+Int hs_chunk_size(Str line) {
+    Int semi = str_index_of(line, ";", 0);
+    Str field = if (semi >= 0) { str_slice(line, 0, semi) } else { line };
+    return hs_hex(str_slice(field, 0, hs_bws_end(field, str_len(field))), 0, 0);
+}
+
+// `e` moved back over trailing SP and HTAB in `s`.
+Int hs_bws_end(Str s, Int e) {
+    if (e <= 0) { return e; }
+    Int c = str_char_at(s, e - 1);
+    if (c != 32 && c != 9) { return e; }
+    return hs_bws_end(s, e - 1);
+}
+
 Int hs_hex(Str s, Int i, Int acc) {
     if (i >= str_len(s)) { return if (i == 0) { -1 } else { acc }; }
     if (i >= 8) { return -1; }
@@ -772,8 +795,7 @@ HsFrame hs_chunks(List(UInt(8)) b, HsFrame f, HttpLimits lim) {
         return hs_chunks(b, hs_frame_chunk(f, at + 2, 2, f.total, f.lines + 1), lim);
     }
     Str line = hs_ascii(b, f.cpos, at, StrBuf());
-    Int semi = str_index_of(line, ";", 0);
-    Int size = hs_hex(str_trim(if (semi >= 0) { str_slice(line, 0, semi) } else { line }), 0, 0);
+    Int size = hs_chunk_size(line);
     if (size < 0 || f.total + size > lim.body_max) { return hs_frame_ready(f); }
     if (size == 0) { return hs_chunks(b, hs_frame_chunk(f, at + 2, 2, f.total, 0), lim); }
     if (f.lines >= hs_chunks_max()) { return hs_frame_ready(f); }
