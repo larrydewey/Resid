@@ -118,11 +118,11 @@ Int fdq_close_at(Int q, Int i, Int n) {
 
 // ─── Connecting ───────────────────────────────────────────────────────
 
-// Is this fd a connected socket? The same test the TCP builtins make, and
-// it holds for a Unix one too (S_IFSOCK), which is what lets a display
+// Is this fd a Unix-domain socket? The same test the TCP builtins make,
+// and it holds for a Unix one too (S_IFSOCK), which is what lets a display
 // fd be polled with resid_tcp_poll. Its domain must be AF_UNIX too, so a
 // TCP socket the program holds is not a display.
-Bool disp_sock_ok(Int fd) {
+Bool unix_sock_ok(Int fd) {
     if (fd < 0) { return false; }
     Int b = resid_raw_tls("disp_sock_stat", 144);
     if (resid_raw_syscall(5, fd, b, 0, 0, 0, 0) != 0 || (ld32(b + st_mode_at()) & 61440) != 49152) { return false; }
@@ -130,6 +130,61 @@ Bool disp_sock_ok(Int fd) {
     Int lenp = resid_raw_tls("disp_sock_dom_len", 4);
     _ = st32(dom, 0) + st32(lenp, 4);
     return resid_raw_syscall(55, fd, 1, 39, dom, lenp, 0) == 0 && ld32(dom) == 1;   // SOL_SOCKET, SO_DOMAIN
+}
+
+// ─── Which family made a socket ───────────────────────────────────────
+// Being a Unix socket is not enough: the program may hold the PTY broker's
+// pair (`process`), the accessibility bus (`accessibility`) and its own
+// resid_unix_* connections (`network`) beside its display connection, and
+// a display verb must reach none of them. So each family marks the
+// sockets it makes, one word per descriptor below 65536: the family in
+// the low byte and the socket's inode above it. A descriptor closed some
+// other way and its number reused by a new socket keeps a stale word, but
+// the inode no longer matches, so the mark is not inherited.
+pub Int fam_display() { return 1; }
+pub Int fam_a11y() { return 2; }
+pub Int fam_broker() { return 3; }
+
+Int fam_table() { return resid_raw_global("rt_fd_fam", 524288); }
+
+// The inode of the socket at fd, or -1 when fd is not a socket.
+Int sock_ino(Int fd) {
+    Int b = resid_raw_tls("fam_stat", 144);
+    if (resid_raw_syscall(5, fd, b, 0, 0, 0, 0) != 0 || (ld32(b + st_mode_at()) & 61440) != 49152) { return 0 - 1; }
+    return ld64(b + 8);   // st_ino, at 8 on x86-64 and AArch64
+}
+
+pub Int fd_fam_set(Int fd, Int fam) {
+    if (fd < 0 || fd >= 65536) { return 0; }
+    Int ino = sock_ino(fd);
+    return st64(fam_table() + fd * 8, if (ino >= 0) { (ino << 8) | fam } else { 0 });
+}
+
+pub Int fd_fam_clear(Int fd) { return if (fd >= 0 && fd < 65536) { st64(fam_table() + fd * 8, 0) } else { 0 }; }
+
+// The family that marked the socket now at fd, or 0.
+pub Int fd_fam(Int fd) { return if (fd >= 0 && fd < 65536 && ld64(fam_table() + fd * 8) != 0) { fd_fam_ino(fd, sock_ino(fd)) } else { 0 }; }
+
+// The same, for a socket whose inode the caller already read.
+Int fd_fam_ino(Int fd, Int ino) {
+    if (fd < 0 || fd >= 65536 || ino < 0) { return 0; }
+    Int w = ld64(fam_table() + fd * 8);
+    return if (w != 0 && ((w >> 8) & 72057594037927935) == (ino & 72057594037927935)) { w & 255 } else { 0 };
+}
+
+// Marks fd (when it is one) as the family's; fd either way.
+Int fam_mark(Int fd, Int fam) { return if (fd >= 0) { fd_fam_set(fd, fam) * 0 + fd } else { fd }; }
+
+// May the display verbs use fd? A socket the display connected or paired,
+// or the accessibility bus where the force-time guard grants
+// `accessibility` (an AT-SPI client speaks D-Bus over the display
+// transport). Never the broker, a resid_unix_* socket or any other.
+Bool disp_sock_ok(Int fd) {
+    if (!unix_sock_ok(fd)) { return false; }
+    // unix_sock_ok's fstat left the inode in its buffer: no second call.
+    Int f = fd_fam_ino(fd, ld64(resid_raw_tls("disp_sock_stat", 144) + 8));
+    if (f == fam_display()) { return true; }
+    return f == fam_a11y() && rt_cap_granted(resid_raw_addr("accessibility")) == 1;
 }
 
 Int sa_buf() { return resid_raw_tls("disp_sa", 112); }
@@ -203,7 +258,7 @@ pub Int rt_disp_connect_wayland() {
     Int rt = c_getenv(resid_raw_addr("XDG_RUNTIME_DIR"));
     if (rt == 0 || ld8(rt) == 0) { return 0 - 1; }
     Int sa = sa_under(rt, wd);
-    return if (sa >= 0) { unix_connect(sa) } else { 0 - 1 };
+    return if (sa >= 0) { fam_mark(unix_connect(sa), fam_display()) } else { 0 - 1 };
 }
 
 // A Resid Surface Protocol host shell alone: the descriptor its parent
@@ -225,14 +280,14 @@ pub Int rt_disp_connect_rsp() {
 @export("resid_a11y_connect", "i64()")
 pub Int rt_a11y_connect() {
     Int env = c_getenv(resid_raw_addr("AT_SPI_BUS_ADDRESS"));
-    if (env != 0 && ld8(env) != 0) { return bus_open(env); }
+    if (env != 0 && ld8(env) != 0) { return fam_mark(bus_open(env), fam_a11y()); }
     Int sess = c_getenv(resid_raw_addr("DBUS_SESSION_BUS_ADDRESS"));
     if (sess == 0 || ld8(sess) == 0) { return 0 - 1; }
     Int sfd = bus_open(sess);
     if (sfd < 0) { return 0 - 1; }
     Int addr = bus_a11y_address(sfd);
     _ = sys_close(sfd);
-    return if (addr == 0) { 0 - 1 } else { bus_open(addr) };
+    return if (addr == 0) { 0 - 1 } else { fam_mark(bus_open(addr), fam_a11y()) };
 }
 
 // A D-Bus address list's first Unix-domain entry, connected and through
@@ -415,15 +470,35 @@ Int bus_reply_serial(Int m, Int p0, Int e) {
 pub Int rt_disp_connect_x11() {
     Int dpy = c_getenv(resid_raw_addr("DISPLAY"));
     if (dpy == 0 || ld8(dpy) == 0) { return 0 - 1; }
-    return x11_connect(dpy);
+    return fam_mark(x11_connect(dpy), fam_display());
 }
 
-// The descriptor number in an environment value, or -1. Nothing is opened
-// here, so nothing can tell yet whether it is a socket; the first send or
-// receive can.
+// The descriptor a launcher passed in WAYLAND_SOCKET or RSP_SOCKET is
+// adopted once, at startup (rt_run_main), before the program can make a
+// descriptor of its own: if it is a Unix-domain socket it gets the
+// display's mark and close-on-exec (as libwayland does), so no command
+// the program runs inherits the connection. Adopting it later would take
+// whatever the number names by then: a launcher's stale variable, or a
+// number closed and reused for the PTY broker, the accessibility bus, a
+// native module or a resid_unix_* connection.
+pub Int disp_adopt_env() {
+    _ = disp_adopt(c_getenv(resid_raw_addr("WAYLAND_SOCKET")));
+    return disp_adopt(c_getenv(resid_raw_addr("RSP_SOCKET")));
+}
+
+Int disp_adopt(Int v) {
+    if (v == 0) { return 0; }
+    Int n = disp_dec(v);
+    if (n < 0 || n >= 65536 || !unix_sock_ok(n)) { return 0; }
+    _ = resid_raw_syscall(72, n, 2, 1, 0, 0, 0);   // F_SETFD FD_CLOEXEC
+    return fd_fam_set(n, fam_display());
+}
+
+// The descriptor number in an environment value, or -1 unless it is the
+// display socket adopted at startup (and not closed since).
 Int disp_inherited(Int v) {
     Int n = disp_dec(v);
-    return if (n >= 0) { n } else { 0 - 1 };
+    return if (n >= 0 && fd_fam(n) == fam_display()) { n } else { 0 - 1 };
 }
 
 Int disp_dec(Int p) {
@@ -473,6 +548,7 @@ pub Int rt_disp_pair() {
     Int fds = resid_raw_tls("disp_pair", 8);
     _ = st32(fds, 0) + st32(fds + 4, 0);
     if (resid_raw_syscall(53, 1, 1 | 524288, 0, fds, 0, 0) != 0) { return xempty_list(); }
+    _ = fam_mark(ld32(fds), fam_display()) + fam_mark(ld32(fds + 4), fam_display());
     Int slots = xmalloc(16);
     _ = st64(slots, ld32(fds) + 18295873486192640) + st64(slots + 8, ld32(fds + 4) + 18295873486192640);
     Int out = c_list_new(2, slots, resid_raw_addr("List"));
@@ -601,10 +677,12 @@ pub Int rt_disp_recv_fd() { return fdq_pop(); }
 @export("resid_disp_close", "i8(i64)")
 pub Int rt_disp_close(Int fd) {
     if (fd < 0 || !disp_sock_ok(fd)) { return 0; }
-    // The number may be reused by the next open: it was never received.
+    // The number may be reused by the next open: it was never received,
+    // and it is no longer the display's.
     _ = fdq_lock();
     _ = rx_mark(fd, 0);
     _ = fdq_unlock();
+    _ = fd_fam_clear(fd);
     return if (sys_close(fd) == 0) { 1 } else { 0 };
 }
 

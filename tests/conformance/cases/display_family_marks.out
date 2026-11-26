@@ -1,0 +1,10 @@
+broker true
+display reached the broker: false
+broker child ran: false
+display pair: 3
+unix true
+display send on a unix connection: false
+bytes at the server: 0
+pty_open on a display socket: 0
+request at the display peer: [0]
+pty_open on the broker: 2

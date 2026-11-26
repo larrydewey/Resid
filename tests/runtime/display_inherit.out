@@ -1,0 +1,6 @@
+connect: 3
+send: true
+inherited by a command: false
+launcher got: b'hi'
+broker took the number: true
+connect: -1

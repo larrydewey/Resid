@@ -176,6 +176,18 @@ if (cd "$ROOT" && "$COMPILER" "$W/nodisplay.resid" -o "$W/nodisplay") > "$W/nodi
 else
     fail=$((fail + 1)); echo "FAIL display connect with no display: $(grep -m1 -i error "$W/nodisplay.log")"
 fi
+# A display socket the launcher passes (RSP_SOCKET) is adopted at startup
+# and made close-on-exec; a number that named nothing at startup, later
+# taken by the PTY broker, is not a display (display_inherit.py).
+if command -v python3 > /dev/null; then
+    if (cd "$ROOT" && "$COMPILER" tests/runtime/display_inherit.resid -o "$W/dinh") > "$W/dinh.log" 2>&1 \
+        && { python3 display_inherit.py "$W/dinh" pass; python3 display_inherit.py "$W/dinh" stale; } > "$W/dinh.out" 2>&1 \
+        && cmp -s "$W/dinh.out" display_inherit.out; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL inherited display socket: $(grep -m1 -i error "$W/dinh.log") $(diff "$W/dinh.out" display_inherit.out 2>/dev/null | head -4 | tr '\n' ' ')"
+    fi
+fi
 # `residc test`: the generated test entry point is a complete process.
 if (cd "$ROOT" && "$COMPILER" test examples/math_test.resid) > "$W/tm.log" 2>&1 && grep -q "Failures: 0 | Passed: 6" "$W/tm.log"; then
     pass=$((pass + 1))

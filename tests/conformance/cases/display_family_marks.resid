@@ -1,0 +1,54 @@
+// Display verbs reach only the sockets the display made (spec §20): a
+// dependency granted `display` alone cannot drive the PTY broker the
+// program made under `process` (which would start the broker's command),
+// nor send on the program's resid_unix_* connections. The broker's verbs
+// in turn refuse a display socket. The display's own sockets still work.
+sandbox (display) {
+    // A broker request, op 1 with rows 24 << 16 | cols 80, as 16
+    // little-endian bytes; the pid that answers, or -1 when refused.
+    Int probe(Int fd) {
+        List(Int) req = [1, 0, 0, 0, 0, 0, 0, 0, 80, 0, 24, 0, 0, 0, 0, 0];
+        if (!resid_disp_send(fd, req, -1)) { return -1; }
+        List(Int) ans = resid_disp_recv(fd, 8);
+        Int m = resid_disp_recv_fd();
+        if (ans.len() != 8) { return -2; }
+        return ans[0] + ans[1] * 256 + ans[2] * 65536;
+    }
+    Bool poke(Int fd) { return resid_disp_send(fd, [104, 105], -1); }
+    Int pair_roundtrip() {
+        List(Int) p = resid_disp_pair();
+        if (!resid_disp_send(p[0], [1, 2, 3], -1)) { return -1; }
+        Int n = resid_disp_recv(p[1], 16).len();
+        _ = resid_disp_close(p[0]);
+        _ = resid_disp_close(p[1]);
+        return n;
+    }
+}
+
+@requires(process, display, clock, network, filesystem(readonly))
+Int main() {
+    Int b = resid_pty_broker("/usr/bin/touch @TMP@/spawned_by_display");
+    println(f"broker {b >= 0}");
+    Int got = probe(b);
+    _ = clock.sleep_ns(300000000);
+    println(f"display reached the broker: {got > 0}");
+    println(f"broker child ran: {filesystem.exists("@TMP@/spawned_by_display")}");
+    println(f"display pair: {pair_roundtrip()}");
+
+    Int l = resid_unix_listen("@TMP@/ux/u.sock");
+    Int c = resid_unix_connect("@TMP@/ux/u.sock");
+    Int a = resid_unix_accept(l);
+    println(f"unix {l >= 0 && c >= 0 && a >= 0}");
+    println(f"display send on a unix connection: {poke(c)}");
+    _ = resid_unix_deadline(a, 200);
+    println(f"bytes at the server: {resid_unix_recv_some(a, 16).len()}");
+
+    // The broker's verbs on a display socket: nothing is written to it.
+    List(Int) p = resid_disp_pair();
+    _ = resid_disp_send(p[1], [5, 0, 0, 0, 0, 0, 0, 0], -1);
+    println(f"pty_open on a display socket: {resid_pty_open(p[0], 24, 80).len()}");
+    println(f"request at the display peer: {resid_disp_poll([p[1]], [1], 100)}");
+    // And the broker still serves the program's own process code.
+    println(f"pty_open on the broker: {resid_pty_open(b, 24, 80).len()}");
+    return 0;
+}

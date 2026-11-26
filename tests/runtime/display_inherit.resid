@@ -1,0 +1,28 @@
+// The display socket a launcher passes in RSP_SOCKET (display_inherit.py
+// runs this). Mode "pass": the number is a socket at startup, so it is
+// adopted: connecting answers it, a send reaches the launcher, and a
+// command the program runs does not inherit it. Mode "stale": the number
+// names nothing at startup and the PTY broker takes it later; connecting
+// must refuse it, so display code never reaches the broker.
+sandbox (display) {
+    Int connect() { return resid_disp_connect_rsp(); }
+    Bool hello(Int fd) { return resid_disp_send(fd, [104, 105], -1); }
+}
+
+@requires(process, display, environment)
+Int main() {
+    Str mode = environment.get("MODE");
+    if (mode == "stale") {
+        Int b = resid_pty_broker("/bin/true");
+        Int fd = connect();
+        println(f"broker took the number: {b == 3}");
+        println(f"connect: {fd}");
+        return 0;
+    }
+    Int fd = connect();
+    println(f"connect: {fd}");
+    println(f"send: {hello(fd)}");
+    Bool held = process.run(f"test -e /proc/self/fd/{fd}") == 0;
+    println(f"inherited by a command: {held}");
+    return 0;
+}

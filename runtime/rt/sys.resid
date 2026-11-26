@@ -757,8 +757,12 @@ pub Int rt_pty_broker(Int cmd) {
     }
     _ = sys_close(b) + free_argv(argv);
     if (pid < 0) { return sys_close(a) * 0 - 1; }
-    return a;
+    // Marked as the broker's: only resid_pty_open and resid_pty_status
+    // talk to it, and no display or network verb reaches it.
+    return fd_fam_set(a, fam_broker()) * 0 + a;
 }
+
+Bool broker_ok(Int fd) { return fd_fam(fd) == fam_broker(); }
 
 Int broker_loop(Int b, Int argv) {
     Int req = resid_raw_tls("brk_req", 16);
@@ -790,6 +794,7 @@ Int broker_reply(Int b, Int v, Int fd) {
 // A pseudo-terminal from the broker: [master, pid], or empty.
 @export("resid_pty_open", "ptr(i64,i64,i64)")
 pub Int rt_pty_open(Int broker, Int rows, Int cols) {
+    if (!broker_ok(broker)) { return xempty_list(); }
     Int req = resid_raw_tls("brk_q", 16);
     _ = st64(req, 1) + st64(req + 8, (clamp(rows, 1, 4096) << 16) | clamp(cols, 1, 4096));
     if (resid_raw_syscall(1, broker, req, 16, 0, 0, 0) != 16) { return xempty_list(); }
@@ -814,6 +819,7 @@ pub Int rt_pty_open(Int broker, Int rows, Int cols) {
 // A broker child's status: -1 while it runs, else as resid_pty_wait.
 @export("resid_pty_status", "i64(i64,i64)")
 pub Int rt_pty_status(Int broker, Int pid) {
+    if (!broker_ok(broker)) { return 255; }
     Int req = resid_raw_tls("brk_q", 16);
     _ = st64(req, 2) + st64(req + 8, pid);
     if (resid_raw_syscall(1, broker, req, 16, 0, 0, 0) != 16) { return 255; }
@@ -1414,6 +1420,9 @@ Int stack_mb() {
 pub Int rt_run_main(Int f) {
     _ = check_address_space();
     _ = st64(main_pid_w(), resid_raw_syscall(39, 0, 0, 0, 0, 0, 0));   // getpid
+    // A display socket the launcher passed is adopted before anything
+    // else can take a descriptor number (disp_adopt_env, unix.resid).
+    _ = disp_adopt_env();
     Int slot = xmalloc(16);
     _ = st64(slot, f);
     Int t = thread_spawn(resid_raw_fn("main_thread"), slot, stack_mb() * 1048576);
