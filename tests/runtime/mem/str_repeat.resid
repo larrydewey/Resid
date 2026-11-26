@@ -1,0 +1,29 @@
+// str_repeat in a loop and under scoped recursion: its result is region
+// memory like every other string verb's, so each step's padding is
+// reclaimed (run.sh sets RESID_MEM_LIMIT). A runtime that allocates it on
+// the heap keeps every one: about 50 bytes a step, 250 MB here.
+Int run(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Str pad = str_repeat("-", i % 40 + 8);
+    return run(i + 1, n, acc + str_len(pad));
+}
+
+Int pad_len(Int i) { return str_len(str_repeat("ab", i % 13)); }
+
+// Plain recursion, a scalar result: each level's scope covers the helper.
+Int deep(Int i, Int n) {
+    if (i >= n) { return 0; }
+    return pad_len(i) + deep(i + 1, n);
+}
+
+Int sweep(Int k, Int n, Int acc) {
+    if (k >= n) { return acc; }
+    return sweep(k + 1, n, acc + deep(0, 1000));
+}
+
+Int main() {
+    println(f"{run(0, 5000000, 0)}");
+    println(f"{sweep(0, 2000, 0)}");
+    println(str_repeat("xy", 3) + str_repeat("z", 0) + str_repeat("", 5));
+    return 0;
+}

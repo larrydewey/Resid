@@ -403,6 +403,16 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/generations.resid -o "$W/generat
 else
     fail=$((fail + 1)); echo "FAIL loop generations: $(tail -1 "$W/generations.out" "$W/generations.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# str_repeat's result is region memory (strutil.resid), so a loop and a
+# scoped recursion that pad with it keep none of it. Measured: 4 MB; the
+# runtime that took it from the heap kept every one (250 MB).
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/str_repeat.resid -o "$W/str_repeat") > "$W/str_repeat.log" 2>&1 \
+    && RESID_MEM_LIMIT=24 timeout 120 "$W/str_repeat" > "$W/str_repeat.out" 2>&1 \
+    && [ "$(tr '\n' ' ' < "$W/str_repeat.out")" = "137500000 23976000 xyxyxy " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL str_repeat in a loop: $(tail -1 "$W/str_repeat.out" "$W/str_repeat.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # Volatile raw loads and stores (lower.resid): two processes pass a counter
 # through a shared page, each polling with resid_raw_loadv64; a plain load
 # is hoisted out of the loop and the program never ends. Built from its own
