@@ -1,0 +1,107 @@
+// `for` and `while` loops whose bodies allocate and carry nothing
+// (lower.resid, lw_iter): each step's garbage is freed by the loop's own
+// region, so memory stays flat however many steps run. run.sh runs every
+// shape at n and at 10 n under RESID_MEM_LIMIT; the compiler before gave
+// these loops no region and kept every step's garbage (140 to 470 MB at
+// 2 million steps).
+//
+// Usage: iter_loops SHAPE N (or iter_loops while FILE); prints a few
+// checkpoints, so the values read back are checked as well as the memory.
+
+type Req = { Str path; List(Str) headers; Int len; };
+type Row = { Int id; Str name; Int score; };
+
+Req parse(Int i) { return Req {.path = "/p/" + str_slice("0123456789", i % 10, i % 10 + 1), .headers = ["h", f"x: {i}"], .len = i % 7}; }
+Str handle(Req r) { return "200 " + r.path + " " + r.headers[1]; }
+Bool keep(Str s) { return str_len(s) > 1000000; }
+
+// Prints a checkpoint every n / 4 steps (and none when n < 4).
+Bool mark(Int i, Int n, Str s) { return if (n >= 4 && i % (n / 4) == 0) { println(f"{i} {s}") } else { false }; }
+
+// 1: non-scalar bindings in a range `for`.
+Int s_bind(Int n) {
+    for (Int i in 0..n) {
+        Req r = parse(i);
+        Str resp = handle(r);
+        _ = mark(i, n, resp);
+    }
+    return 0;
+}
+
+// 2: an expression statement only.
+Int s_expr(Int n) {
+    for (Int i in 0..n) { _ = keep(handle(parse(i))); }
+    return 0;
+}
+
+// 3: a `for` over a list of records made before the loop (each element
+// copied out, and the body's garbage); the list is read at every step.
+Int s_list(Int n) {
+    List(Row) rows = [Row {.id = 1, .name = "one", .score = 10}, Row {.id = 2, .name = "two", .score = 20}, Row {.id = 3, .name = "three", .score = 30}];
+    for (Int i in 0..n / 3) {
+        for (Row r in rows) {
+            Str line = f"{r.id}:{r.name}:{r.score + i}";
+            _ = mark(i * 3 + r.id - 1, n, line);
+        }
+    }
+    return 0;
+}
+
+// 4: nested loops, both making garbage.
+Int s_nested(Int n) {
+    for (Int i in 0..n / 100) {
+        Str outer = f"row {i}";
+        for (Int j in 0..100) {
+            Str inner = outer + f" col {j}";
+            _ = mark(i * 100 + j, n, inner);
+        }
+    }
+    return 0;
+}
+
+// 5: `continue` and `break` from inside nested `if`s and an if-let.
+Int s_brk(Int n) {
+    for (Int i in 0..n + 10) {
+        Req r = parse(i);
+        if (i % 3 == 1) { if (r.len >= 0) { continue; } }
+        Option(Int) o = if (i >= n) { Some(i) } else { None };
+        if (Some(k) = o) {
+            _ = mark(k, 4, handle(r));
+            break;
+        } else {
+            _ = mark(i, n, handle(r));
+        }
+    }
+    return 0;
+}
+
+// 6: `while (Some(piece) = ...)` over a file read 16 bytes at a time, and
+// a plain `while` whose condition allocates; both read to the end. (Not
+// standard input: resid_read_line takes each line from the heap.)
+@requires(filesystem(readonly))
+Option(List(UInt(8))) next_piece(File f) {
+    List(UInt(8)) p = filesystem.read_some(f, 16);
+    return if (p.len() == 0) { None } else { Some(p) };
+}
+
+@requires(filesystem(readonly))
+Int s_while(Str path) {
+    File f = filesystem.open(path);
+    while (Some(p) = next_piece(f)) {
+        Req r = parse(p.len() + (Int)p[0]);
+        Str s = handle(r);
+        if (p[0] == 70) { _ = mark(0, 4, s); }
+    }
+    File g = filesystem.open(path);
+    while (filesystem.read_some(g, 8).len() > 0) { _ = keep(handle(parse(3))); }
+    return 0;
+}
+
+@requires(args, filesystem(readonly))
+Int main() {
+    Str w = args.get(1);
+    Int n = if (w == "while") { 0 } else { str_parse_int(args.get(2)) };
+    Int r = if (w == "bind") { s_bind(n) } else { if (w == "expr") { s_expr(n) } else { if (w == "list") { s_list(n) } else { if (w == "nested") { s_nested(n) } else { if (w == "brk") { s_brk(n) } else { s_while(args.get(2)) } } } } };
+    println(f"done {r}");
+    return 0;
+}

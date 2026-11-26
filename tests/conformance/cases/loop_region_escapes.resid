@@ -1,0 +1,265 @@
+// `for` and `while` loops run in a region of their own (lower.resid,
+// lw_iter) that frees each step's garbage once it is due. Everything a
+// loop's steps make that outlives the step must not be freed with it:
+// a value a `return` takes out of the loop (Str, record, list, list of
+// records, sum, Option, Result through `?`, map, closure), from one loop
+// or from loops nested three deep; a record the analysis would otherwise
+// rebuild in place although it was made before the loop; what a loop
+// reads (made before it) and what an outer step made before an inner
+// loop ran. Each case runs twice: a few steps (the loop's region holds
+// one page, which the next loop takes first) and many (several MB of
+// garbage, so the region is compacted before the value is made). After
+// each, scrub() fills the pages given back, so a value left pointing into
+// them prints wrong (or crashes) instead of reading stale bytes.
+
+type Rec = { Int id; Str name; List(Str) tags; };
+type Shape = Circle(Rec) | Square(Int);
+type St = { Int n; Str label; };
+
+Str pad(Int i) { return f"{i}-" + str_repeat("x", 60); }
+
+// Garbage: about 100 bytes a step, kept by nothing.
+Bool churn(Int i) { return str_len(pad(i) + pad(i + 1)) == 0; }
+
+Str ret_str(Int n) {
+    for (Int i in 0..n) {
+        Str s = f"str {i} " + pad(i);
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return s; }
+    }
+    return "none";
+}
+
+Rec mk(Int i) { return Rec {.id = i, .name = f"rec{i}", .tags = [f"t{i}", pad(i)]}; }
+
+Rec ret_rec(Int n) {
+    for (Int i in 0..n) {
+        Rec r = mk(i);
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return r; }
+    }
+    return mk(0 - 1);
+}
+
+List(Str) ret_list(Int n) {
+    for (Int i in 0..n) {
+        List(Str) xs = [f"a{i}", f"b{i}", pad(i)];
+        if (i == n - 1) { return xs; }
+    }
+    return [];
+}
+
+List(Rec) ret_recs(Int n) {
+    for (Int i in 0..n) {
+        List(Rec) rs = [mk(i), mk(i + 1)];
+        if (i == n - 1) { return rs; }
+    }
+    return [];
+}
+
+Shape ret_sum(Int n) {
+    for (Int i in 0..n) {
+        Shape s = if (i % 2 == 0) { Circle(mk(i)) } else { Square(i) };
+        if (i == n - 2) { return s; }
+    }
+    return Square(0);
+}
+
+Option(Rec) find(Int n, Int want) {
+    for (Int i in 0..n) {
+        Rec r = mk(i);
+        if (r.id == want) { return Some(r); }
+    }
+    return None;
+}
+
+Result(Rec, Str) check(Int i, Int bad) {
+    if (i == bad) { return Err(f"bad step {i} " + pad(i)); }
+    return Ok(mk(i));
+}
+
+// `?` returns the Err a step made.
+Result(Int, Str) all_ok(Int n, Int bad) {
+    for (Int i in 0..n) {
+        Rec r = check(i, bad)?;
+        if (churn(r.id)) { println("never"); }
+    }
+    return Ok(n);
+}
+
+Map(Str, Int) ret_map(Int n) {
+    Map(Str, Int) base = {"base": 1};
+    for (Int i in 0..n) {
+        Map(Str, Int) m = base.insert(f"k{i}", i);
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return m.insert(pad(i), 7); }
+    }
+    return base;
+}
+
+Str closure(Int) ret_clo(Int n) {
+    for (Int i in 0..n) {
+        Str head = f"clo{i}:";
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return lambda(k) { head + f"{k}" }; }
+    }
+    return lambda(k) { "none" };
+}
+
+// A return from three loops deep: each loop's region is left in turn.
+Str ret_deep(Int n) {
+    for (Int i in 0..3) {
+        Str a = f"i{i}";
+        for (Int j in 0..n) {
+            Str b = a + f"j{j}";
+            if (churn(j)) { println("never"); }
+            for (Int k in 0..3) {
+                Str c = b + f"k{k}";
+                if (i == 2 && j == n - 1 && k == 1) { return c + "!"; }
+            }
+        }
+    }
+    return "none";
+}
+
+// A step's value made before an inner loop that compacts its own region,
+// and a break out of the inner loop then of the outer one.
+Int outer_kept(Int n) {
+    List(Str) before = [f"made {n} before", pad(n)];
+    for (Int i in 0..4) {
+        Str a = f"outer {i} " + pad(i);
+        for (Int j in 0..n) {
+            if (churn(j)) { println("never"); }
+            if (j == n / 2) { break; }
+        }
+        Str again = f"outer {i} " + pad(i);
+        println(f"{a == again} {str_len(a)}");
+        if (i == 2) { break; }
+    }
+    println(before[0]);
+    return str_len(before[1]);
+}
+
+// A record made before the loop, rebuilt on the way out of it: it must
+// not be rebuilt in place with a value of the loop's region.
+St rebuild_out(Int n) {
+    St s = St {.n = rt 1, .label = f"start{rt 2}"};
+    for (Int i in 0..n) {
+        Str g = f"label {i} " + pad(i);
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return St {.n = s.n + i, .label = g}; }
+    }
+    return s;
+}
+
+St relabel(St s, Str g) { return St {.n = s.n + 1, .label = g}; }
+
+St relabel_out(Int n) {
+    St s = St {.n = rt 5, .label = f"start{rt 6}"};
+    for (Int i in 0..n) {
+        Str g = f"relabel {i} " + pad(i);
+        if (i == n - 1) { return relabel(s, g); }
+    }
+    return s;
+}
+
+// A self tail call from a loop's body stays a jump (a million deep).
+Int walk(Int k, Int acc) {
+    if (k == 0) { return acc; }
+    for (Int i in 0..3) {
+        Str g = f"{i}";
+        if (i == 2) { return walk(k - 1, acc + str_len(g)); }
+    }
+    return 0 - 1;
+}
+
+// A loop that spawns has no region; its results are joined and read.
+Int spawns(Int n) {
+    for (Int i in 0..n) {
+        Str g = pad(i);
+        Result(Int, RegionError) r = spawn () { return i * 2; };
+        Int v = match (r) { Ok(x) => x, Err(e) => 0 - 1 };
+        if (i == n - 1) { return v + str_len(g); }
+    }
+    return 0;
+}
+
+// While loops: the condition's value lives in the loop's region too.
+Option(Rec) maybe(Int i, Int n) { return if (i < n) { Some(mk(i)) } else { None }; }
+
+Str while_ret(Int n) {
+    while (Some(r) = maybe(n - 1, n)) {
+        for (Int j in 0..n) { if (churn(j)) { println("never"); } }
+        return r.name + " " + r.tags[0];
+    }
+    return "none";
+}
+
+// Reuses the pages loops gave back.
+Int scrub() {
+    for (Int i in 0..rt 100000) {
+        Str z = f"zz{i}" + str_repeat("Q", 90);
+        if (str_len(z) == 0) { return i; }
+    }
+    return 0;
+}
+
+Bool run(Int n) {
+    Str s0 = ret_str(n);
+    Int z0 = scrub();
+    println(str_slice(s0, 0, 12));
+    Rec r = ret_rec(n);
+    Int z1 = scrub();
+    println(f"{r.id} {r.name} {r.tags[0]} {str_len(r.tags[1])}");
+    List(Str) xs = ret_list(n);
+    Int z2 = scrub();
+    println(f"{xs[0]} {xs[1]} {str_len(xs[2])}");
+    List(Rec) rs = ret_recs(n);
+    Int z3 = scrub();
+    println(f"{rs[0].name} {rs[1].tags[0]} {str_len(rs[1].tags[1])}");
+    Shape sh = ret_sum(n);
+    Int z4 = scrub();
+    println(match (sh) { Circle(c) => f"circle {c.name} {c.tags[0]}", Square(k) => f"square {k}" });
+    Option(Rec) fo = find(n, n - 3);
+    Int z5 = scrub();
+    println(match (fo) { Some(f) => f"found {f.name} {f.tags[0]}", None => "not found" });
+    println(match (find(10, 99)) { Some(f) => f"found {f.name}", None => "not found" });
+    Result(Int, Str) ao = all_ok(n, n - 5);
+    Int z6 = scrub();
+    println(match (ao) { Ok(k) => f"ok {k}", Err(e) => str_slice(e, 0, 14) });
+    println(match (all_ok(100, 0 - 1)) { Ok(k) => f"ok {k}", Err(e) => e });
+    Map(Str, Int) m = ret_map(n);
+    Int z7 = scrub();
+    Str k1 = f"k{n - 1}";
+    Int v1 = m[k1] else { 0 - 1 };
+    Int v2 = m[pad(n - 1)] else { 0 - 1 };
+    Int v0 = m["base"] else { 0 - 1 };
+    println(f"{m.len()} {v0} {v1} {v2}");
+    Str closure(Int) f = ret_clo(n);
+    Int z8 = scrub();
+    println(f(7) + " " + f(0 - 2));
+    Str d = ret_deep(n / 3);
+    Int z9 = scrub();
+    println(d);
+    println(f"{outer_kept(n)}");
+    St s = rebuild_out(n);
+    Int z10 = scrub();
+    println(f"{s.n} {str_slice(s.label, 0, 12)}");
+    St t = relabel_out(n);
+    Int z11 = scrub();
+    println(f"{t.n} {str_slice(t.label, 0, 14)}");
+    Str w = while_ret(n);
+    Int z12 = scrub();
+    println(w);
+    return z0 + z1 + z2 + z3 + z4 + z5 + z6 + z7 + z8 + z9 + z10 + z11 + z12 == 0;
+}
+
+// run's calls are made at depth 0 (a scalar binding of run would put
+// them in a scope, where the loops would take no region of their own),
+// and with `rt` inputs, so reduction leaves the loops to run.
+Int main() {
+    _ = run(rt 12);
+    _ = run(rt 60000);
+    println(f"{walk(rt 1000000, 0)} {spawns(rt 50)}");
+    return 0;
+}

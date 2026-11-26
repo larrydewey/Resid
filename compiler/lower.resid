@@ -21,7 +21,7 @@
 // own: the ownership verdicts (own_rebuilds), by fn node then literal.
 // hz: record binders whose scalar fields are read from loads at the
 // binding (ownership: a later in-place write must not change them).
-type LW = { Kg g; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; LOP lo; Map(Int, Int) lof; Map(Int, Str) lor; Str want; Map(Str, Int) suv; Map(Int, Map(Int, Str)) own; Map(Str, Int) hz; Map(Int, Str) ocall; };
+type LW = { Kg g; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; LOP lo; Map(Int, Int) lof; Map(Int, Str) lor; Str want; Map(Str, Int) suv; Map(Int, Map(Int, Str)) own; Map(Str, Int) hz; Map(Int, Str) ocall; Str fname; };
 
 Str lw_unsup(Str what) { return "unsupported: " + what; }
 Bool lw_is_unsup(Str err) { return str_starts_with(err, "unsupported"); }
@@ -548,7 +548,7 @@ GT lw_part(LW w, Int id, Str pw, List(Str) env, GT c) {
     return lw_expr_as(w0, id, pw, env, c);
 }
 
-LW lw_wanting(LW w, Str want) { return LW {.g = w.g, .fs = w.fs, .base = w.base, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = want, .suv = w.suv, .own = w.own, .hz = w.hz, .ocall = w.ocall}; }
+LW lw_wanting(LW w, Str want) { return LW {.g = w.g, .fs = w.fs, .base = w.base, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = want, .suv = w.suv, .own = w.own, .hz = w.hz, .ocall = w.ocall, .fname = w.fname}; }
 
 // A branch body: for the wanted type when one is set (not for what the
 // body contains).
@@ -1087,7 +1087,7 @@ GT kd_def(LW w, Str t, Bool hash, GT g) {
     List(Str) env = env_add(env_add(env0, "__ka:%kav:" + ct), "__kb:%kbv:" + ct);
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, g); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro(), .fname = w.fname};
     GT body = lw_expr(ws, e.id, env, p);
     if (body.err != "") { return body; }
     List(Str) ret = if (hash) { ["ret i64 " + body.val, "}"] } else { ["%kr = zext i1 " + body.val + " to i64", "ret i64 %kr", "}"] };
@@ -1348,7 +1348,7 @@ Str kd_subst(Str l, Map(Str, Int) kinds) {
 GT lw_src_lambda(LW w, Str src, Str fnty, GT c, List(Str) env) {
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, c); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0 - 4000000000 - c.tmp * 64, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0 - 4000000000 - c.tmp * 64, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro(), .fname = w.fname};
     return lw_lambda(ws, e.id, fnty, env, c);
 }
 
@@ -1356,7 +1356,7 @@ GT lw_src_lambda(LW w, Str src, Str fnty, GT c, List(Str) env) {
 GT lw_src_expr(LW w, Str src, Str name, GT v, List(Str) env) {
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro(), .fname = w.fname};
     return lw_expr(ws, e.id, env_add(env, name + ":" + v.val + ":" + v.ty), v);
 }
 
@@ -1365,7 +1365,7 @@ GT lw_src_call(LW w, Str f, GT v, List(Str) env) {
     Str tmpn = f"__sh{v.tmp}";
     KP e = kg_expr(f + "(" + tmpn + ")", kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro(), .fname = w.fname};
     return lw_expr(ws, e.id, env_add(env, tmpn + ":" + v.val + ":" + v.ty), v);
 }
 
@@ -1472,7 +1472,7 @@ GT lw_minmax(LW w, Int id, Str n, List(Str) env, GT c) {
     };
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, c); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro(), .fname = w.fname};
     return lw_expr(ws, e.id, a.env, a.g);
 }
 
@@ -4713,10 +4713,10 @@ Bool lw_in_loop(List(Str) env, Int i) {
 ST lw_if(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     Int ci = lw_kid(w, id, 0);
     Bool pat = lw_kind(w, ci) == "pat";
-    // In a `for` or `while` body (no region of its own reclaims an
-    // iteration's garbage) a plain condition, a scalar, releases the
-    // temporaries its calls allocate right after it, as a scalar binding
-    // does (lw_bind).
+    // In a `for` or `while` body (whose region, when lw_iter gives it one,
+    // is freed only once it is due) a plain condition, a scalar, releases
+    // the temporaries its calls allocate right after it, as a scalar
+    // binding does (lw_bind).
     SW sw = if (pat || !lw_in_loop(env, env.len() - 1)) { SW {.found = false, .no = true} } else { lw_scope_wants(w, ci, SW {.found = false, .no = false}) };
     Bool scoped = sw.found && !sw.no && !resid_rtmod();
     Int sct = g.tmp + 1;
@@ -4767,7 +4767,9 @@ ST lw_if(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     return ST {.pos = 0, .dead = both, .err = "", .env = env, .glines = ge.glines, .hlines = ge.hlines, .lines = lns4, .tmp = ge.tmp, .lbl = lb3, .rety = g.rety};
 }
 
-// sg_while (Bool condition).
+// sg_while (Bool condition). The condition and the body run in the loop's
+// region (lw_iter), so a `while (Some(x) = next())` frees what each step's
+// condition made too.
 ST lw_while(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     Int ci = lw_kid(w, id, 0);
     Bool pat = lw_kind(w, ci) == "pat";
@@ -4776,6 +4778,7 @@ ST lw_while(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     Str lbl_b = "LW" + lbs;
     Str lbl_body = "LWB" + lbs;
     Str lbl_d = "LWD" + lbs;
+    Str lbl_c = "LWC" + lbs;
     List(Str) h = g.lines.concat(["br label %" + lbl_b, lbl_b + ":"]);
     ST g1 = ST {.pos = 0, .dead = false, .err = "", .env = env, .glines = g.glines, .hlines = g.hlines, .lines = h, .tmp = g.tmp, .lbl = lb, .rety = g.rety};
     LetCond lc = if (pat) { lw_let_cond(w, ci, env, gt_of_st(g1)) } else {
@@ -4788,12 +4791,15 @@ ST lw_while(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     List(Str) l2 = cond.lines.concat(["br i1 " + cond.val + ", label %" + lbl_body + ", label %" + lbl_d, lbl_body + ":"]);
     ST g2 = ST {.pos = 0, .dead = false, .err = "", .env = env, .glines = cond.glines, .hlines = g.hlines, .lines = l2, .tmp = cond.tmp, .lbl = max(cond.lbl, lb), .rety = g.rety};
     EnvGT eb = if (pat) { let_bind(LetHead {.ok = true, .variant = lw_text(w, ci), .name = w.g.ns[ci].aux, .epos = 0}, lc, env, g2) } else { EnvGT {.env = env, .g = gt_of_st(g2)} };
-    List(Str) benv = env_add(eb.env, "__loop:" + lbl_b + ":" + lbl_d);
+    // `continue` goes through the back edge's region test (lbl_c).
+    List(Str) benv = env_add(eb.env, "__loop:" + lbl_c + ":" + lbl_d);
     ST g3 = ST {.pos = 0, .dead = false, .err = "", .env = benv, .glines = eb.g.glines, .hlines = g.hlines, .lines = eb.g.lines, .tmp = eb.g.tmp, .lbl = g2.lbl, .rety = g.rety};
     ST body = lw_body(w, lw_kid(w, id, 1), benv, in_main, g3);
     if (body.err != "") { return body; }
-    List(Str) b1 = if (!body.dead) { body.lines.concat(["br label %" + lbl_b]) } else { body.lines };
-    return ST {.pos = 0, .dead = g.dead, .err = "", .env = env, .glines = body.glines, .hlines = body.hlines, .lines = b1.concat([lbl_d + ":"]), .tmp = body.tmp, .lbl = body.lbl, .rety = g.rety};
+    List(Str) b1 = if (!body.dead) { body.lines.concat(["br label %" + lbl_c]) } else { body.lines };
+    LIT itr = lw_iter(w, id, b1, g.lines.len(), [ci, lw_kid(w, id, 1)], g.rety, "w" + lbs, "while loop");
+    List(Str) b2 = itr.lines.concat([lbl_c + ":"]).concat(lw_iter_back(itr.on, "w" + lbs)).concat(["br label %" + lbl_b]).concat(lw_iter_exit(itr.on, "w" + lbs, lbl_d));
+    return ST {.pos = 0, .dead = g.dead, .err = "", .env = env, .glines = body.glines, .hlines = body.hlines, .lines = b2, .tmp = body.tmp, .lbl = body.lbl, .rety = g.rety};
 }
 
 // sg_for over a range `a..b` / `a..=b` or a list.
@@ -4828,13 +4834,17 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
         List(Str) fcnt = if (frw > 0) { [cnt + " = call i64 @resid_list_elems(ptr " + a.val + f", i64 {frw + 1})"] } else { [cnt + " = call i64 @resid_list_len(ptr " + a.val + ")"] };
         List(Str) fmk = if (lo_is(w, id, 16)) { ne_frame(gs2, frw, false) } else { [rmk] };
         List(Str) fget = if (frw > 0) { [gs2 + "p = call ptr @resid_list_rec_at(ptr " + a.val + ", i64 " + iv + f", i64 {frw + 1})"].concat(fmk).concat(["call void @llvm.memmove.p0.p0.i64(ptr " + gs2 + ", ptr " + gs2 + f"p, i64 {frw * 8}, i1 false)"]) } else { [gs2 + " = call ptr " + (if (lw_hdr_elem(w, vty)) { "@resid_list_get_sh" } else { if (lst_packed(vty)) { "@resid_bl_get" } else { "@resid_list_get" } }) + "(ptr " + a.val + ", i64 " + iv + ")"] };
-        List(Str) f10 = a.lines.concat([ixa + " = alloca i64", "store i64 0, ptr " + ixa, "br label %" + lbl_b2, lbl_b2 + ":", iv + " = load i64, ptr " + ixa]).concat(fcnt).concat([cc2 + " = icmp slt i64 " + iv + ", " + cnt, "br i1 " + cc2 + ", label %" + lbl_body2 + ", label %" + lbl_d2, lbl_body2 + ":"]).concat(fget);
+        // The list and its index are made before the loop's region; the
+        // element (a copy of an inline record) in it (lw_iter).
+        List(Str) f9 = a.lines.concat([ixa + " = alloca i64", "store i64 0, ptr " + ixa]);
+        List(Str) f10 = f9.concat(["br label %" + lbl_b2, lbl_b2 + ":", iv + " = load i64, ptr " + ixa]).concat(fcnt).concat([cc2 + " = icmp slt i64 " + iv + ", " + cnt, "br i1 " + cc2 + ", label %" + lbl_body2 + ", label %" + lbl_d2, lbl_body2 + ":"]).concat(fget);
         List(Str) f11 = lst_read_lines(vty, gs2, tloop, f10);
         ST gb2 = ST {.pos = 0, .dead = false, .err = "", .env = envl, .glines = a.glines, .hlines = g.hlines, .lines = f11, .tmp = tloop, .lbl = nlbl2, .rety = g.rety};
         ST body2 = lw_body(w, bodyn, envl, in_main, gb2);
         if (body2.err != "") { return body2; }
         List(Str) b20c = if (!body2.dead) { body2.lines.concat(["br label %" + lbl_c2]) } else { body2.lines };
-        List(Str) b24 = b20c.concat([lbl_c2 + ":", iv2 + " = add i64 " + iv + ", 1", "store i64 " + iv2 + ", ptr " + ixa, "br label %" + lbl_b2, lbl_d2 + ":"]);
+        LIT it2 = lw_iter(w, id, b20c, f9.len(), [bodyn], g.rety, "f" + n2s, "for loop over " + vname);
+        List(Str) b24 = it2.lines.concat([lbl_c2 + ":"]).concat(lw_iter_back(it2.on, "f" + n2s)).concat([iv2 + " = add i64 " + iv + ", 1", "store i64 " + iv2 + ", ptr " + ixa, "br label %" + lbl_b2]).concat(lw_iter_exit(it2.on, "f" + n2s, lbl_d2));
         return ST {.pos = 0, .dead = g.dead, .err = "", .env = env, .glines = body2.glines, .hlines = body2.hlines, .lines = b24, .tmp = body2.tmp, .lbl = nlbl2, .rety = g.rety};
     }
     if (vty != "Int") { return st_err("for-in var must be Int", g); }
@@ -4851,13 +4861,132 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     Str lbl_c = "LC" + lbs;
     List(Str) env2 = env_add(env_add(env, vname + ":" + kreg + ":Int"), "__loop:" + lbl_c + ":" + lbl_d);
     Str cmp = if (lw_text(w, it) == "..=") { "icmp sle" } else { "icmp slt" };
-    List(Str) p8 = b.lines.concat([kaddr + " = alloca i64", "store i64 " + a.val + ", ptr " + kaddr, "br label %" + lbl_b, lbl_b + ":", kreg + " = load i64, ptr " + kaddr, "%c" + lbs + " = " + cmp + " i64 " + kreg + ", " + b.val, "br i1 %c" + lbs + ", label %" + lbl_body + ", label %" + lbl_d, lbl_body + ":"]);
+    // The bounds are computed before the loop's region (lw_iter).
+    List(Str) p7 = b.lines.concat([kaddr + " = alloca i64", "store i64 " + a.val + ", ptr " + kaddr]);
+    List(Str) p8 = p7.concat(["br label %" + lbl_b, lbl_b + ":", kreg + " = load i64, ptr " + kaddr, "%c" + lbs + " = " + cmp + " i64 " + kreg + ", " + b.val, "br i1 %c" + lbs + ", label %" + lbl_body + ", label %" + lbl_d, lbl_body + ":"]);
     ST gb = ST {.pos = 0, .dead = false, .err = "", .env = env2, .glines = b.glines, .hlines = g.hlines, .lines = p8, .tmp = b.tmp, .lbl = newlbl, .rety = g.rety};
     ST body = lw_body(w, bodyn, env2, in_main, gb);
     if (body.err != "") { return body; }
     List(Str) bo1 = if (!body.dead) { body.lines.concat(["br label %" + lbl_c]) } else { body.lines };
-    List(Str) t4 = bo1.concat([lbl_c + ":", k2 + " = add i64 " + kreg + ", 1", "store i64 " + k2 + ", ptr " + kaddr, "br label %" + lbl_b, lbl_d + ":"]);
+    LIT itr = lw_iter(w, id, bo1, p7.len(), [bodyn], g.rety, "f" + lbs, "for loop over " + vname);
+    List(Str) t4 = itr.lines.concat([lbl_c + ":"]).concat(lw_iter_back(itr.on, "f" + lbs)).concat([k2 + " = add i64 " + kreg + ", 1", "store i64 " + k2 + ", ptr " + kaddr, "br label %" + lbl_b]).concat(lw_iter_exit(itr.on, "f" + lbs, lbl_d));
     return ST {.pos = 0, .dead = g.dead, .err = "", .env = env, .glines = body.glines, .hlines = body.hlines, .lines = t4, .tmp = body.tmp, .lbl = imax(newlbl, body.lbl), .rety = g.rety};
+}
+
+// ─── Loop regions for `for` and `while` ─────────────────────────────
+// A for or while loop whose body may allocate runs in a region of its own,
+// as a tail-call loop does (lr_region, runtime region.resid, Loop regions)
+// but carrying nothing: bindings are immutable (spec §7) and a builder
+// bound outside a loop cannot be used inside it (E0403), so nothing an
+// iteration allocates is reachable once it ends, except what a `return`
+// takes along. The region is lazy (resid_loop_enter): while the caller's
+// region is not due, the loop allocates there and pays nothing; at a back
+// edge that finds it due, L is pushed, and later back edges that find L
+// due free its pages (resid_loop_move with no moves). L is popped where
+// the loop ends (its done label, which every `break` and the loop test's
+// exit reach) and before each `return` in it, whose value is moved out
+// first (lr_ret_evac, as a tail loop's exit does). What the loop reads is
+// made before L: the list a `for` walks, a range's bounds. Stores into
+// older objects go through the runtime's region tests (bar_keep,
+// region_use); own.resid takes no binder bound outside a loop as cur
+// inside it (ow_stmt), so no owned write skips them. Refused (and named
+// by --loop-report): a body that spawns (as lr_region_ok), a `return` of
+// a value with no move, of a fixed-capacity value or from a spawn's body,
+// and a `return` of a call of the function itself (a tail call, which
+// stays a jump).
+type LIT = { List(Str) lines; Bool on; };
+
+LIT lw_iter(LW w, Int id, List(Str) ls, Int st, List(Int) nodes, Str rety, Str tag, Str what) {
+    Str rev = lr_ret_evac(w.fs, rety);
+    Str why = lw_iter_why(w, ls, st, nodes, rety, rev);
+    Bool rep = why != "" && why != "-" && resid_raw_load64(loop_report_word()) == 1;
+    Bool _r = if (rep) { println("note: loop: " + w.fname + " keeps each step's garbage of its " + what + " until it returns: " + why) } else { false };
+    if (why != "") { return LIT {.lines = ls, .on = false}; }
+    Str reg = "%is." + tag;
+    List(Str) head = ls[0..st].concat([reg + " = call i64 @resid_loop_enter()"]);
+    return LIT {.lines = head.concat(lw_iter_rets(ls, st, reg, rev, tag, ListBuf()).finish()), .on = true};
+}
+
+// Why a loop gets no region: "" it gets one, "-" it allocates nothing
+// (or is in the runtime, which manages its own memory).
+Str lw_iter_why(LW w, List(Str) ls, Int st, List(Int) nodes, Str rety, Str rev) {
+    if (resid_rtmod() || !lw_iter_allocs(w, ls, st)) { return "-"; }
+    if (lw_iter_spawns(w.g, nodes, 0)) { return "its body spawns"; }
+    return lw_iter_rets_why(w, ls, st, rety, rev);
+}
+
+Bool lw_iter_spawns(Kg g, List(Int) nodes, Int i) {
+    if (i >= nodes.len()) { return false; }
+    return lg_spawns(g, nodes[i]) || lw_iter_spawns(g, nodes, i + 1);
+}
+
+// lr_allocates, where a push or a box is garbage too (in a tail loop it
+// builds what the loop carries).
+Bool lw_iter_allocs(LW w, List(Str) ls, Int i) {
+    if (i >= ls.len()) { return false; }
+    Str l = ls[i];
+    Int at = str_find(l, "call ");
+    if (at >= 0) {
+        Int c = str_find_char(l, 64, at);
+        Int e = str_find_char(l, 40, c);
+        Str f = if (c > 0 && e > c) { str_slice(l, c + 1, e) } else { "" };
+        if (c < 0 && !str_contains(l, "asm ")) { return true; }
+        if (f != "" && (lr_call_allocs(w, f, l) || lo_has_str(["resid_list_push", "resid_list_push_k", "resid_list_push_own", "resid_bl_push_own", "resid_box_i64", "resid_box_f64", "resid_box_bool"], f, 0))) { return true; }
+    }
+    return lw_iter_allocs(w, ls, i + 1);
+}
+
+Str lw_iter_rets_why(LW w, List(Str) ls, Int i, Str rety, Str rev) {
+    if (i >= ls.len()) { return ""; }
+    Str l = ls[i];
+    if (str_starts_with(l, "ret ")) {
+        Str p = if (i > 0) { ls[i - 1] } else { "" };
+        if (w.fname != "" && str_contains(p, "call ") && str_contains(p, "@" + w.fname + "(")) { return "it returns a call of itself from the loop (a tail call)"; }
+        if (str_starts_with(l, "ret ptr ")) {
+            if (rety == "__spawn") { return "it returns from a spawn's body"; }
+            if (lw_fx_size(rety) > 0) { return "it returns a fixed-capacity " + rety; }
+            if (rev == "") { return "it returns a new value that has no move: " + lr_why_ty(w.fs, rety, []); }
+        }
+    }
+    return lw_iter_rets_why(w, ls, i + 1, rety, rev);
+}
+
+// ls[i..] with each `return` leaving the loop's region: a pointer moved
+// into the region below (none when L was never taken: resid_loop_exit
+// gives null), anything else after a pop.
+ListBuf(Str) lw_iter_rets(List(Str) ls, Int i, Str reg, Str rev, Str tag, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    if (!str_starts_with(l, "ret ")) { return lw_iter_rets(ls, i + 1, reg, rev, tag, acc.push(l)); }
+    if (!str_starts_with(l, "ret ptr ")) { return lw_iter_rets(ls, i + 1, reg, rev, tag, acc.push("call void @resid_scope_pop(i64 " + reg + ")").push(l)); }
+    Str v = str_slice(l, 8, str_len(l));
+    Str n = f"{i}";
+    Str cx = "%is" + tag + ".c" + n;
+    Str lz = "%is" + tag + ".z" + n;
+    Str mv = "%is" + tag + ".v" + n;
+    Str rv = "%is" + tag + ".r" + n;
+    Str lk = "is" + tag + ".k" + n;
+    Str lm = "is" + tag + ".m" + n;
+    Str lj = "is" + tag + ".j" + n;
+    ListBuf(Str) a0 = acc.push(cx + " = call ptr @resid_loop_exit(i64 " + reg + ", i64 1)").push(lz + " = icmp eq ptr " + cx + ", null").push("br i1 " + lz + ", label %" + lk + ", label %" + lm);
+    ListBuf(Str) a1 = a0.push(lm + ":").push(mv + " = call ptr " + lr_call(rev, v, cx)).push("call ptr @resid_loop_exit(i64 " + reg + ", i64 2)").push("br label %" + lj);
+    ListBuf(Str) a2 = a1.push(lk + ":").push("br label %" + lj).push(lj + ":").push(rv + " = phi ptr [ " + v + ", %" + lk + " ], [ " + mv + ", %" + lm + " ]");
+    return lw_iter_rets(ls, i + 1, reg, rev, tag, a2.push("ret ptr " + rv));
+}
+
+// A back edge: L pushed when the caller's region is due; once L is due,
+// its pages freed (nothing is carried, so nothing moves).
+List(Str) lw_iter_back(Bool on, Str tag) {
+    if (!on) { return []; }
+    Str reg = "%is." + tag;
+    Str due = "%is" + tag + ".due";
+    return [due + " = call i1 @resid_loop_due(i64 " + reg + ")", "br i1 " + due + ", label %is" + tag + ".cp, label %is" + tag + ".go", "is" + tag + ".cp:", "call ptr @resid_loop_move(i64 " + reg + ", i64 1)", "call ptr @resid_loop_move(i64 " + reg + ", i64 2)", "br label %is" + tag + ".go", "is" + tag + ".go:"];
+}
+
+// The loop's done label, L popped (a no-op when it was never taken).
+List(Str) lw_iter_exit(Bool on, Str tag, Str lbl_d) {
+    if (!on) { return [lbl_d + ":"]; }
+    return [lbl_d + ":", "call void @resid_scope_pop(i64 %is." + tag + ")"];
 }
 
 // sg_stmt.
@@ -5774,7 +5903,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Int n = w0.g.ns[d].nk;
     Str rty = lw_text(w0, lw_kid(w0, d, 0));
     Int _arena_in = resid_arena_push();
-    LW w1 = if (w0.facts) { LW {.g = w0.g, .fs = w0.fs, .base = w0.base, .rg = w0.rg, .dbg = w0.dbg, .df = w0.df, .rf = lr_facts_kept(w0.g, d), .facts = true, .lo = w0.lo, .lof = w0.lof, .lor = w0.lor, .want = "", .suv = w0.suv, .own = w0.own, .hz = w0.hz, .ocall = w0.ocall} } else { w0 };
+    LW w1 = if (w0.facts) { LW {.g = w0.g, .fs = w0.fs, .base = w0.base, .rg = w0.rg, .dbg = w0.dbg, .df = w0.df, .rf = lr_facts_kept(w0.g, d), .facts = true, .lo = w0.lo, .lof = w0.lof, .lor = w0.lor, .want = "", .suv = w0.suv, .own = w0.own, .hz = w0.hz, .ocall = w0.ocall, .fname = w0.fname} } else { w0 };
     Str rbase = ct_base_of(fs.ctn, fs.ctb, rty);
     Str name = lw_text(w1, d);
     Bool is_main = name == "main";
@@ -5816,7 +5945,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Map(Int, Str) hzw = w1.own.get(0 - 1099511627776 - d) else { lw_noro() };   // own_hz_key(d)
     Map(Str, Int) hz0 = if (hzw.keys().len() > 0) { lw_hz_params(w1, d, 1, n - 1, sdup, lw_hz_binds(sg, fs, lw_kid(w1, d, n - 1), sdup, su_novars())) } else { su_novars() };
     Map(Str, Int) hz = lw_hz_keep(hz0, hzw);
-    LW w = LW {.g = sg, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lf.fl, .lor = ro, .want = "", .suv = suv, .own = w1.own, .hz = hz, .ocall = w1.own.get(0 - 1 - d) else { lw_noro() }};
+    LW w = LW {.g = sg, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lf.fl, .lor = ro, .want = "", .suv = suv, .own = w1.own, .hz = hz, .ocall = w1.own.get(0 - 1 - d) else { lw_noro() }, .fname = name};
     List(Str) dl2 = [defline, "entry:"];
     Int fi = fn_index(fs, name);
     Str ceiling = if (fi >= 0) { fs.ceils[fi] } else { "" };
@@ -8558,7 +8687,7 @@ GT lw_struct_ts(LW w, GT v, Str fields, List(Str) env) {
     Str src = "\"" + lw_label(v.ty) + " { \"" + lw_fields_src(tmpn, fields, 0, "") + " + \" }\"";
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro(), .fname = w.fname};
     GT r = lw_expr(ws, e.id, env2, v);
     if (r.err != "") { return r; }
     return GT {.pos = 0, .val = r.val, .ty = "Str", .cnt = 0, .err = "", .glines = r.glines, .lines = r.lines, .tmp = r.tmp, .lbl = r.lbl, .tail = false};
@@ -10033,7 +10162,7 @@ Int su_fn_node(Kg g, Int unit, Int i, Str h) {
 PG su_lower_clones(LW w, List(Int) ids, Int i, PG acc) {
     if (acc.err != "" || i >= ids.len()) { return acc; }
     Int off = (1000 + i) * 1000000000;
-    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz, .ocall = w.ocall};
+    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz, .ocall = w.ocall, .fname = w.fname};
     return su_lower_clones(w, ids, i + 1, lw_fn(wf, ids[i], acc));
 }
 
@@ -11295,12 +11424,12 @@ PG lw_decls(LW w, Int id, Int i, PG acc) {
     Int d = kg_kid(w.g, id, i);
     Str kind = w.g.ns[d].kind;
     if (kind == "sandbox") {
-        LW wi = LW {.g = w.g, .fs = w.fs, .base = str_parse_int(w.g.ns[d].text), .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz, .ocall = w.ocall};
+        LW wi = LW {.g = w.g, .fs = w.fs, .base = str_parse_int(w.g.ns[d].text), .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz, .ocall = w.ocall, .fname = w.fname};
         return lw_decls(w, id, i + 1, lw_decls(wi, d, 0, acc));
     }
     if (kind != "fn") { return lw_decls(w, id, i + 1, acc); }
     Int off = if (w.rg) { lw_spec_off(w.g.ns[d].text) } else { 0 };
-    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz, .ocall = w.ocall};
+    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz, .ocall = w.ocall, .fname = w.fname};
     return lw_decls(w, id, i + 1, lw_fn(wf, d, acc));
 }
 
@@ -11427,8 +11556,8 @@ pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts,
     LOP lo = sx.lo;
     // The originals lower on g, whose node ids their cached snapshot
     // graphs share; the copies on g with their fn nodes added.
-    LW w = LW {.g = g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own, .hz = su_novars(), .ocall = lw_noro()};
-    LW wc = LW {.g = sx.g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own, .hz = su_novars(), .ocall = lw_noro()};
+    LW w = LW {.g = g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own, .hz = su_novars(), .ocall = lw_noro(), .fname = ""};
+    LW wc = LW {.g = sx.g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own, .hz = su_novars(), .ocall = lw_noro(), .fname = ""};
     // Compiled map keys: their kinds numbered, their functions made.
     PG r0 = kd_module(w, su_lower_clones(wc, sx.ids, 0, lw_decls(w, unit, 0, g0)));
     // Record moves for loop regions (lr_move): only where none are inside.
@@ -12448,15 +12577,21 @@ ListBuf(Str) rz_walk(List(Str) ls, Map(Str, Int) alloc, Int i, ListBuf(Str) acc)
     if (!str_starts_with(l, "define ") || str_contains(l, "\n")) { return rz_walk(ls, alloc, i + 1, acc.push(l)); }
     Int e = vl_fn_end(ls, i + 1);
     Bool free = !alloc.contains(rz_name(l));
-    return rz_walk(ls, alloc, e, rz_fn(ls, i, e, free, acc));
+    return rz_walk(ls, alloc, e, rz_fn(ls, i, e, free, [], acc));
 }
 
 // Lines i..e of one function (its `define` included), the region calls
-// made constant when it allocates nothing.
-ListBuf(Str) rz_fn(List(Str) ls, Int i, Int e, Bool free, ListBuf(Str) acc) {
+// made constant when it allocates nothing. A pop of a region's handle
+// (hs: those made constant) goes too: the region was never taken, and a
+// pop to depth 0 would free every region of the caller.
+ListBuf(Str) rz_fn(List(Str) ls, Int i, Int e, Bool free, List(Str) hs, ListBuf(Str) acc) {
     if (i >= e) { return acc; }
     Str l = ls[i];
-    return rz_fn(ls, i + 1, e, free, acc.push(if (free) { rz_line(l) } else { l }));
+    if (!free) { return rz_fn(ls, i + 1, e, free, hs, acc.push(l)); }
+    Bool enter = ol_rhs(l) == "call i64 @resid_loop_enter()" && ol_dst(l) != "";
+    List(Str) h2 = if (enter) { hs.concat([ol_dst(l)]) } else { hs };
+    Bool pop = str_starts_with(l, "call void @resid_scope_pop(i64 ") && str_ends_with(l, ")") && h2.contains(str_slice(l, 31, str_len(l) - 1));
+    return rz_fn(ls, i + 1, e, free, h2, if (pop) { acc } else { acc.push(rz_line(l)) });
 }
 
 Str rz_line(Str l) {

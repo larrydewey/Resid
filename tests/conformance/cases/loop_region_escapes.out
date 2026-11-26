@@ -1,0 +1,41 @@
+str 11 11-xx
+11 rec11 t11 63
+a11 b11 63
+rec11 t12 63
+circle rec10 t10
+found rec9 t9
+not found
+bad step 7 7-x
+ok 100
+3 1 11 7
+clo11:7 clo11:-2
+i2j3k1!
+true 70
+true 70
+true 70
+made 12 before
+63
+12 label 11 11-
+6 relabel 11 11-
+rec11 t11
+str 59999 59
+59999 rec59999 t59999 66
+a59999 b59999 66
+rec59999 t60000 66
+circle rec59998 t59998
+found rec59997 t59997
+not found
+bad step 59995
+ok 100
+3 1 59999 7
+clo59999:7 clo59999:-2
+i2j19999k1!
+true 70
+true 70
+true 70
+made 60000 before
+66
+60000 label 59999 
+6 relabel 59999 
+rec59999 t59999
+1000000 161

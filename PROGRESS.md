@@ -27,6 +27,47 @@
   was built on its crates, were deleted on 2026-09-26; both are in git
   history.
 
+### 0zzd. Loop regions for `for` and `while`; f-strings are not leaves (2026-11-26)
+
+Found by a memory hunt: a `for` or `while` body kept every step's
+garbage until its function returned (a server-shaped body: about 110
+bytes a step, 440 MB at four million), and a helper that only formats
+with an f-string was taken for a leaf, so the loops and scalar bindings
+calling it got no region or scope (780 MB at ten million). Neither was
+named by `--loop-report`.
+
+- **`lw_iter`** (`compiler/lower.resid`): a for or while loop whose body
+  (and a while's condition) may allocate runs in a lazy loop region that
+  carries nothing, on the tail-loop protocol: entered after the walked
+  list and a range's bounds are made, freed at a due back edge
+  (`resid_loop_move` with no moves), popped at the done label (breaks
+  and the loop test's exit), and left before each `return` (a pop, or the
+  pointer moved out with `lr_ret_evac`'s mover, innermost loop first).
+  Refused and reported: a body that spawns, a `return` of a type with no
+  move, of a fixed-capacity value or from a spawn's body, and a `return`
+  of a self call (kept a jump).
+- **Safety**: bindings are immutable and E0403 keeps outer builders out
+  of loops, so only a `return` takes a step's value out. `own.resid` no
+  longer takes a binder bound outside a loop as cur inside it, and a
+  rebuild's cur is recorded when the rebuild is met (`ow_rebuild_cur`
+  read the function's final set): a record made before a loop and rebuilt
+  on the way out of it was written in place with a pointer into the
+  loop's region. `rz_module` drops the pop of a region handle it makes
+  constant (a pop to depth 0).
+- **F-strings** (`leaf_calls`, `lf_node`, `lw_scope_wants`): allocating.
+- Tests: `tests/runtime/mem/iter_loops.resid` (bindings, an expression
+  statement, a list of records, nested loops, break/continue, while-let
+  over a file: 8 MB at 200,000 and 2 million steps; 13-47 MB and
+  140-469 MB before), `fstr_leaf.resid` (8 MB at one and ten million; 79-220 MB and
+  0.8-2.2 GB before), `tests/conformance/cases/loop_region_escapes`
+  (returns of every kind from one and three loops deep, at a few steps
+  and after compactions, with the given-back pages overwritten before the
+  values are read; it fails with the moves removed or with the old cur
+  rebuild), `loop_report.resid` (a loop that spawns is named).
+- `resid_read_line` still takes each line from the heap
+  (`runtime/rt/term.resid`): a loop over standard input grows whatever
+  the compiler does.
+
 ### 0zzb. Packed List(Bool), byte-list loop copies, fused swaps (2026-11-21)
 
 From an AWFY profile (callgrind against the C harness): Sieve's clearing
