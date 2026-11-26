@@ -5243,7 +5243,11 @@ pub GKR gk_analyze_m(Kg g, Int unit, Str src, Str smap0, Bool log, Bool fin, Str
     if (!lite && gm_verb_clash(k, 0, src, smap0, false)) { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
     GKS r = gk_decls(gm_log_beaten(k, 0), unit, 0, src, smap);
     if (r.err != "") { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
-    if (!fin && r.k.gx.log.len() > 0) { return GKR {.status = 0, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = r.k.gx.log}; }
+    // A lite round checked only the last copies: the whole-program passes
+    // (gk_finish: authority, among others) would read the other functions'
+    // unchecked nodes, a builtin method there as a call of a user function
+    // of its name. The full round that ends instantiation runs them.
+    if (!fin && (r.k.gx.log.len() > 0 || lite)) { return GKR {.status = 0, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = r.k.gx.log}; }
     Int st = gk_finish(r.k, sg.fnode, src, smap, smap0);
     Int n = kg_count(g);
     List(Str) ty = gk_dense_ty(sort(r.k.tl.keys), r.k.tl.tys, 0, 0, n, "", ListBuf());
