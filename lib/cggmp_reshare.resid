@@ -27,24 +27,34 @@ pub List(UInt(64)) rsh_poly_eval(List(List(UInt(64))) coeffs, List(UInt(64)) x, 
     return rsh_poly_eval(coeffs, x, k + 1, sc_nat_mul(pow, x), sc_nat_add(acc, term));
 }
 
+/// Whether `randoms` can mask a dealer's polynomial over `old_ids`: its
+/// constant term is 0 (so the sum over the old quorum keeps X) and it has at
+/// least as many coefficients as the Lagrange basis polynomial, |old_ids|
+/// (so no coefficient of old_share L_self(x) goes out unmasked).
+pub Bool rsh_randoms_ok(List(List(UInt(64))) randoms, List(Int) old_ids) {
+    if (randoms.len() < old_ids.len() || randoms.len() == 0) { return false; }
+    return bn_bit_len(bn_mod(randoms[0], cv_n())) == 0;
+}
+
 /// Computes one old party's contribution to new party `new_id`'s share: lambda_self(new_id) * `old_share` + h_self(new_id).
-/// h_self is `random_coeffs`, whose constant term must be 0 (the caller's invariant), so the sum over the old quorum keeps X.
-pub List(UInt(64)) rsh_contribution(
+/// h_self is `random_coeffs`; None unless its constant term is 0, so the sum over the old quorum keeps X.
+pub Option(List(UInt(64))) rsh_contribution(
     List(UInt(64)) old_share,
     List(Int) old_ids,
     Int self_id,
     Int new_id,
     List(List(UInt(64))) random_coeffs
 ) {
+    if (random_coeffs.len() == 0 || bn_bit_len(bn_mod(random_coeffs[0], cv_n())) != 0) { return None; }
     List(UInt(64)) lam = rsh_lag_at(old_ids, bn_from_u64(u64(new_id)), self_id, 0, [1]);
     List(UInt(64)) base = sc_nat_mul(lam, old_share);
     List(UInt(64)) hpow = rsh_poly_eval(random_coeffs, bn_from_u64(u64(new_id)), 0, [1], []);
-    return sc_nat_add(base, hpow);
+    return Some(sc_nat_add(base, hpow));
 }
 
 /// Sums every old party's contribution to the new share of `new_id`, from index `i` onto `acc`.
-/// `polys[i]` belongs to `old_ids[i]`; each must have a zero constant term.
-pub List(UInt(64)) rsh_new_share(
+/// `polys[i]` belongs to `old_ids[i]`; None if one has a nonzero constant term.
+pub Option(List(UInt(64))) rsh_new_share(
     List(List(UInt(64))) old_shares,
     List(Int) old_ids,
     Int new_id,
@@ -52,13 +62,13 @@ pub List(UInt(64)) rsh_new_share(
     Int i,
     List(UInt(64)) acc
 ) {
-    if (i >= old_ids.len()) { return acc; }
-    List(UInt(64)) one = rsh_contribution(old_shares[i], old_ids, old_ids[i], new_id, polys[i]);
+    if (i >= old_ids.len()) { return Some(acc); }
+    List(UInt(64)) one = rsh_contribution(old_shares[i], old_ids, old_ids[i], new_id, polys[i])?;
     return rsh_new_share(old_shares, old_ids, new_id, polys, i + 1, sc_nat_add(acc, one));
 }
 
-/// Computes the new share of `new_id` as the sum of every old party's contribution.
-pub List(UInt(64)) rsh_new_share_of(
+/// Computes the new share of `new_id` as the sum of every old party's contribution; None as rsh_new_share.
+pub Option(List(UInt(64))) rsh_new_share_of(
     List(List(UInt(64))) old_shares,
     List(Int) old_ids,
     Int new_id,
@@ -141,15 +151,16 @@ pub List(List(UInt(64))) rsh_scale_poly2(List(List(UInt(64))) coeffs, List(UInt(
 
 /// Returns the polynomial an old dealer contributes to the new sharing: `old_share` * L_self(x) + `random_coeffs`(x).
 /// The sum over the old quorum is f(x) + h(x), f the old sharing polynomial, so X is kept.
-/// `random_coeffs[0]` must be 0; that is the caller's invariant.
-pub List(List(UInt(64))) rsh_dealer_poly(
+/// None unless `random_coeffs` pass rsh_randoms_ok (constant term 0, at least |old_ids| coefficients).
+pub Option(List(List(UInt(64)))) rsh_dealer_poly(
     List(UInt(64)) old_share,
     List(Int) old_ids,
     Int self_id,
     List(List(UInt(64))) random_coeffs
 ) {
+    if (!rsh_randoms_ok(random_coeffs, old_ids) || cg_index(old_ids, self_id, 0) < 0) { return None; }
     List(List(UInt(64))) base = rsh_scale_poly2(rsh_lagrange_poly(old_ids, self_id), old_share);
-    return rsh_poly_add2(base, random_coeffs);
+    return Some(rsh_poly_add2(base, random_coeffs));
 }
 
 /// Evaluates the polynomial `coeffs` at the party id `x` modulo the curve order.
@@ -277,9 +288,19 @@ pub Option(RshAnn) rsh_announce(Int id, PaillierSec sec, Pedersen ped, List(UInt
     return Some(RshAnn {.id = id, .pail = pail, .ped = ped, .modp = md, .prm = pr});
 }
 
-/// Verifies both proofs in a new party's announcement.
+/// Verifies a new party's announcement as key generation checks a party's
+/// round-3 reveal: a 2048-bit odd Paillier modulus whose public key is
+/// consistent (N^2 = N N), Pedersen parameters over that same modulus, and
+/// both proofs. A small modulus would let the party's encrypted shares and
+/// MtA ranges wrap; Pedersen parameters over another modulus would make the
+/// range proofs others prove to this party rest on an N no one proved.
 pub Bool rsh_announce_ok(RshAnn a, Transcript tr) {
-    return mod_verify(a.pail.n, a.modp, tr) && prm_verify(a.ped, a.prm, tr);
+    List(UInt(64)) n = a.pail.n;
+    if (bn_bit_len(n) != zk_bits_n() || !bn_is_odd(n)) { return false; }
+    List(UInt(64)) n2 = bn_mul(n, n);
+    if (bn_cmp(a.pail.n2, n2) != 0 || bn_cmp(a.pail.mont2.n, n2) != 0) { return false; }
+    if (bn_cmp(a.ped.n, n) != 0 || !pedersen_valid(a.ped)) { return false; }
+    return mod_verify(n, a.modp, tr) && prm_verify(a.ped, a.prm, tr);
 }
 
 /// Encrypts `share` for new party `to` and proves knowledge of the Paillier nonce `rho`.
@@ -302,7 +323,8 @@ pub Bool rsh_verify_part(PaillierPub pk, List(UInt(64)) share, RshProofPart p, T
 
 /// Builds dealer `dealer_id`'s round-1 message: its polynomial commitments and an encrypted share for each new party.
 /// `new_peers` is the new set; Paillier nonces are derived from `seed`.
-pub RshD1 rsh_d1(
+/// None when `randoms` fail rsh_randoms_ok or `dealer_id` is not in `old_ids`.
+pub Option(RshD1) rsh_d1(
     Int dealer_id,
     List(Int) old_ids,
     List(UInt(64)) old_share,
@@ -310,10 +332,10 @@ pub RshD1 rsh_d1(
     List(RshNewPeer) new_peers,
     List(Int) seed
 ) {
-    List(List(UInt(64))) poly = rsh_dealer_poly(old_share, old_ids, dealer_id, randoms);
+    List(List(UInt(64))) poly = rsh_dealer_poly(old_share, old_ids, dealer_id, randoms)?;
     List(CvPt) commits = rsh_commit_poly2(poly);
     List(RshPart) parts = rsh_d1_parts(dealer_id, poly, new_peers, seed, 0, []);
-    return RshD1 {.dealer = dealer_id, .commits = commits, .parts = parts};
+    return Some(RshD1 {.dealer = dealer_id, .commits = commits, .parts = parts});
 }
 
 List(RshPart) rsh_d1_parts(Int dealer_id, List(List(UInt(64))) poly, List(RshNewPeer) peers, List(Int) seed, Int i, List(RshPart) acc) {
@@ -360,8 +382,36 @@ pub Result(List(UInt(64)), Int) rsh_assemble(
     return rsh_assemble(dealers, new_id, sec, pub, i + 1, sc_nat_add(acc, one));
 }
 
+/// Checks every dealer's round-1 commitments against the old key before a
+/// new party uses them: dealer d's constant term must be L_d(0) X_d, its
+/// Lagrange-weighted public share over `old_ids` (`old_pubs[i]` is X of
+/// `old_ids[i]`), and every dealer must commit to `degree` + 1 coefficients,
+/// at least |old_ids|. The dealers must be exactly `old_ids`, once each.
+/// Without it a dealer could move X, or raise the threshold, unseen.
+/// Err is the offending dealer id (0 when the dealer set itself is wrong).
+pub Result(Bool, Int) rsh_dealers_ok(List(RshD1) dealers, List(Int) old_ids, List(CvPt) old_pubs, Int degree) {
+    if (dealers.len() != old_ids.len() || old_pubs.len() != old_ids.len() || degree + 1 < old_ids.len()) { return Err(0); }
+    return rsh_dealers_ok_at(dealers, old_ids, old_pubs, degree, 0);
+}
+
+Result(Bool, Int) rsh_dealers_ok_at(List(RshD1) dealers, List(Int) old_ids, List(CvPt) old_pubs, Int degree, Int i) {
+    if (i >= dealers.len()) { return Ok(true); }
+    RshD1 d = dealers[i];
+    Int k = cg_index(old_ids, d.dealer, 0);
+    if (k < 0 || rsh_dealer_count(dealers, d.dealer, 0) != 1) { return Err(d.dealer); }
+    if (d.commits.len() != degree + 1) { return Err(d.dealer); }
+    CvPt want = cv_mul(cg_lagrange(old_ids, d.dealer), old_pubs[k]);
+    if (!cv_eq(d.commits[0], want)) { return Err(d.dealer); }
+    return rsh_dealers_ok_at(dealers, old_ids, old_pubs, degree, i + 1);
+}
+
+Int rsh_dealer_count(List(RshD1) dealers, Int id, Int i) {
+    if (i >= dealers.len()) { return 0; }
+    return rsh_dealer_count(dealers, id, i + 1) + (if (dealers[i].dealer == id) { 1 } else { 0 });
+}
+
 /// Assembles a new party's share from every old dealer's round-1 message.
-/// Err is the offending dealer id.
+/// Err is the offending dealer id. Run rsh_dealers_ok on the messages first.
 pub Result(List(UInt(64)), Int) rsh_assemble_of(
     List(RshD1) dealers,
     Int new_id,
@@ -419,7 +469,8 @@ pub List(CvPt) rsh_commit_poly2(List(List(UInt(64))) coeffs) {
 
 /// Sums the dealer polynomials of every old party, from index `i` onto `acc`.
 /// `randoms[i]` is old party i's zero-constant random polynomial; `new_id` is unused.
-pub List(List(UInt(64))) rsh_new_share_polys(
+/// None when one of them fails rsh_randoms_ok.
+pub Option(List(List(UInt(64)))) rsh_new_share_polys(
     List(List(UInt(64))) old_shares,
     List(Int) old_ids,
     Int new_id,
@@ -427,17 +478,18 @@ pub List(List(UInt(64))) rsh_new_share_polys(
     Int i,
     List(List(UInt(64))) acc
 ) {
-    if (i >= old_ids.len()) { return acc; }
-    List(List(UInt(64))) dp = rsh_dealer_poly(old_shares[i], old_ids, old_ids[i], randoms[i]);
+    if (i >= old_ids.len()) { return Some(acc); }
+    List(List(UInt(64))) dp = rsh_dealer_poly(old_shares[i], old_ids, old_ids[i], randoms[i])?;
     return rsh_new_share_polys(old_shares, old_ids, new_id, randoms, i + 1, rsh_poly_add2(acc, dp));
 }
 
 /// Computes the new share of `new_id` by summing every old dealer's polynomial and evaluating it at `new_id`.
-pub List(UInt(64)) rsh_new_share_from_polys(
+pub Option(List(UInt(64))) rsh_new_share_from_polys(
     List(List(UInt(64))) old_shares,
     List(Int) old_ids,
     Int new_id,
     List(List(List(UInt(64)))) randoms
 ) {
-    return rsh_eval_poly(rsh_new_share_polys(old_shares, old_ids, new_id, randoms, 0, [bn_from_u64(0)]), new_id);
+    List(List(UInt(64))) poly = rsh_new_share_polys(old_shares, old_ids, new_id, randoms, 0, [bn_from_u64(0)])?;
+    return Some(rsh_eval_poly(poly, new_id));
 }

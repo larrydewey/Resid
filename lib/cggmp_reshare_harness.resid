@@ -26,10 +26,13 @@ pub List(RshNewPeer) rsh_harness_publics(List(RshHarnessPeer) peers, Int i, List
 }
 
 /// Runs round 1 (`rsh_d1`) for each old dealer from index `i` on, appending its message to `acc`.
-pub List(RshD1) rsh_harness_dealers(RshHarness h, List(RshNewPeer) pubs, Int i, List(RshD1) acc) {
-    if (i >= h.old_ids.len()) { return acc; }
-    RshD1 d = rsh_d1(h.old_ids[i], h.old_ids, h.old_shares[i], h.randoms[i], pubs, h.seed);
-    return rsh_harness_dealers(h, pubs, i + 1, acc.concat([d]));
+/// Err is a dealer whose random polynomial rsh_d1 refuses.
+pub Result(List(RshD1), Int) rsh_harness_dealers(RshHarness h, List(RshNewPeer) pubs, Int i, List(RshD1) acc) {
+    if (i >= h.old_ids.len()) { return Ok(acc); }
+    return match rsh_d1(h.old_ids[i], h.old_ids, h.old_shares[i], h.randoms[i], pubs, h.seed) {
+        None => Err(h.old_ids[i]),
+        Some(d) => rsh_harness_dealers(h, pubs, i + 1, acc.concat([d]))
+    };
 }
 
 Result(RshHarnessPeer, Int) rsh_harness_find(List(RshHarnessPeer) peers, Int id, Int i) {
@@ -50,6 +53,6 @@ pub Result(List(List(UInt(64))), Int) rsh_harness_new(RshHarness h, List(RshD1) 
 /// Runs round 1 for all dealers, then assembles every new party's share.
 pub Result(List(List(UInt(64))), Int) rsh_harness_run(RshHarness h) {
     List(RshNewPeer) pubs = rsh_harness_publics(h.peers, 0, []);
-    List(RshD1) dealers = rsh_harness_dealers(h, pubs, 0, []);
+    List(RshD1) dealers = rsh_harness_dealers(h, pubs, 0, [])?;
     return rsh_harness_new(h, dealers, 0, []);
 }

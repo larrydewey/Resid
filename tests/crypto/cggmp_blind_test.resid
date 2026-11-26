@@ -1,0 +1,145 @@
+// lib/cggmp_blind.resid, round 7: a blind peer sends its signature share
+// only after the designated party's "ok", opens its abort-2 secrets only
+// after its "abort", and answers one verdict per presignature. Releasing
+// sigma_j and then the abort-2 openings of the same presignature would hand
+// the designated party chi_j and with it the peer's key share x_j.
+//
+// A whole 2-of-2 blind session (party 1 designated, party 2 the peer) run
+// to round 7 on a fixed configuration (Paillier keys from
+// cggmp_oracle/keys.json, shares from session.py's make_config).
+
+import "../../lib/cggmp_blind.resid";
+import "../../lib/cose.resid";
+import "../../lib/crypto.resid";
+
+List(UInt(64)) nat(Str hex) { return bn_from_be(cose_hex_decode(hex)); }
+CvPt pt(Str hex) { return match cv_dec(cose_hex_decode(hex)) { Some(p) => p, None => cv_inf() }; }
+
+CgPublicCfg pub1() {
+    return CgPublicCfg {.id = 1, .ecdsa = pt("0214b7af992abdb6f55edb460b60100fe1c89c2a7b876683633b651231168d58c9"), .elgamal = pt("03bd1c981ceb9090300a28c3b9552e81d97bb5b7f4a2bd3d83d5fb7c16322b9799"),
+        .n = bn_mul(nat("c7a0a26d66491aa191e208dacad5e78e23c25b4ba562ef4b3b221ff8145257be0fa8ed3d39a016c37525162e12a61ebadecb27eb243f3a34fc42d1d0b9166d8fdcb4e7811efe5f11ad35501c444f9d0675e9af4a0ceceadda6b85f5875aa5704ec6ec283301faa4bf44de4b5ec0fa15447042f413cf862f1978ffebc030cd8b3"), nat("c701021e91631cbcb4777dbcb122eae89fd1c3c3bff6621ecefd132929afbbdc64468d3fddfd3cb4c7a4f5c8c014916f8a3eb850e8d38089f9e5f58922ccbdd12912e610192914bd7d841f86e12a53d30a70f41290f85a11639f5c4f45d11ed12ea3d76ed22012dbe8b73a90fa3bea819dcc99b2a7378dc48019b415561cfe17")),
+        .ped = Pedersen {.n = nat("9b2ea78ac4676322c181fea5e5f96de746fa5c060e27cb1f664f7afeda65b7128f1d84627411763a4ae475793cd1169f50bec9b5f487edf195330475cd19bfb372d31cbebde021065197cee51256f64189d4913b1735c33b9777153428ced95e3e17953cfccebc9e0c6af8dd3fb16fa262ece9e7aa884906b8a8106e9c0c37176c471ed26b71469c2a0f3901058f16cb30b8111ebde4851d3c1fad566f8e24a89337792219802b2b2804f9fbc2783c187d0e12cddb2ac925ad9be942d3970c5510b68b9332af9d5c1b77cf2c4c56e75931a6e51ddfcbdc9c834bdd0829c77e1054b36e43cebeb0d0e8e6111ec9471ac1b53724c93447dba0742bb6cddabd1215"), .s = nat("8c80f2beb1a01b81a894e8679933ac3762dfd8cf1658e438b3410bb920e7e72be0b6fd9c874895403f70f3d0887623f7a98f7e5cc0f060b272b64c5a0cdbfdedc26ca4649e700a864152f6c65716b19c480f6d86451b1873ae6a5a430b853f5cc89b456cd1c37f69bef5f80408fbb930a0d9979b3ca0084146bda46cece83e8f8802c3ba82efc9ba792dec5f371a53d7721082d22b41991c8ca31f878139bbb1efb172d7f0a280a26927768019dbcde9b688496a3658a2231ac93c0a614ae8b0d4151e8f6a0649fadf2fdaae3a4bd7d78c48c904598df8e066a6b32066ec4af4f2f4a57af076fb63c812841b8f88075c0058dbabc0342db79c3c214db8983298"), .t = nat("44cc68cd29f66e26fc1f81dc1a4c521c3951cbd6a7ff7853534ee2463eaa49003a3f44f56405889b519e177f6b09f59de808913e73a99935f46deb28d465b2b0418298b602783243f39e1f6deb555f06b161bb50a8ef6b3cfc157df754ba334245194aa31adf965ec40db04666937138198f4d9a8037cf1843d1e582a2108040d3977098cc7de4855d835a9b8bf5e83f4a91ca9ded379bdfe7783f87dcdd5c27de6b52ab9d8fef7a61978d93f57b53a492cce9bc6db977289098700f9da407d556057fa03b3e42b9f24c8600b4a533f7fd5a7330e8f78e02bffc6cb88f2a3eccf7b8f0a1868f71c16452e5c358ba1d9d9207f1c698673a6ec1e698d6257aa5b5")}};
+}
+CgConfig cfg1() {
+    return CgConfig {.id = 1, .threshold = 1, .ecdsa = nat("2d6ed8bd6f13584d315d3aa0cc632c0a6996df4126419e7d97ced4fbeda46b09"), .elgamal = nat("78b181071a61dbd0e2a77a78d6d66e3a9927dcc3448ee77181a2ccfd7d513543"),
+        .p = nat("c7a0a26d66491aa191e208dacad5e78e23c25b4ba562ef4b3b221ff8145257be0fa8ed3d39a016c37525162e12a61ebadecb27eb243f3a34fc42d1d0b9166d8fdcb4e7811efe5f11ad35501c444f9d0675e9af4a0ceceadda6b85f5875aa5704ec6ec283301faa4bf44de4b5ec0fa15447042f413cf862f1978ffebc030cd8b3"), .q = nat("c701021e91631cbcb4777dbcb122eae89fd1c3c3bff6621ecefd132929afbbdc64468d3fddfd3cb4c7a4f5c8c014916f8a3eb850e8d38089f9e5f58922ccbdd12912e610192914bd7d841f86e12a53d30a70f41290f85a11639f5c4f45d11ed12ea3d76ed22012dbe8b73a90fa3bea819dcc99b2a7378dc48019b415561cfe17"), .rid = [], .chain_key = [], .public = [pub1(), pub2()]};
+}
+CgPublicCfg pub2() {
+    return CgPublicCfg {.id = 2, .ecdsa = pt("02264651d9adcdc755d062fe1653a9587f9a5483cc971c7a996f4793d5c80f9a2f"), .elgamal = pt("03f21b1bbd38549776dbcfaef6d1d0109ce1eaefd4b4c852ce0ef5b225b3d515fc"),
+        .n = bn_mul(nat("f90233cda18f309bd2ccb22e617dc9963f1b9866d7f02b854f4d9e30ec0d12981e60395b58845807f3ce4401723869f2533d790ac64cdeb5c0524e956e99a42c575cb6790f97e8dc7f53b4ab8c6f3a3427c4fb7cfc6e0061165d247efb403dcfe5d289fe45aea3bd221b38a2f438bfed2f2b37a4a1c89561ecdc2713e0f84fe7"), nat("c12e35370a6d8ecc176a17150877d3b0ebfef52ba4fc1431f6d4945b59f8e144b16d5973544318faa40611bfce8ee72f9867258aa926fd2044e132dfbde15cfab284940d99c338bf1e6ad582cb9431cedfccd2574ad8909edbf7fae45082a3bca84c63f0b17903a10f71dc257578becd9849a3ef294c9728b871b0ba2eac39ef")),
+        .ped = Pedersen {.n = nat("bbe79b36541755dc64e104982f14428956d00cfb424c5c6710c423a4a2c95438348fa92b6bd895023bb37f4662337e3307c9f69d5643b7bcea39ba5b3eb920cc77f41f313270e9d19937911074cec44ea7f93744c60eb53a7f01dd138928d81b196f220476905ab0ca3cc1a5c5e1a7fb95e3015b140ddd8c740e9a91cb88ccfbc9c6fe8fd63c11043a4e78a8a3e12cfbf1a03bcefcf00df50a51c72662db881dcc0b091ad8e82412a65dddcdbfcb541785ce82607ffcea986e5abc3ddd985e3883efe9de78975853ba3c2a11e758e10d7f014e1a8c19a8d8845e0c4d93ac8e265bafa5dd3dfedc32506be9fb6eb37a611f460e8ffbad8a5672538bad82d107a9"), .s = nat("a5845b80cdd98ffea9757cfa8f665f1ff7e3d52eda4cc99b16ef024ebf25a82766a5ac66e6bc5bcd9d94fa2fa0c3aea5b657e321f158a644d2925223e013ff7b6fa07c58bcadf1ad14cc001141137802fafb3890c78cea7b86c4da5704538fe607b5ec8d05d9433f45435783df507170d6da3b9faed9adb4eff09198268eb920c8b2acffb44a648a7c240719be25ba5ab4267452eaa68b0a82a513e1e9c1e04132adbdb91d26fd1f7abe114266a47080ca051e36b4bba2a425778c369f6aa1fdccca94676c92e24a0ea00ebef583201be5e7057c4bff7b8f3b7616eaa205b0cd967f31ee1245c1df759ca55ea2f332ff432622f5aea25b72e584effc5a5ca2e8"), .t = nat("af7f917c5b2599197fee2a09d6a541aadf93f5058e6d748cedbf49b27d9f0ed2feae26df281ed828fc954ccd0ac91e31594c960db775214302a3cd2ed93dc34bc7afa7f7943d0f1102a841caf30273bd28733fe6ebac957bdf92ea47b3709835bccc93ead2b3e1b56bb7759ed0f7965a84fac42f3c8a0e1a55d4915c66a54a4aece46aad4aaf896ae7f1a1878ffb250f4acf5eab7625043de7f73a364612818f7f2fc4fee40f5eb002308974c2da1cf80230df5b55e89e40f81e556e719c017e41c583e0c00da3bd8c07f5ee39d07e1abf89e98f7f8c34dffc2d441dbf955e5eae172ab803b49f42dbda4ead52ebe17e628a994b17eb76a2a2933ce623fcebaf")}};
+}
+CgConfig cfg2() {
+    return CgConfig {.id = 2, .threshold = 1, .ecdsa = nat("6a4fff4a0b93ab3131497a8f5b355c685d918829a02c45a0e2a4a4b80b192825"), .elgamal = nat("953881c79fbc24ccbb7dd64e8401da7ead8d899e0f7b846857d10b4df80b0124"),
+        .p = nat("f90233cda18f309bd2ccb22e617dc9963f1b9866d7f02b854f4d9e30ec0d12981e60395b58845807f3ce4401723869f2533d790ac64cdeb5c0524e956e99a42c575cb6790f97e8dc7f53b4ab8c6f3a3427c4fb7cfc6e0061165d247efb403dcfe5d289fe45aea3bd221b38a2f438bfed2f2b37a4a1c89561ecdc2713e0f84fe7"), .q = nat("c12e35370a6d8ecc176a17150877d3b0ebfef52ba4fc1431f6d4945b59f8e144b16d5973544318faa40611bfce8ee72f9867258aa926fd2044e132dfbde15cfab284940d99c338bf1e6ad582cb9431cedfccd2574ad8909edbf7fae45082a3bca84c63f0b17903a10f71dc257578becd9849a3ef294c9728b871b0ba2eac39ef"), .rid = [], .chain_key = [], .public = [pub1(), pub2()]};
+}
+
+List(Int) digest() { return cose_hex_decode("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"); }
+BlRole role(Int id) { return BlRole {.designated = 1, .tau = if (id == 1) { nat("2b") } else { [] }}; }
+
+CgCtx ctx_of(CgConfig c) {
+    Option(CgCtx) oc = bl_ctx(c, [1, 2], role(c.id), bytes_of("blind-r7-test"), digest(), cg_rng([c.id, 7], "party", 32));
+    return oc else { CgCtx {.self = 0, .ids = [], .pubs = [], .x = [], .elg = [], .psec = PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []}, .pubkey = cv_inf(), .base = tr_new(), .seed = [], .digest = []} };
+}
+
+/// Both parties' round-6 states.
+type Six = { CgCtx c1; CgCtx c2; Ps6 d; Ps6 p; List(CgMsg) m6; };
+
+Result(Six, CgFail) to_round6() {
+    CgCtx c1 = ctx_of(cfg1());
+    CgCtx c2 = ctx_of(cfg2());
+    Ps1 a1 = ps_start(c1);
+    Ps1 b1 = ps_start(c2);
+    List(CgMsg) m1 = a1.out.concat(b1.out);
+    BlR2 a2 = bl_r2(ps_r2(a1, m1)?, role(1));
+    BlR2 b2 = bl_r2(ps_r2(b1, m1)?, role(2));
+    List(CgMsg) m2 = a2.s.out.concat(b2.s.out);
+    List(BlTwMsg) tw = a2.out.concat(b2.out);
+    Ps3 a3 = bl_r3(a2, m2, tw)?;
+    Ps3 b3 = bl_r3(b2, m2, tw)?;
+    List(CgMsg) m3 = a3.out.concat(b3.out);
+    Ps4 a4 = ps_r4(a3, m3)?;
+    Ps4 b4 = ps_r4(b3, m3)?;
+    List(CgMsg) m4 = a4.out.concat(b4.out);
+    Ps5 a5 = ps_r5(a4, m4)?;
+    Ps5 b5 = ps_r5(b4, m4)?;
+    List(CgMsg) m5 = a5.out.concat(b5.out);
+    Ps6 a6 = bl_r6(ps_r6(a5, m5)?, role(1));
+    Ps6 b6 = bl_r6(ps_r6(b5, m5)?, role(2));
+    return Ok(Six {.c1 = c1, .c2 = c2, .d = a6, .p = b6, .m6 = a6.out.concat(b6.out)});
+}
+
+Bool has_kind(List(CgMsg) ms, Str kind, Int i) {
+    if (i >= ms.len()) { return false; }
+    CgBody b = ms[i].body;
+    Str k = match b { SgB(_) => "sigma", PsA2(_) => "abort2", _ => "" };
+    return k == kind || has_kind(ms, kind, i + 1);
+}
+
+Bool refused(Result(BlPeer7, CgFail) r) { return match r { Ok(_) => false, Err(_) => true }; }
+
+test "the peer signs only after the designated party's ok, and then never opens" {
+    Bool ran = match to_round6() {
+        Err(_) => false,
+        Ok(s) => match bl_r7_designated(s.d, s.m6) {
+            Err(_) => false,
+            Ok(done) => after_ok(s, done)
+        }
+    };
+    expect(ran).toBeTrue();
+}
+
+Bool after_ok(Six s, PsDone done) {
+    BlPeer7 w = bl_r7_peer(s.p, role(2));
+    expect(w.out.len()).toEqual(0);
+    List(BlVerdict) vs = bl_verdicts(s.c1, true);
+    expect(vs.len()).toEqual(1);
+    // A verdict from anyone but the designated party is refused.
+    expect(refused(bl_r7_answer(w, BlVerdict {.from = 2, .to = 2, .ok = true}))).toBeTrue();
+    return match bl_r7_answer(w, vs[0]) {
+        Err(_) => false,
+        Ok(signed) => after_sigma(s, done, signed)
+    };
+}
+
+Bool after_sigma(Six s, PsDone done, BlPeer7 signed) {
+    expect(signed.answered).toEqual(1);
+    expect(has_kind(signed.out, "sigma", 0)).toBeTrue();
+    expect(signed.out[0].to).toEqual(1);
+    Bool sig_ok = match bl_finish(s.c1, done.presig, signed.out, role(1)) { Ok(_) => true, Err(_) => false };
+    expect(sig_ok).toBeTrue();
+    // Sigma is out: an abort verdict now, or a second ok, opens nothing.
+    expect(refused(bl_r7_answer(signed, BlVerdict {.from = 1, .to = 2, .ok = false}))).toBeTrue();
+    expect(refused(bl_r7_answer(signed, BlVerdict {.from = 1, .to = 2, .ok = true}))).toBeTrue();
+    // Nor does any other way in: the S shares added up, so no abort 2 opens.
+    Bool peer_ab = match bl_abort2(s.p, s.m6, role(2)) { Ok(_) => true, Err(_) => false };
+    expect(peer_ab).toBeFalse();
+    Bool d_ab = match bl_abort2(s.d, s.m6, role(1)) { Ok(_) => true, Err(_) => false };
+    expect(d_ab).toBeFalse();
+    return true;
+}
+
+test "on the designated party's abort the peer opens to it alone, and then never signs" {
+    Bool ran = match to_round6() {
+        Err(_) => false,
+        Ok(s) => after_abort(s)
+    };
+    expect(ran).toBeTrue();
+}
+
+Bool after_abort(Six s) {
+    BlPeer7 w = bl_r7_peer(s.p, role(2));
+    return match bl_r7_answer(w, bl_verdicts(s.c1, false)[0]) {
+        Err(_) => false,
+        Ok(opened) => opened_only(opened)
+    };
+}
+
+Bool opened_only(BlPeer7 opened) {
+    expect(opened.answered).toEqual(2);
+    expect(has_kind(opened.out, "abort2", 0)).toBeTrue();
+    expect(has_kind(opened.out, "sigma", 0)).toBeFalse();
+    expect(opened.out[0].to).toEqual(1);
+    expect(refused(bl_r7_answer(opened, BlVerdict {.from = 1, .to = 2, .ok = true}))).toBeTrue();
+    return true;
+}

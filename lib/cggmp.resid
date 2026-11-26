@@ -1134,7 +1134,19 @@ Result(List(CgOpen), CgFail) a1_fail(ListBuf(CgOpen) acc) {
 }
 
 /// Starts the abort: the broadcast revealing what is needed to find the party whose Delta share is wrong.
-pub Result(PsAb1, CgFail) ps_abort1(Ps5 s) {
+/// `in` holds the round-5 messages. The openings go out only when round 6
+/// on them fails because the Delta shares do not add up: a party whose own
+/// check passed may have released S (and then sigma), and its k opened next
+/// to sigma would give away its Chi share, so a peer's call for abort 1 is
+/// not enough. CGGMP21 opens only a presignature that was never used.
+pub Result(PsAb1, CgFail) ps_abort1(Ps5 s, List(CgMsg) in) {
+    return match ps_r6(s, in) {
+        Ok(_) => Err(cg_fail("the Delta shares add up; abort 1 opens nothing", [])),
+        Err(e) => if (e.culprits.len() == 0 && e.why == "Delta shares are inconsistent") { a1_begin(s) } else { Err(e) }
+    };
+}
+
+Result(PsAb1, CgFail) a1_begin(Ps5 s) {
     Ps1 s1 = s.prev.prev.prev.prev;
     CgCtx c = s1.ctx;
     ListBuf(Int) ob = ListBuf();
@@ -1267,7 +1279,22 @@ Result(List(CgOpen), CgFail) a2_fail(ListBuf(CgOpen) acc) {
 }
 
 /// Starts the abort 2: the broadcast revealing what is needed to find the party whose Chi share is wrong.
-pub Result(PsAb2, CgFail) ps_abort2(Ps6 s) {
+/// `in` holds the round-6 messages. The openings go out only when round 7
+/// on them fails because the S shares do not add up to the public key: when
+/// they do, round 7 releases sigma = k m + r chi, and k and the Chi MtA
+/// plaintexts opened next to it would give away this party's key share.
+pub Result(PsAb2, CgFail) ps_abort2(Ps6 s, List(CgMsg) in) {
+    return match ps_r7(s, in) {
+        Ok(_) => Err(cg_fail("the S shares add up; abort 2 opens nothing", [])),
+        Err(e) => if (e.culprits.len() == 0 && e.why == "the S shares do not add up to the public key") { a2_begin(s) } else { Err(e) }
+    };
+}
+
+/// The abort-2 openings with no check of the S shares: for ps_abort2, and for
+/// a blind peer answering the designated party's verdict (bl_r7_answer),
+/// which cannot check S itself and has released nothing derived from Chi.
+/// Never call it on a presignature whose sigma has gone out.
+pub Result(PsAb2, CgFail) a2_begin(Ps6 s) {
     Ps1 s1 = s.prev.prev.prev.prev.prev;
     Ps3 s3 = s.prev.prev.prev;
     CgCtx c = s1.ctx;

@@ -17,6 +17,9 @@
 // - Abort 2 (S shares not adding up) is detected only by d; the others send
 //   their openings to d only, since d's own opening would let them solve for
 //   tau*G. d names the culprit; the others never blame d.
+// - Round 7 is split around d's verdict (BlVerdict): a peer sends its
+//   signature share only after d's "ok", opens only after d's "abort", and
+//   answers one verdict per presignature (bl_r7_answer).
 //
 // This is Symbolon's construction on top of CGGMP21, not part of the paper;
 // it needs its own review (Symbolon SPEC 27, C-01). The transcript of the
@@ -164,13 +167,48 @@ List(CgMsg) bl_as_bc(List(CgMsg) ms, Int self, Int i, ListBuf(CgMsg) acc) {
     return bl_as_bc(ms, self, i + 1, if (m.to == self) { acc.push(cg_bc(m.from, m.body)) } else { acc });
 }
 
-// ─── Round 7 ────────────────────────────────────────────────────
+// ─── Round 7: the designated party's verdict, then sigma ────────
+//
+// CGGMP21 opens abort-2 secrets only for a presignature that was never used
+// to sign. A blind peer cannot check the S points itself, so round 7 is
+// split: the peer has sent S only (round 6); the designated party checks
+// the sum and sends each peer a verdict; on "ok" the peer sends its
+// signature share and can never open; on "abort" it opens and never sends
+// sigma. Before, the peer sent sigma at once and still opened k_j and its
+// Chi MtA plaintexts if asked, which together give chi_j and then x_j.
+
+//@ serial
+/// The designated party's verdict on the S points of one presignature, for
+/// signer `to`: `ok` releases its signature share; otherwise it opens its
+/// abort-2 secrets to the designated party.
+pub type BlVerdict = { Int from; Int to; Bool ok; };
+
+/// A non-designated signer after round 7, waiting for the designated
+/// party's verdict. `answered` is 0 while it waits, 1 once it has released
+/// its signature share, 2 once it has opened its abort-2 secrets; `out` is
+/// what to send. Whoever holds the state must store the one returned by
+/// bl_r7_answer before sending `out` and never answer from an older copy:
+/// a second answer for the same presignature reveals the key share. Sign
+/// with `presig` (when there was no digest) only after an "ok" answer.
+pub type BlPeer7 = { Ps6 prev; CgPresig presig; BlRole role; Int answered; List(CgMsg) out; };
 
 /// The designated party's round 7: the S points sent to it must add up to X + tau*G.
+/// On Ok, send bl_verdicts(c, true); on the S-sum failure, send
+/// bl_verdicts(c, false) and run bl_abort2.
 pub Result(PsDone, CgFail) bl_r7_designated(Ps6 s, List(CgMsg) in) {
     CgCtx c = s.prev.prev.prev.prev.prev.ctx;
     PsDone done = ps_r7(s, bl_as_bc(in, c.self, 0, ListBuf()))?;
     return Ok(PsDone {.presig = done.presig, .out = []});
+}
+
+/// The designated party's verdict for every other signer.
+pub List(BlVerdict) bl_verdicts(CgCtx c, Bool ok) {
+    return bl_verdicts_at(c, cg_others(c.ids, c.self, 0, ListBuf()), ok, 0, ListBuf());
+}
+
+List(BlVerdict) bl_verdicts_at(CgCtx c, List(Int) others, Bool ok, Int i, ListBuf(BlVerdict) acc) {
+    if (i >= others.len()) { return acc.finish(); }
+    return bl_verdicts_at(c, others, ok, i + 1, acc.push(BlVerdict {.from = c.self, .to = others[i], .ok = ok}));
 }
 
 List(CvPt) bl_rbars(List(Int) ids, Map(Int, CvPt) rb, Int i, ListBuf(CvPt) acc) {
@@ -178,14 +216,33 @@ List(CvPt) bl_rbars(List(Int) ids, Map(Int, CvPt) rb, Int i, ListBuf(CvPt) acc) 
     return bl_rbars(ids, rb, i + 1, acc.push(rb[ids[i]] else { cv_inf() }));
 }
 
-/// Every other party's round 7: no S check (it cannot know X + tau*G); its signature share goes to the designated party only.
-pub PsDone bl_r7_peer(Ps6 s, BlRole role) {
+/// Every other party's round 7: no S check (it cannot know X + tau*G) and
+/// nothing to send yet; it waits for the designated party's verdict.
+pub BlPeer7 bl_r7_peer(Ps6 s, BlRole role) {
     Ps1 s1 = s.prev.prev.prev.prev.prev;
     Ps3 s3 = s.prev.prev.prev;
     CgCtx c = s1.ctx;
     CgPresig pre = CgPresig {.id = [], .r = s.r, .ids = c.ids, .rbar = bl_rbars(c.ids, s.rbar, 0, ListBuf()), .s = [], .kshare = s1.kshare, .chi = s3.chi_share};
-    List(CgMsg) out = if (c.digest.len() > 0) { [cg_to(c.self, role.designated, SgB(cg_sigma(pre, c.digest)))] } else { [] };
-    return PsDone {.presig = pre, .out = out};
+    return BlPeer7 {.prev = s, .presig = pre, .role = role, .answered = 0, .out = []};
+}
+
+/// A peer's answer to the designated party's verdict, at most once per
+/// presignature: "ok" sends its signature share to the designated party
+/// (none without a digest: the presignature is then ready for later
+/// signing), "abort" sends its abort-2 openings to it. A second verdict,
+/// or one from anyone but the designated party, is refused.
+pub Result(BlPeer7, CgFail) bl_r7_answer(BlPeer7 p, BlVerdict v) {
+    CgCtx c = p.prev.prev.prev.prev.prev.prev.ctx;
+    Int d = p.role.designated;
+    if (c.self == d) { return Err(cg_fail("the designated party gives verdicts, it does not answer them", [c.self])); }
+    if (v.from != d || v.to != c.self) { return Err(cg_fail("a verdict not from the designated party to us", [])); }
+    if (p.answered != 0) { return Err(cg_fail("a second verdict for one presignature", [d])); }
+    if (v.ok) {
+        List(CgMsg) out = if (c.digest.len() > 0) { [cg_to(c.self, d, SgB(cg_sigma(p.presig, c.digest)))] } else { [] };
+        return Ok(BlPeer7 {.prev = p.prev, .presig = p.presig, .role = p.role, .answered = 1, .out = out});
+    }
+    PsAb2 a = a2_begin(p.prev)?;
+    return Ok(BlPeer7 {.prev = p.prev, .presig = p.presig, .role = p.role, .answered = 2, .out = bl_redirect(a.out, d, 0, ListBuf())});
 }
 
 /// The designated party assembles the signature from the shares sent to it and checks it under X + tau*G.
@@ -196,12 +253,14 @@ pub Result(CgSig, CgFail) bl_finish(CgCtx c, CgPresig pre, List(CgMsg) in, BlRol
 
 // ─── Abort 2, blind ─────────────────────────────────────────────
 
-/// A party's abort-2 openings in blind mode: sent to the designated party only; the designated party sends none.
-pub Result(PsAb2, CgFail) bl_abort2(Ps6 s, BlRole role) {
-    PsAb2 a = ps_abort2(s)?;
+/// The designated party's own abort-2 openings in blind mode (kept, never
+/// sent), for bl_abort2_blame; `in` holds the S points sent to it, which must
+/// fail to add up. The other parties open only through bl_r7_answer.
+pub Result(PsAb2, CgFail) bl_abort2(Ps6 s, List(CgMsg) in, BlRole role) {
     CgCtx c = s.prev.prev.prev.prev.prev.ctx;
-    List(CgMsg) out = if (c.self == role.designated) { [] } else { bl_redirect(a.out, role.designated, 0, ListBuf()) };
-    return Ok(PsAb2 {.prev = a.prev, .mine = a.mine, .out = out});
+    if (c.self != role.designated) { return Err(cg_fail("a blind peer opens only on the designated party's verdict (bl_r7_answer)", [c.self])); }
+    PsAb2 a = ps_abort2(s, bl_as_bc(in, c.self, 0, ListBuf()))?;
+    return Ok(PsAb2 {.prev = a.prev, .mine = a.mine, .out = []});
 }
 
 /// The designated party's abort-2 blame. Party j's Chi commitment must be

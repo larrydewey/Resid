@@ -5,6 +5,9 @@
 //
 //   resid_blind_session <config> <signers> <designated> <tau hex> <digest hex> <seed hex> [fault]
 //
+// Round 7 follows the split flow: the designated party checks the S points
+// and sends each peer a verdict; a peer answers with sigma or its openings.
+//
 // fault: "none"; "chi:<id>" (party id adds 1 to its Chi share after round 3,
 // so the S points do not add up and the designated party runs abort 2);
 // "proof" (the designated party's tweak aff-p proofs are corrupted).
@@ -192,13 +195,20 @@ Int pos_of(List(Int) ids, Int id, Int i) { if (i >= ids.len()) { return -1; } if
 List(List(CgMsg)) o7(List(Ps6) ss, Int d, Int i, ListBuf(List(CgMsg)) acc) {
     if (i >= ss.len()) { return acc.finish(); }
     CgCtx c = ss[i].prev.prev.prev.prev.prev.ctx;
-    List(CgMsg) out = if (c.self == d) { [] } else { bl_r7_peer(ss[i], BlRole {.designated = d, .tau = []}).out };
+    List(CgMsg) out = if (c.self == d) { [] } else { answer(bl_r7_peer(ss[i], BlRole {.designated = d, .tau = []}), d, true) };
     return o7(ss, d, i + 1, acc.push(out));
+}
+
+// A peer's answer to the designated party's verdict (ok: its signature share; abort: its openings).
+List(CgMsg) answer(BlPeer7 w, Int d, Bool ok) {
+    CgCtx c = w.prev.prev.prev.prev.prev.prev.ctx;
+    return match bl_r7_answer(w, BlVerdict {.from = d, .to = c.self, .ok = ok}) { Ok(a) => a.out, Err(_) => [] };
 }
 
 List(List(CgMsg)) oab(List(Ps6) ss, Int d, Int i, ListBuf(List(CgMsg)) acc) {
     if (i >= ss.len()) { return acc.finish(); }
-    List(CgMsg) out = match bl_abort2(ss[i], BlRole {.designated = d, .tau = []}) { Ok(a) => a.out, Err(_) => [] };
+    CgCtx c = ss[i].prev.prev.prev.prev.prev.ctx;
+    List(CgMsg) out = if (c.self == d) { [] } else { answer(bl_r7_peer(ss[i], BlRole {.designated = d, .tau = []}), d, false) };
     return oab(ss, d, i + 1, acc.push(out));
 }
 
@@ -270,15 +280,15 @@ Int after6(List(CgCtx) cs, List(Int) ids, Int d, List(BlR2) s2, List(CgMsg) seen
     List(CgMsg) m6 = flat(o6(s6, 0, ListBuf()), 0, ListBuf());
     Int di = pos_of(ids, d, 0);
     return match bl_r7_designated(s6[di], m6) {
-        Err(e) => blind_abort(cs, ids, d, s2, seen0.concat(m6), s6, e),
+        Err(e) => blind_abort(cs, ids, d, s2, seen0.concat(m6), s6, m6, e),
         Ok(done) => sign(cs, ids, d, seen0.concat(m6), s6, done)
     };
 }
 
-Int blind_abort(List(CgCtx) cs, List(Int) ids, Int d, List(BlR2) s2, List(CgMsg) seen0, List(Ps6) s6, CgFail first) {
+Int blind_abort(List(CgCtx) cs, List(Int) ids, Int d, List(BlR2) s2, List(CgMsg) seen0, List(Ps6) s6, List(CgMsg) m6, CgFail first) {
     Int di = pos_of(ids, d, 0);
     List(CgMsg) ma = flat(oab(s6, d, 0, ListBuf()), 0, ListBuf());
-    return match bl_abort2(s6[di], s2[di].role) {
+    return match bl_abort2(s6[di], m6, s2[di].role) {
         Err(e) => fail(e),
         Ok(mine) => report_abort(ids, d, seen0.concat(ma), bl_abort2_blame(mine, ma, s2[di]))
     };
