@@ -1,0 +1,9 @@
+// The mark on what a register block generates is the compiler's to write
+// (E0260): a function that carried it by hand could write session handles
+// and call the raw session accesses.
+import "dev/fx_device_virtio_window.resid";
+
+@session_gen
+pub SessionKey mine() { return SessionKey {.v = 1}; }
+
+Int main() { println(f"{mine().v}"); return 0; }

@@ -5,6 +5,7 @@
 // through one by tests/device/virtio_vm.sh; the host's side is
 // tests/runtime/device_session.c.
 import "dev/fx_device_virtio_window.resid";
+import "dev/fx_device_session.resid";
 
 @word(8) type Status = { Bool acknowledge; Bool driver; Bool driver_ok; Bool features_ok; @reserved(2); DeviceOwned(Bool) needs_reset; Bool failed; };
 
@@ -41,8 +42,9 @@ Int main() {
     println(got(card_session(CardWindows {.shared = w1, .extra = w2}, lambda(s) { extra_read_first(s.extra) })));
     println(got(card_session_ro(CardWindows {.shared = w1, .extra = w3}, lambda(s) { shared_read_device_status(s.shared) })));
     println(f"resources: {dv_session_map([w1, w2, w1], 0)} {dv_session_map([w1, w2, w1], 1)} {dv_session_map([w1, w2, w1], 2)}");
-    // A session that is not open: its number names nothing.
-    println(match (common_read_device_status(CommonSession {.id = 12345, .map = 0, .base = 0, .len = 0x38})) { Ok(s) => "read", Err(e) => device_error_text(e) });
-    println(match (common_read_device_status(CommonSession {.id = 12345, .map = 0, .base = 0, .len = 0x14})) { Ok(s) => "read", Err(e) => device_error_text(e) });
+    // A session that is not open: its key names nothing. A block placed
+    // where the memory does not hold it has a window of no bytes.
+    println(match (shared_read_device_status(shared_in(fx_stale_region(), 0))) { Ok(s) => "read", Err(e) => device_error_text(e) });
+    println(match (shared_read_device_status(shared_in(fx_stale_region(), 16380))) { Ok(s) => "read", Err(e) => device_error_text(e) });
     return 0;
 }

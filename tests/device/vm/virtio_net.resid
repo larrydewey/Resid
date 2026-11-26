@@ -118,7 +118,7 @@ List(DevOp) offer(NetSession s, Int qi, Int at, Int len, Int flags) {
     ];
 }
 
-NotifySession bell(NetSession s, Int noff, Int step) { return NotifySession {.id = s.notify.id, .map = s.notify.map, .base = s.notify.base + noff * step, .len = 2}; }
+NotifySession bell(NetSession s, Int noff, Int step) { return notify_at(s.notify, noff * step); }
 
 // An ARP request (RFC 826) from `mac` at 10.0.2.15 for 10.0.2.2, after
 // the twelve bytes every frame to the device starts with (§5.1.6): to

@@ -71,6 +71,14 @@ static void req_open2(Req* r, int write, const char* addr, uint32_t size, int re
     r->n--;
     u(r, 1, 1); u(r, res2, 1); u(r, size2, 4);
 }
+/* One access of a byte at offset 0 of resource `res` (kind 9, as
+ * device.mmio_pci and device.mmio_win send it): a store of 0 when `store`. */
+static void req_pci9(Req* r, int store, const char* addr, int res, int ven, int dev) {
+    req_open(r, store, addr, 4096, res, ven, dev);
+    r->b[4] = 9;
+    r->n--;            /* no list of other resources */
+    r->b[r->n - 19] = store;
+}
 /* A session with `dma` bytes of memory for the device at address `iova`
  * (kind 14): the open's request, then the two. Under self-test 30 the
  * host holds plain memory there, as the last of the session's resources. */
@@ -231,6 +239,18 @@ static int64_t driver(int64_t which, int64_t unused) {
             uint32_t reg = (uint32_t)resid_device_drv_load(0, 16, 4);
             uint32_t none = (uint32_t)resid_device_drv_load(0, 4096, 4);
             memcpy(out + 8, &back, 8); memcpy(out + 16, &reg, 4); memcpy(out + 20, &none, 4); on = 24;
+        } else if (len >= 1 && msg[0] == 'N') {
+            /* resources before the first: a negative number names none
+             * (red team DRV-1: only the upper bound was checked, so the
+             * table was read before its start). Asked of, never made. */
+            int hits = 0;
+            for (int m = -1; m >= -64; m--)
+                for (int k = 1; k <= 2; k++)
+                    for (uint32_t o = 0; o < 64; o += 8) hits += (int)resid_device_drv_can(m, o, 8, k);
+            hits += (int)resid_device_drv_can(-1, 0, 1, 1) + (int)resid_device_drv_can(INT64_MIN / 16, 0, 1, 1);
+            out[0] = (uint8_t)(hits > 255 ? 255 : hits);
+            out[1] = (uint8_t)resid_device_drv_can(0, 16, 4, 1);
+            on = 2;
         } else if (len >= 1 && msg[0] == 'B') {
             batch_begin(&q, 1, 1);
             batch_op(&q, 2, 4, 1, 2000, 0x0badcafe, NULL);
@@ -259,8 +279,8 @@ static void put(const char* dir, const char* file, const void* data, int n) {
 }
 
 static void rm_tree(const char* root) {
-    static const char* fns[] = {"0000:00:04.0", "0000:00:05.0", "0001:3b:1f.7", NULL};
-    static const char* files[] = {"vendor", "device", "resource0", "resource4", NULL};
+    static const char* fns[] = {"0000:00:04.0", "0000:00:05.0", "0001:3b:1f.7", "0000:00:06.0", "0000:00:07.0", "0000:00:08.0", "0000:00:0a.0", NULL};
+    static const char* files[] = {"vendor", "device", "resource0", "resource4", "driver", "config", NULL};
     char p[700];
     for (int i = 0; fns[i]; i++) {
         for (int j = 0; files[j]; j++) { snprintf(p, sizeof p, "%s/%s/%s", root, fns[i], files[j]); unlink(p); }
@@ -418,6 +438,69 @@ int main(int argc, char** argv, char** envp) {
     req_open(&q, 1, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041);
     r = call(&q, 0);
     check("session_write_needs_grant", code(&r) == 2);
+
+    /* Registers written outside VFIO (red team DH-3): a function a kernel
+     * driver holds, or one that masters the bus, could be made to DMA
+     * where no IOMMU domain of ours confines it. A session that writes is
+     * refused there (80); one that only loads is not; a function bound to
+     * vfio-pci, or with bus mastering off, may be written. */
+    {
+        char d6[320], d8[320], d10[320], d11[320], lk[400];
+        snprintf(d6, sizeof d6, "%s/0000:00:06.0", root);
+        snprintf(d8, sizeof d8, "%s/0000:00:07.0", root);
+        snprintf(d10, sizeof d10, "%s/0000:00:08.0", root);
+        snprintf(d11, sizeof d11, "%s/0000:00:0a.0", root);
+        const char* ds4[] = {d6, d8, d10, d11};
+        for (int i = 0; i < 4; i++) {
+            mkdir(ds4[i], 0700);
+            put(ds4[i], "vendor", "0x1af4\n", 7); put(ds4[i], "device", "0x1041\n", 7);
+            put(ds4[i], "resource0", blk, 4096);
+        }
+        snprintf(lk, sizeof lk, "%s/driver", d6);
+        int l1 = symlink("../../../bus/pci/drivers/virtio-pci", lk);
+        snprintf(lk, sizeof lk, "%s/driver", d10);
+        int l2 = symlink("../../../bus/pci/drivers/vfio-pci", lk);
+        uint8_t cfg[64] = {0x1a, 0xf4};
+        cfg[4] = 0x06;   /* memory space, bus master */
+        put(d8, "config", cfg, 64);
+        cfg[4] = 0x02;   /* memory space only */
+        put(d11, "config", cfg, 64);
+        req_open(&q, 1, "0000:00:06.0", 4096, 0, 0x1af4, 0x1041);
+        r = call(&q, 1);
+        check("session_write_kernel_driver_refused", l1 == 0 && code(&r) == 10 && value(&r) == 80);
+        req_open(&q, 1, "0000:00:07.0", 4096, 0, 0x1af4, 0x1041);
+        r = call(&q, 1);
+        check("session_write_bus_master_refused", code(&r) == 10 && value(&r) == 80);
+        req_open(&q, 0, "0000:00:06.0", 4096, 0, 0x1af4, 0x1041);
+        r = call(&q, 0);
+        uint64_t k6 = number(&r);
+        check("session_load_kernel_driver_served", k6 > 0);
+        req_close(&q, k6); r = call(&q, 0);
+        req_open(&q, 1, "0000:00:08.0", 4096, 0, 0x1af4, 0x1041);
+        r = call(&q, 1);
+        uint64_t k10 = number(&r);
+        check("session_write_vfio_pci_served", l2 == 0 && k10 > 0);
+        req_close(&q, k10); r = call(&q, 0);
+        req_open(&q, 1, "0000:00:0a.0", 4096, 0, 0x1af4, 0x1041);
+        r = call(&q, 1);
+        uint64_t k11 = number(&r);
+        check("session_write_no_bus_master_served", k11 > 0);
+        req_close(&q, k11); r = call(&q, 0);
+        /* A one-shot access (kind 9: device.mmio_pci, device.mmio_win)
+         * is held to the same rule when it stores. */
+        req_pci9(&q, 1, "0000:00:06.0", 0, 0x1af4, 0x1041);
+        r = call(&q, 1);
+        check("mmio_pci_store_kernel_driver_refused", code(&r) == 10 && value(&r) == 80);
+        req_pci9(&q, 1, "0000:00:07.0", 0, 0x1af4, 0x1041);
+        r = call(&q, 1);
+        check("mmio_pci_store_bus_master_refused", code(&r) == 10 && value(&r) == 80);
+        req_pci9(&q, 0, "0000:00:06.0", 0, 0x1af4, 0x1041);
+        r = call(&q, 0);
+        check("mmio_pci_load_kernel_driver_served", r.n >= 10 && r.b[0] == 0);
+        req_pci9(&q, 1, "0000:00:0a.0", 0, 0x1af4, 0x1041);
+        r = call(&q, 1);
+        check("mmio_pci_store_no_bus_master_served", r.n >= 2 && r.b[0] == 0);
+    }
 
     /* One session over two of the function's resources: each access names
      * its resource and is held to that one's size. */
@@ -625,6 +708,11 @@ int main(int argc, char** argv, char** envp) {
     check("driver_batch", bytes_are(&r, (const uint8_t*)&cafe, 4));
     /* Direct accesses, which build no request: what may be made, and that
      * a refused one loads 0 and stores nothing. */
+    mm[0] = 'N';
+    req_msg(&q, dv, mm, 1);
+    r = call(&q, 1);
+    uint8_t want_n[2] = {0, 1};
+    check("driver_negative_resource_refused", bytes_are(&r, want_n, 2));
     mm[0] = 'S';
     req_msg(&q, dv, mm, 1);
     r = call(&q, 1);
@@ -681,6 +769,19 @@ int main(int argc, char** argv, char** envp) {
     req_msg(&q, dv, mm, 5);
     r = call(&q, 0);
     check("driver_message_needs_write_grant", code(&r) == 2);
+    /* A message is a write whatever the entry: one whose write byte is 0
+     * reaches the read entry, which lets it through, and the session
+     * refuses it there (73), before the driver sees it (red team DH-2). */
+    q.b[5] = 0;
+    r = call(&q, 0);
+    check("driver_message_read_entry_refused", code(&r) == 10 && value(&r) == 73);
+    q.b[5] = 0;
+    r = call(&q, 1);
+    check("driver_message_write_byte_zero_refused", code(&r) == 10 && value(&r) == 73);
+    mm[0] = 'L';
+    req_msg(&q, dv, mm, 5);
+    r = call(&q, 1);
+    check("driver_alive_after_refusals", bytes_are(&r, blk + 16, 4));
     req_close(&q, dv);
     r = call(&q, 0);
     check("driver_close", stored(&r));
@@ -721,7 +822,24 @@ int main(int argc, char** argv, char** envp) {
     req_open(&q, 0, "0000:00:04.0", 4096, 0, 0x1af4, 0x1041);
     r = call(&q, 0);
     uint64_t again = number(&r);
-    check("session_slot_reused_number_not", again > ids[7]);
+    int fresh = again > 0;
+    for (int i = 0; i < 8; i++) if (again == ids[i]) fresh = 0;
+    check("session_slot_reused_number_not", fresh);
+    /* A key is not a counter (red team DH-1): numbers 1, 2, ... were the
+     * thread's sessions in order, so code handed none named them. Nine
+     * keys, none small, no two adjacent, none past 62 bits. */
+    int guessable = again < 65536 || again >> 62;
+    for (int i = 0; i < 8; i++) {
+        if (ids[i] < 65536 || ids[i] >> 62) guessable = 1;
+        for (int j = 0; j < 8; j++) if (i != j && (ids[i] == ids[j] + 1 || ids[i] == ids[j])) guessable = 1;
+    }
+    check("session_keys_unguessable", !guessable);
+    for (uint64_t k = 1; k <= 64; k++) {
+        req_access(&q, k, 0, 16, 4, 0);
+        r = call(&q, 0);
+        if (!(code(&r) == 10 && value(&r) == 71)) guessable = 1;
+    }
+    check("session_small_numbers_name_nothing", !guessable);
     req_close(&q, again);
     r = call(&q, 0);
 

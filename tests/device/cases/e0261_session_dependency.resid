@@ -1,0 +1,23 @@
+// A dependency bounded to devices = ["tsm_report"] is handed the memory
+// of the program's DMA session and writes it: dma_write holds no
+// descriptor, but what it acts on is the session the program opened
+// under fx.virtio_blk, which the bound does not cover (E0261). Red team
+// F2: the bound counted only `device.<verb>` calls, so this built.
+import "dep";
+import "dev/fx_device_virtio_window.resid";
+
+@word(16) type Half = { UInt(16) v; };
+
+@registers(size = 0x38, session = device)
+type Common = { @at(0x16) Half queue_select; };
+
+@device(dma = fx_blk_dma)
+type Blk = { Common common; };
+
+@requires(device)
+Int main() {
+    PciAddr a = PciAddr {.domain = 0, .bus = 0, .device = 2, .function = 0};
+    Result(Str, DeviceError) r = blk_session(BlkWindows {.common = PciWindow {.addr = a, .resource = 4, .base = 0, .len = 0x38}}, lambda(s) { dep_poke(s.dma) });
+    println(match (r) { Ok(t) => t, Err(e) => device_error_text(e) });
+    return 0;
+}

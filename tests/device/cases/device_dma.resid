@@ -6,6 +6,7 @@
 // by tests/device/virtio_vm.sh; the host's side is
 // tests/runtime/device_session.c.
 import "dev/fx_device_virtio_window.resid";
+import "dev/fx_device_dma.resid";
 
 @word(16) type Half = { UInt(16) v; };
 
@@ -14,6 +15,13 @@ type Common = { @at(0x16) Half queue_select; };
 
 @registers(size = 6, session = device)
 type Avail = { @at(0) Half flags; @at(2) Half idx; @at(4) Half ring0; };
+
+// A register that clears when it is read (a virtio ISR).
+@word(8) @clears_on_read
+type Isr = { DeviceOwned(Bool) queue; DeviceOwned(Bool) config; @reserved(6); };
+
+@registers(size = 1, session = device)
+type IsrBlock = { @at(0) Isr isr; };
 
 @device(dma = fx_rng_dma)
 type Rng = { Common common; };
@@ -29,7 +37,7 @@ Int main() {
     println(got(rng_session(RngWindows {.common = PciWindow {.addr = gone, .resource = 4, .base = 0, .len = 0x38}}, lambda(s) { common_read_queue_select(s.common) })));
     println(got(rng_session(RngWindows {.common = PciWindow {.addr = gone, .resource = 7, .base = 0, .len = 0x38}}, lambda(s) { common_read_queue_select(s.common) })));
     // A memory that belongs to no session; a block placed past its end.
-    DmaRegion none = DmaRegion {.id = 12345, .map = 1, .iova = 0x100000, .len = 16384};
+    DmaRegion none = fx_stale_region();
     println(match (avail_read_idx(avail_in(none, 4096))) { Ok(h) => "read", Err(e) => device_error_text(e) });
     println(match (avail_read_idx(avail_in(none, 16380))) { Ok(h) => "read", Err(e) => device_error_text(e) });
     println(match (dma_read(none, 0, 16)) { Ok(b) => "read", Err(e) => device_error_text(e) });
@@ -37,5 +45,13 @@ Int main() {
     println(match (dma_write(none, 16380, [1, 2, 3, 4, 5])) { Ok(b) => "wrote", Err(e) => device_error_text(e) });
     println(match (dma_wait(none, 10)) { Ok(n) => "waited", Err(e) => device_error_text(e) });
     println(match (dma_wait(none, 60001)) { Ok(n) => "waited", Err(e) => device_error_text(e) });
+    // A register that clears when read is taken, not loaded: in a batch
+    // too, which then needs device_batch and the full grant.
+    IsrBlockSession isr = isr_block_in(none, 0);
+    println(match (device_batch_ro(none.id, [isr_block_isr_load(isr)])) { Ok(o) => "loaded", Err(e) => device_error_text(e) });
+    println(match (device_batch(none.id, [isr_block_isr_load(isr)])) { Ok(o) => "taken", Err(e) => device_error_text(e) });
+    // A block placed in a window: inside it, or no bytes.
+    println(match (avail_read_idx(avail_at(avail_in(none, 4096), 0))) { Ok(h) => "read", Err(e) => device_error_text(e) });
+    println(match (avail_read_idx(avail_at(avail_in(none, 4096), 2))) { Ok(h) => "read", Err(e) => device_error_text(e) });
     return 0;
 }

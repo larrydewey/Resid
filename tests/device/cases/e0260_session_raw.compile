@@ -1,0 +1,5 @@
+E0260
+`device_session_word` is a raw session access
+`device_op_load` is a raw session access
+`device_session_put` is a raw session access
+`device_session_end` is a raw session access

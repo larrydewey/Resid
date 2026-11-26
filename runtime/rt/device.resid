@@ -1240,10 +1240,10 @@ Int dp_judge(Int d, Int st, Int rb, Int got, Int cap) {
 // and found the function's ids to be the descriptor's; then one message
 // each way for every access (kind 12), until the program ends it (kind
 // 13) or exits (the host sees its socket close and exits). The sessions
-// of a thread are 8 slots of four words -- number (0: free), socket, the
-// host's pid, its pidfd -- and then the last number given out; a session
-// is used on the thread that opened it. A number is never given twice, so
-// one kept past its session's end names nothing.
+// of a thread are 8 slots of four words -- key (0: free), socket, the
+// host's pid, its pidfd; a session is used on the thread that opened it.
+// A key is 62 random bits (ds_new_key), so one kept past its session's
+// end names nothing, and one that was never given out cannot be guessed.
 Int ds_tab() { return resid_raw_tls("dv_sess", 264); }
 
 Int ds_find(Int id, Int i) {
@@ -1290,17 +1290,35 @@ Int ds_open(Int d, Int req, Int n) {
     _ = c_free(hdr);
     Int rb = xmalloc(16);
     Int got = if (s1) { hs_recv_until(a, rb, 0, 10, dl) } else { 0 };
-    if (got == 10 && ld8(rb) == 0) {
-        Int tab = ds_tab();
-        Int id = ld64(tab + 256) + 1;
-        _ = st64(tab + 256, id) + st64(e, id) + st64(e + 8, a) + st64(e + 16, pid) + st64(e + 24, pfd);
+    Bool up = got == 10 && ld8(rb) == 0;
+    Int id = if (up) { ds_new_key(rb + 8, 0) } else { 0 };
+    if (id > 0) {
+        _ = st64(e, id) + st64(e + 8, a) + st64(e + 16, pid) + st64(e + 24, pfd);
         return c_free(rb) * 0 + ds_num_reply(id);
+    }
+    if (up) {
+        // No key to give it: the host is told to end, as at a close.
+        _ = sys_close(a);
+        _ = hs_finish(pid, pfd, hs_deadline(2000));
+        return c_free(rb) * 0 + dev_err_reply(de_host(), 5 * 256);
     }
     // No session: the host said why and exits, or it is gone.
     _ = sys_close(a);
     Int st = hs_finish(pid, pfd, dl);
     Int out = dp_judge(d, st, rb, got, 16);
     return c_free(rb) * 0 + out;
+}
+
+// A new session's key: 62 bits of getrandom, not 0 and no open
+// session's, so that code which was not handed a session's key cannot
+// name it (a counter's next number could be guessed). 0 when getrandom
+// fails, and the session is not opened. `b` is 8 bytes of room.
+Int ds_new_key(Int b, Int tries) {
+    if (tries >= 4 || resid_raw_syscall(318, b, 8, 0, 0, 0, 0) != 8) { return 0; }   // getrandom
+    Int k = ld64(b) & 4611686018427387903;
+    _ = st64(b, 0);
+    if (k == 0 || ds_find(k, 0) != 0) { return ds_new_key(b, tries + 1); }
+    return k;
 }
 
 // End session slot e: close its socket (the host exits when it reads the
@@ -1523,6 +1541,10 @@ Int ds_batch_outs(Int body, Int blen, Int pos, Int rb, Int rp, Int ob, Int at) {
 Int ds_drv_call(Int buf, Int n) {
     Int len = n - 14;
     if (len < 0 || len > 65536) { return dev_err_reply(de_refused(), 79); }
+    // A message may make the driver store to its device: it is a write,
+    // and says so, whichever entry it came through (the read entry lets
+    // a write byte of 0 through; ds_bulk and ds_batch_req check theirs).
+    if (ld8(buf + 5) != 1) { return dev_err_reply(de_refused(), 73); }
     Int id = le_get(buf + 6, 8);
     Int e = if (id > 0) { ds_find(id, 0) } else { 0 };
     if (e == 0) { return dev_err_reply(de_refused(), 71); }
@@ -2917,6 +2939,32 @@ Int mm_hex_at(Int p, Int i, Int n, Int acc) {
     return mm_hex_at(p, i + 1, n, acc * 16 + v);
 }
 
+// Whether the function at `dir` may have its registers written outside
+// VFIO (kinds 9 and 11 that store): bound to no kernel driver but
+// vfio-pci, and not mastering the bus (Command bit 2 clear in its config
+// space). A device that masters the bus can be made to DMA by its
+// registers, and outside VFIO no IOMMU domain of ours confines it: to
+// the kernel's memory, or another device's. A function whose config
+// space cannot be read is refused, except under self-test 30's fake
+// directory, which has none.
+Bool dh_bus_free(Int dir, Bool fake) {
+    Int b = xmalloc(272);
+    _ = resid_raw_fill(b, 0, 272);
+    Int n = resid_raw_syscall(267, dir, resid_raw_addr("driver"), b, 255, 0, 0);   // readlinkat
+    // No link: no driver. A link: its last part names the driver.
+    Bool unbound = n == 0 - 2 || (n > 8 && ld8(b + n - 9) == 47 && c_memcmp(b + n - 8, resid_raw_addr("vfio-pci"), 8) == 0);
+    _ = c_free(b);
+    if (!unbound) { return false; }
+    Int cfd = dh_open2(dir, resid_raw_addr("config"), 0, 14);
+    if (cfd < 0) { return fake; }
+    Int cmd = xmalloc(8);
+    _ = st64(cmd, 0);
+    Int r = resid_raw_syscall(17, cfd, cmd, 2, 4, 0, 0);   // pread64: the Command register
+    Int v = ld8(cmd);
+    _ = c_free(cmd) + sys_close(cfd);
+    return r == 2 && (v & 4) == 0;
+}
+
 Int dh_mmio_pci(Int h, Int d) {
     Int store = dget(d, 14);
     Int size = dget(d, 10);
@@ -2930,6 +2978,7 @@ Int dh_mmio_pci(Int h, Int d) {
     _ = mcopy(name, dget(d, 4) + 21, an) + st8(name + an, 47) + st8(name + an + 1, 46) + st8(name + an + 2, 0);
     Int dir = dh_open2(root, name, o_path() | o_directory(), 2);
     if (dir < 0) { return dh_fail_errno(h, dir, false); }
+    if (store == 1 && !dh_bus_free(dir, fake)) { return dh_fail(h, de_refused(), 80); }
     Int rn = xmalloc(16);
     _ = mcopy(rn, resid_raw_addr("resource"), 8) + st8(rn + 8, 48 + (dget(d, 39) & 255)) + st8(rn + 9, 0);
     Int vfd = dh_open2(dir, resid_raw_addr("vendor"), 0, 14);
@@ -2986,6 +3035,7 @@ Int dh_session(Int h, Int d) {
     _ = mcopy(name, dget(d, 4) + 21, an) + st8(name + an, 47) + st8(name + an + 1, 46) + st8(name + an + 2, 0);
     Int dir = dh_open2(root, name, o_path() | o_directory(), 2);
     if (dir < 0) { return dh_fail_errno(h, dir, false); }
+    if (wr == 1 && dget(d, 0) == 11 && !dh_bus_free(dir, fake)) { return dh_fail(h, de_refused(), 80); }
     Int rn = xmalloc(16);
     _ = mcopy(rn, resid_raw_addr("resource"), 8) + st8(rn + 8, 48 + (dget(d, 39) & 255)) + st8(rn + 9, 0);
     Int vfd = dh_open2(dir, resid_raw_addr("vendor"), 0, 14);
@@ -3213,14 +3263,16 @@ Int ds_msg_room() { return 131200; }
 // one of the session's, a store needs a session that writes, the width
 // is 1, 2, 4 or 8 and the word lies at a multiple of it inside.
 Int ds_word_at(Int tab, Int maps, Int wr, Int op, Int w, Int mi, Int off) {
-    if (mi >= maps) { return 0; }
+    // A resource number is the caller's: it names one of the session's
+    // maps only from 0 up, never an entry before the table.
+    if (mi < 0 || mi >= maps) { return 0; }
     Bool ok = (op == 1 || (op == 2 && wr == 1)) && (w == 1 || w == 2 || w == 4 || w == 8) && off >= 0 && off % w == 0 && off + w <= ld64(tab + mi * 16 + 8);
     return if (ok) { ld64(tab + mi * 16) + off } else { 0 };
 }
 
 // Where a run of `len` bytes of the device's memory is, or 0.
 Int ds_run_at(Int tab, Int maps, Int dmai, Int mi, Int off, Int len) {
-    Bool fits = mi < maps && mi == dmai && off >= 0 && len >= 1 && len <= 65536 && off + len <= ld64(tab + mi * 16 + 8);
+    Bool fits = mi >= 0 && mi < maps && mi == dmai && off >= 0 && len >= 1 && len <= 65536 && off + len <= ld64(tab + mi * 16 + 8);
     return if (fits) { ld64(tab + mi * 16) + off } else { 0 };
 }
 

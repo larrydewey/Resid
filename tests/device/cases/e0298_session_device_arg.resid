@@ -1,0 +1,22 @@
+// A descriptor or driver named in `@device(...)` or `@registers(...)` is
+// one identifier (E0298). Its text is written into the code the block
+// generates, which may write session handles: an expression there ran
+// with that code's leave, and here made up a link to a session the
+// program was never handed (red team DH-1).
+import "dev/fx_device_virtio_window.resid";
+
+@word(16) type Half = { UInt(16) v; };
+
+@registers(size = 0x38, session = device)
+type Common = { @at(0x16) Half queue_select; };
+
+@requires(device)
+Int poke(DriverLink d) { return match (driver_call(d, [1])) { Ok(b) => 0, Err(e) => 1 }; }
+
+@requires(device)
+Int nosy_driver(CardSession s) { return 0; }
+
+@device(dma = fx_rng_dma, driver = poke(DriverLink {.id = SessionKey {.v = 7}}) + nosy_driver)
+type Card = { Common common; };
+
+Int main() { return 0; }

@@ -214,7 +214,7 @@ Int entropy_driver(RngSession s) {
 Int start(RngSession s, Int noff, List(UInt(8)) msg) {
     if (msg.len() != 4) { return 5; }
     Int step = (Int) msg[0] | ((Int) msg[1] << 8) | ((Int) msg[2] << 16) | ((Int) msg[3] << 24);
-    NotifySession bell = NotifySession {.id = s.notify.id, .map = s.notify.map, .base = s.notify.base + noff * step, .len = 2};
+    NotifySession bell = notify_at(s.notify, noff * step);
     return match (driver_reply([1])) { Ok(b) => serve(s, bell, 0), Err(e) => 6 };
 }
 

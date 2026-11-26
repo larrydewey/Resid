@@ -1,0 +1,15 @@
+// A CtapHid descriptor is a descriptor like any other (E0260): a program
+// or dependency cannot write its own and name it after a module its
+// manifest bound allows (`tsm_report.x`), so the FIDO key is reached only
+// through lib/dev/fido.resid. The red team's F1: the kind was missing
+// from the list of descriptor kinds, so this literal compiled.
+import "dev/device.resid";
+import "dev/device_write.resid";
+
+CtapHid mine() { return CtapHid {.name = "tsm_report.not_a_fido_key", .path = "/dev/hidraw", .max_message = 7609, .timeout_ms = 50000, .write = true, .stability = Uapi}; }
+
+@requires(device)
+Int main() {
+    println(match (device.ctaphid(mine(), [(UInt(8)) 0x90, 0x04])) { Ok(o) => "sent", Err(e) => device_error_text(e), });
+    return 0;
+}

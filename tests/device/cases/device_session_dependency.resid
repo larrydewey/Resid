@@ -1,0 +1,22 @@
+// e0261_session_dependency with a bound that covers the device the
+// program opens its session under (devices = ["fx.virtio_blk"]): the
+// dependency may act on that session when the program hands it the
+// memory. The function at this address is not there, so nothing runs.
+import "dep";
+import "dev/fx_device_virtio_window.resid";
+
+@word(16) type Half = { UInt(16) v; };
+
+@registers(size = 0x38, session = device)
+type Common = { @at(0x16) Half queue_select; };
+
+@device(dma = fx_blk_dma)
+type Blk = { Common common; };
+
+@requires(device)
+Int main() {
+    PciAddr a = PciAddr {.domain = 0xffff, .bus = 255, .device = 31, .function = 7};
+    Result(Str, DeviceError) r = blk_session(BlkWindows {.common = PciWindow {.addr = a, .resource = 4, .base = 0, .len = 0x38}}, lambda(s) { dep_poke(s.dma) });
+    println(match (r) { Ok(t) => t, Err(e) => device_error_text(e) });
+    return 0;
+}

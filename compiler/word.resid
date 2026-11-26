@@ -556,8 +556,18 @@ Bool wd_args_known(List(Str) args, Int i) {
     if (i >= args.len()) { return true; }
     Int eq = wd_char(args[i], 61, 0, str_len(args[i]));
     Str key = if (eq > 0) { str_trim(str_slice(args[i], 0, eq)) } else { "" };
-    Bool ok = (key == "size" || key == "device" || key == "write" || key == "pci" || key == "pci_write" || key == "window" || key == "window_write" || key == "session" || key == "session_write") && str_trim(str_slice(args[i], eq + 1, str_len(args[i]))) != "";
+    Str v = str_trim(str_slice(args[i], eq + 1, str_len(args[i])));
+    Bool ok = (key == "size" && v != "") || ((key == "device" || key == "write" || key == "pci" || key == "pci_write" || key == "window" || key == "window_write" || key == "session" || key == "session_write") && wd_is_name(v));
     return ok && wd_args_known(args, i + 1);
+}
+
+// A descriptor's or a driver's name as an argument is one identifier: it
+// is written into the code the block generates, which may write session
+// handles (wd_gen_mark), so an expression there would run with that
+// code's leave.
+Bool wd_is_name(Str v) {
+    Int n = str_len(v);
+    return n > 0 && !(str_char_at(v, 0) >= 48 && str_char_at(v, 0) <= 57) && wd_ident_end(v, 0, n) == n;
 }
 
 WdRB wd_rfail(WdRB b, Str msg, Int at) { return WdRB {.rs = b.rs, .out = b.out, .i = b.i, .err = msg, .at = at}; }
@@ -711,12 +721,24 @@ Str wd_racc_regs(Str name, Str sn, List(WdR) rs, List(WdT) ts, Str dev, Str devw
 // and spelled in two halves here so that this file is not such a text.
 pub Str wd_scope_mark() { return "@session" + "_scope"; }
 
+// The annotation on the rest of what a register block or device
+// generates that holds a session: its session types (handles, which only
+// lib/dev/ and generated code write, E0260) and the functions that build
+// one or call lib/dev/'s raw session accesses (`@descriptor(session_raw)`:
+// device_session_word, device_op_load, ...), which take a window and an
+// offset as numbers and know nothing of a register's read/write split.
+// Refused in a program's own text, like the scope's mark.
+pub Str wd_gen_mark() { return "@session" + "_gen"; }
+
+// The key of the session a scope just opened, from the open's answer.
+Str wd_key_of() { return "    SessionKey __wd_k = SessionKey {.v = match (dv_out_num(__wd_o, 0)) { Some(__wd_v) => __wd_v, None => 0 }};\n"; }
+
 // A session block's type and scoped functions. `_ro` opens through the
 // descriptor that only loads; the plain one, there when the block names a
 // writing descriptor, through that.
 Str wd_sess(Str name, Str sn, Str dev, Str devw) {
     Str ty = name + "Session";
-    Str head = "pub type " + ty + " = { Int id; Int map; Int base; Int len; };\n";
+    Str head = wd_gen_mark() + "\npub type " + ty + " = { SessionKey id; Int map; Int base; Int len; };\n" + wd_sess_at(name, sn);
     // `session = device`: the block's sessions come from a @device, or
     // the block is placed in a device's memory.
     if (dev == "device") { return head; }
@@ -729,9 +751,9 @@ Str wd_sess_fn(Str fname, Str grant, Str ty, Str sn, Str dev) {
     return wd_scope_mark() + "\n@requires(" + grant + ")\npub Result(T, DeviceError) " + fname + "(PciWindow __wd_w, T closure(" + ty + ") __wd_f) {\n" +
         "    List(PciWindow) __wd_ws = [__wd_w];\n" +
         "    List(DevOut) __wd_o = device.session_open(" + dev + "(), __wd_ws)?;\n" +
-        "    Int __wd_id = match (dv_out_num(__wd_o, 0)) { Some(__wd_v) => __wd_v, None => 0 };\n" +
-        "    T __wd_r = __wd_f(" + ty + " {.id = __wd_id, .map = 0, .base = __wd_w.base, .len = __wd_w.len});\n" +
-        "    Result(Bool, DeviceError) __wd_e = device_session_end(\"" + sn + "\", __wd_id);\n" +
+        wd_key_of() +
+        "    T __wd_r = __wd_f(" + ty + " {.id = __wd_k, .map = 0, .base = __wd_w.base, .len = __wd_w.len});\n" +
+        "    Result(Bool, DeviceError) __wd_e = device_session_end(\"" + sn + "\", __wd_k);\n" +
         "    return match (__wd_e) { Ok(__wd_b) => Ok(__wd_r), Err(__wd_x) => Ok(__wd_r) };\n}\n";
 }
 
@@ -739,7 +761,16 @@ Str wd_sess_fn(Str fname, Str grant, Str ty, Str sn, Str dev) {
 // session there. A place the memory does not hold gives a session of no
 // bytes, whose every access is Err(BadInput).
 Str wd_sess_in(Str name, Str sn) {
-    return "pub " + name + "Session " + sn + "_in(DmaRegion __wd_d, Int __wd_o) {\n    Bool __wd_k = __wd_o >= 0 && __wd_o + " + sn + "_size() <= __wd_d.len;\n    return " + name + "Session {.id = __wd_d.id, .map = __wd_d.map, .base = __wd_o, .len = if (__wd_k) { " + sn + "_size() } else { 0 }};\n}\n";
+    return wd_gen_mark() + "\npub " + name + "Session " + sn + "_in(DmaRegion __wd_d, Int __wd_o) {\n    Bool __wd_k = __wd_o >= 0 && __wd_o + " + sn + "_size() <= __wd_d.len;\n    return " + name + "Session {.id = __wd_d.id, .map = __wd_d.map, .base = __wd_o, .len = if (__wd_k) { " + sn + "_size() } else { 0 }};\n}\n";
+}
+
+// A block's session at `off` of another of its sessions' windows (a
+// queue's doorbell in a notify window): the same host and resource, the
+// window narrowed to the block's size there, or to no bytes when the
+// window does not hold it -- whose every access is then Err(BadInput).
+Str wd_sess_at(Str name, Str sn) {
+    Str ty = name + "Session";
+    return wd_gen_mark() + "\npub " + ty + " " + sn + "_at(" + ty + " __wd_s, Int __wd_o) {\n    Bool __wd_k = __wd_o >= 0 && __wd_o + " + sn + "_size() <= __wd_s.len;\n    return " + ty + " {.id = __wd_s.id, .map = __wd_s.map, .base = __wd_s.base + (if (__wd_k) { __wd_o } else { 0 }), .len = if (__wd_k) { " + sn + "_size() } else { 0 }};\n}\n";
 }
 
 // The accessors of a session block: as wd_racc_regs, over the session.
@@ -754,21 +785,24 @@ Str wd_sacc_regs(Str name, Str sn, List(WdR) rs, List(WdT) ts, Bool writes, Int 
     // The word as a number from lib/dev's device_session_word: one checked
     // load in a driver's host, a message elsewhere.
     Str load = "    Int __wd_v = device_session_word(" + label + ", " + at + ")?;\n    return Ok(" + tsn + "_from_word(" + word + "));\n}\n";
+    Str gm = wd_gen_mark() + "\n";
     Str rd = if (!wd_readable(t.fs, 0) || t.clears) { "" } else {
-        "@requires(device(readonly))\npub Result(" + r.ty + ", DeviceError) " + sn + "_read_" + r.name + "(" + name + "Session __wd_s) {\n" + load };
+        gm + "@requires(device(readonly))\npub Result(" + r.ty + ", DeviceError) " + sn + "_read_" + r.name + "(" + name + "Session __wd_s) {\n" + load };
     Str tk = if (!wd_readable(t.fs, 0) || !t.clears || !writes) { "" } else {
-        "@requires(device)\npub Result(" + r.ty + ", DeviceError) " + sn + "_take_" + r.name + "(" + name + "Session __wd_s) {\n" + load };
+        gm + "@requires(device)\npub Result(" + r.ty + ", DeviceError) " + sn + "_take_" + r.name + "(" + name + "Session __wd_s) {\n" + load };
     Str wr = if (!wd_writable(t.fs, 0) || !writes) { "" } else {
-        "@requires(device)\npub Result(Bool, DeviceError) " + sn + "_write_" + r.name + "(" + name + "Session __wd_s, " + r.ty + " __wd_x) {\n    UInt(64) __wd_w = " + tsn + "_word(__wd_x);\n    return device_session_put(" + label + ", " + at + ", __wd_w);\n}\n" };
+        gm + "@requires(device)\npub Result(Bool, DeviceError) " + sn + "_write_" + r.name + "(" + name + "Session __wd_s, " + r.ty + " __wd_x) {\n    UInt(64) __wd_w = " + tsn + "_word(__wd_x);\n    return device_session_put(" + label + ", " + at + ", __wd_w);\n}\n" };
     // The same accesses as operations of a batch (lib/dev/device.resid's
     // DevOp), and the reader of a load's answer among a batch's outputs.
+    // A register that clears when read is taken, not loaded: the
+    // operation needs device_batch and the full grant, as `_take_` does.
     Str opat = "__wd_s.map, __wd_s.base, __wd_s.len, " + f"{r.off}" + ", " + f"{r.bytes}";
     Bool can_load = wd_readable(t.fs, 0) && (!t.clears || writes);
     Str lo = if (!can_load) { "" } else {
-        "pub DevOp " + sn + "_" + r.name + "_load(" + name + "Session __wd_s) { return device_op_load(" + opat + "); }\n" +
+        gm + "pub DevOp " + sn + "_" + r.name + "_load(" + name + "Session __wd_s) { return " + (if (t.clears) { "device_op_take(" } else { "device_op_load(" }) + opat + "); }\n" +
         "pub Result(" + r.ty + ", DeviceError) " + sn + "_" + r.name + "_of(List(DevOut) __wd_o, Int __wd_i) {\n    return match (dv_out_num(__wd_o, __wd_i)) {\n        Some(__wd_v) => Ok(" + tsn + "_from_word(" + word + ")),\n        None => Err(BadReply(" + label + ", \"no word\")),\n    };\n}\n" };
     Str so = if (!wd_writable(t.fs, 0) || !writes) { "" } else {
-        "pub DevOp " + sn + "_" + r.name + "_store(" + name + "Session __wd_s, " + r.ty + " __wd_x) { return device_op_store(" + opat + ", " + tsn + "_word(__wd_x)); }\n" };
+        gm + "pub DevOp " + sn + "_" + r.name + "_store(" + name + "Session __wd_s, " + r.ty + " __wd_x) { return device_op_store(" + opat + ", " + tsn + "_word(__wd_x)); }\n" };
     return wd_sacc_regs(name, sn, rs, ts, writes, i + 1, acc.push(rd).push(tk).push(wr).push(lo).push(so));
 }
 
@@ -846,7 +880,7 @@ Bool wd_dargs_known(List(Str) args, Int i) {
     if (i >= args.len()) { return true; }
     Int eq = wd_char(args[i], 61, 0, str_len(args[i]));
     Str key = if (eq > 0) { str_trim(str_slice(args[i], 0, eq)) } else { "" };
-    Bool ok = (key == "session" || key == "session_write" || key == "dma" || key == "driver" || key == "request" || key == "reply") && str_trim(str_slice(args[i], eq + 1, str_len(args[i]))) != "";
+    Bool ok = (key == "session" || key == "session_write" || key == "dma" || key == "driver" || key == "request" || key == "reply") && wd_is_name(str_trim(str_slice(args[i], eq + 1, str_len(args[i]))));
     return ok && wd_dargs_known(args, i + 1);
 }
 
@@ -865,7 +899,7 @@ WdDB wd_dmembers(List(Str) parts, Str name, Str gen, Int i, WdDB b) {
 
 Str wd_dgen(Str name, List(WdDM) ms, Str dev, Str devw) {
     Str sn = wd_snake(name);
-    Str head = "\n// generated from @device " + name + "\npub type " + name + "Windows = { " + wd_dfields(ms, "PciWindow", false, 0, StrBuf()) + "};\npub type " + name + "Session = { " + wd_dfields(ms, "", true, 0, StrBuf()) + "};\n";
+    Str head = "\n// generated from @device " + name + "\npub type " + name + "Windows = { " + wd_dfields(ms, "PciWindow", false, 0, StrBuf()) + "};\n" + wd_gen_mark() + "\npub type " + name + "Session = { " + wd_dfields(ms, "", true, 0, StrBuf()) + "};\n";
     Str ro = wd_dfn(sn + "_session_ro", "device(readonly)", name, sn, ms, dev);
     Str rw = if (devw == "") { "" } else { wd_dfn(sn + "_session", "device", name, sn, ms, devw) };
     return head + ro + rw;
@@ -879,15 +913,15 @@ Bool wd_dhas(List(WdDM) ms, Str name, Int i) { return i < ms.len() && (ms[i].nam
 // places a register block in it (`avail_in(s.dma, off)`).
 Str wd_dgen_dma(Str name, List(WdDM) ms, Str dev) {
     Str sn = wd_snake(name);
-    Str head = "\n// generated from @device " + name + "\npub type " + name + "Windows = { " + wd_dfields(ms, "PciWindow", false, 0, StrBuf()) + "};\npub type " + name + "Session = { " + wd_dfields(ms, "", true, 0, StrBuf()) + "DmaRegion dma; };\n";
+    Str head = "\n// generated from @device " + name + "\npub type " + name + "Windows = { " + wd_dfields(ms, "PciWindow", false, 0, StrBuf()) + "};\n" + wd_gen_mark() + "\npub type " + name + "Session = { " + wd_dfields(ms, "", true, 0, StrBuf()) + "DmaRegion dma; };\n";
     Str n = f"{ms.len()}";
     return head + wd_scope_mark() + "\n@requires(device)\npub Result(T, DeviceError) " + sn + "_session(" + name + "Windows __wd_w, T closure(" + name + "Session) __wd_f) {\n" +
         "    List(PciWindow) __wd_ws = [" + wd_dwins(ms, 0, StrBuf()) + "];\n" +
         "    List(DevOut) __wd_o = device.dma_open(" + dev + "(), __wd_ws)?;\n" +
-        "    Int __wd_id = match (dv_out_num(__wd_o, 0)) { Some(__wd_v) => __wd_v, None => 0 };\n" +
+        wd_key_of() +
         "    List(Int) __wd_n = [];\n" +
-        "    T __wd_r = __wd_f(" + name + "Session {" + wd_dinits(ms, 0, StrBuf()) + ", .dma = DmaRegion {.id = __wd_id, .map = dv_session_res(__wd_ws, 0, __wd_n).len(), .iova = " + dev + "().iova, .len = " + dev + "().dma}});\n" +
-        "    Result(Bool, DeviceError) __wd_e = device_session_end(\"" + sn + "\", __wd_id);\n" +
+        "    T __wd_r = __wd_f(" + name + "Session {" + wd_dinits(ms, 0, StrBuf()) + ", .dma = DmaRegion {.id = __wd_k, .map = dv_session_res(__wd_ws, 0, __wd_n).len(), .iova = " + dev + "().iova, .len = " + dev + "().dma}});\n" +
+        "    Result(Bool, DeviceError) __wd_e = device_session_end(\"" + sn + "\", __wd_k);\n" +
         "    return match (__wd_e) { Ok(__wd_b) => Ok(__wd_r), Err(__wd_x) => Ok(__wd_r) };\n}\n";
 }
 
@@ -1007,13 +1041,13 @@ Int wd_count(Str s, Str pat, Int i, Int n) {
 Str wd_dgen_driver(Str name, List(WdDM) ms, Str dev, Str drv, Int k) {
     Str sn = wd_snake(name);
     Str kn = f"{k}";
-    Str entry = "\n@requires(device)\nInt __wd_drv_" + kn + "() {\n    List(Int) __wd_a = driver_started_with();\n    if (__wd_a.len() != " + f"{ms.len() * 3 + 1}" + ") { return 0 - 1; }\n    return " + drv + "(" + name + "Session {" + wd_dhost(ms, 0, StrBuf()) + ", .dma = DmaRegion {.id = 1, .map = __wd_a[" + f"{ms.len() * 3}" + "], .iova = " + dev + "().iova, .len = " + dev + "().dma}});\n}\n";
+    Str entry = "\n" + wd_gen_mark() + "\n@requires(device)\nInt __wd_drv_" + kn + "() {\n    List(Int) __wd_a = driver_started_with();\n    if (__wd_a.len() != " + f"{ms.len() * 3 + 1}" + ") { return 0 - 1; }\n    return " + drv + "(" + name + "Session {" + wd_dhost(ms, 0, StrBuf()) + ", .dma = DmaRegion {.id = SessionKey {.v = 1}, .map = __wd_a[" + f"{ms.len() * 3}" + "], .iova = " + dev + "().iova, .len = " + dev + "().dma}});\n}\n";
     Str open = wd_scope_mark() + "\n@requires(device)\npub Result(T, DeviceError) " + sn + "_driver(" + name + "Windows __wd_w, T closure(DriverLink) __wd_f) {\n" +
         "    List(PciWindow) __wd_ws = [" + wd_dwins(ms, 0, StrBuf()) + "];\n" +
         "    List(DevOut) __wd_o = device.driver_open(" + dev + "(), __wd_ws, " + kn + ")?;\n" +
-        "    Int __wd_id = match (dv_out_num(__wd_o, 0)) { Some(__wd_v) => __wd_v, None => 0 };\n" +
-        "    T __wd_r = __wd_f(DriverLink {.id = __wd_id});\n" +
-        "    Result(Bool, DeviceError) __wd_e = device_session_end(\"" + sn + "\", __wd_id);\n" +
+        wd_key_of() +
+        "    T __wd_r = __wd_f(DriverLink {.id = __wd_k});\n" +
+        "    Result(Bool, DeviceError) __wd_e = device_session_end(\"" + sn + "\", __wd_k);\n" +
         "    return match (__wd_e) { Ok(__wd_b) => Ok(__wd_r), Err(__wd_x) => Ok(__wd_r) };\n}\n";
     return entry + open;
 }
@@ -1025,7 +1059,7 @@ Str wd_dhost(List(WdDM) ms, Int i, StrBuf acc) {
     Str at = f"{3 * i}";
     Str b1 = f"{3 * i + 1}";
     Str b2 = f"{3 * i + 2}";
-    return wd_dhost(ms, i + 1, acc.push((if (i > 0) { ", " } else { "" }) + "." + ms[i].name + " = " + ms[i].ty + "Session {.id = 1, .map = __wd_a[" + at + "], .base = __wd_a[" + b1 + "], .len = __wd_a[" + b2 + "]}"));
+    return wd_dhost(ms, i + 1, acc.push((if (i > 0) { ", " } else { "" }) + "." + ms[i].name + " = " + ms[i].ty + "Session {.id = SessionKey {.v = 1}, .map = __wd_a[" + at + "], .base = __wd_a[" + b1 + "], .len = __wd_a[" + b2 + "]}"));
 }
 
 // The function a device host calls to run driver `k` of the program
@@ -1049,9 +1083,9 @@ Str wd_dfn(Str fname, Str grant, Str name, Str sn, List(WdDM) ms, Str dev) {
     return wd_scope_mark() + "\n@requires(" + grant + ")\npub Result(T, DeviceError) " + fname + "(" + name + "Windows __wd_w, T closure(" + name + "Session) __wd_f) {\n" +
         "    List(PciWindow) __wd_ws = [" + wd_dwins(ms, 0, StrBuf()) + "];\n" +
         "    List(DevOut) __wd_o = device.session_open(" + dev + "(), __wd_ws)?;\n" +
-        "    Int __wd_id = match (dv_out_num(__wd_o, 0)) { Some(__wd_v) => __wd_v, None => 0 };\n" +
+        wd_key_of() +
         "    T __wd_r = __wd_f(" + name + "Session {" + wd_dinits(ms, 0, StrBuf()) + "});\n" +
-        "    Result(Bool, DeviceError) __wd_e = device_session_end(\"" + sn + "\", __wd_id);\n" +
+        "    Result(Bool, DeviceError) __wd_e = device_session_end(\"" + sn + "\", __wd_k);\n" +
         "    return match (__wd_e) { Ok(__wd_b) => Ok(__wd_r), Err(__wd_x) => Ok(__wd_r) };\n}\n";
 }
 
@@ -1063,7 +1097,7 @@ Str wd_dwins(List(WdDM) ms, Int i, StrBuf acc) {
 Str wd_dinits(List(WdDM) ms, Int i, StrBuf acc) {
     if (i >= ms.len()) { return acc.finish(); }
     Str m = ms[i].name;
-    return wd_dinits(ms, i + 1, acc.push((if (i > 0) { ", " } else { "" }) + "." + m + " = " + ms[i].ty + "Session {.id = __wd_id, .map = dv_session_map(__wd_ws, " + f"{i}" + "), .base = __wd_w." + m + ".base, .len = __wd_w." + m + ".len}"));
+    return wd_dinits(ms, i + 1, acc.push((if (i > 0) { ", " } else { "" }) + "." + m + " = " + ms[i].ty + "Session {.id = __wd_k, .map = dv_session_map(__wd_ws, " + f"{i}" + "), .base = __wd_w." + m + ".base, .len = __wd_w." + m + ".len}"));
 }
 
 // The handle type, declared once when a block is present.
@@ -1074,6 +1108,8 @@ pub LyR wd_expand(Str src) {
     // The mark of a generated session scope is this pass's to write.
     Int forged = str_find(src, wd_scope_mark());
     if (forged >= 0) { return LyR {.text = src, .code = "E0260", .err = "`" + wd_scope_mark() + "` marks the function a register block generates to open and end a session; it is not written by hand", .at = forged}; }
+    Int forged2 = str_find(src, wd_gen_mark());
+    if (forged2 >= 0) { return LyR {.text = src, .code = "E0260", .err = "`" + wd_gen_mark() + "` marks the session types and accesses a register block generates; it is not written by hand", .at = forged2}; }
     if (!str_contains(src, "@word(")) { return LyR {.text = src, .code = "", .err = "", .at = -1}; }
     WdS st = wd_scan(src, WdS {.out = [], .i = 0, .gen = "", .ts = [], .code = "", .err = "", .at = -1});
     if (st.err != "") { return LyR {.text = src, .code = st.code, .err = st.err, .at = st.at}; }

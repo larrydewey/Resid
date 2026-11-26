@@ -5,5 +5,5 @@ fx.virtio_rng: bad input: the window is not inside the descriptor's size
 fx.virtio_rng: device absent
 fx.virtio_rng: bad input: a session's windows are all of one PCI function
 resources: 0 1 0
-common.device_status: bad input: the session has ended
-common.device_status: bad input: the access is not inside the window
+shared.device_status: bad input: the session has ended
+shared.device_status: bad input: the access is not inside the window

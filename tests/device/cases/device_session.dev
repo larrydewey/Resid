@@ -1,0 +1,6 @@
+// Fixture for device_session (installed as lib/dev/fx_device_session.resid):
+// a DMA session's memory that belongs to no session, to place a block in.
+// A handle is written only in lib/dev/ and generated code (E0260).
+import "device.resid";
+
+pub DmaRegion fx_stale_region() { return DmaRegion {.id = SessionKey {.v = 12345}, .map = 0, .iova = 0x100000, .len = 16384}; }

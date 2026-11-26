@@ -1,0 +1,27 @@
+// A session's handles are written only in lib/dev/ and in the code a
+// register block or device generates (E0260): code that was not handed a
+// session cannot make one up and act on it. Red team DH-1/F2: these were
+// plain records of the session's number, numbers ran 1, 2, ... on each
+// thread, and a dependency bounded to no device drove the program's
+// sessions with them.
+import "dev/fx_device_virtio_window.resid";
+
+@word(16) type Half = { UInt(16) v; };
+
+@registers(size = 0x38, session = device)
+type Common = { @at(0x16) Half queue_select; };
+
+@device(dma = fx_blk_dma)
+type Blk = { Common common; };
+
+@requires(device)
+Int main() {
+    SessionKey k = SessionKey {.v = 1};
+    DmaRegion r = DmaRegion {.id = k, .map = 1, .iova = 0, .len = 16384};
+    Str a = match (dma_write(r, 0, [(UInt(8)) 0x41, 0x42])) { Ok(b) => "dma written", Err(e) => device_error_text(e) };
+    Str b = match (driver_call(DriverLink {.id = k}, [1])) { Ok(x) => "driven", Err(e) => device_error_text(e) };
+    Str c = match (common_read_queue_select(CommonSession {.id = k, .map = 0, .base = 0, .len = 0x38})) { Ok(h) => "read", Err(e) => device_error_text(e) };
+    Str d = match (device_batch(k, [DevOp {.k = OpStore(0, 0x14, 1, 0)}])) { Ok(o) => "stored", Err(e) => device_error_text(e) };
+    println(a + b + c + d);
+    return 0;
+}

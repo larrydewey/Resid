@@ -127,7 +127,7 @@ Result(Str, DeviceError) drive(RngSession s, Int step) {
     Bool v1 = avail_write_ring0(av, Half {.v = 0})?;
     Bool v2 = avail_write_idx(av, Half {.v = 1})?;
     // Tell the device, at the queue's place in the notification block.
-    NotifySession n = NotifySession {.id = s.notify.id, .map = s.notify.map, .base = s.notify.base + (Int) noff.v * step, .len = 2};
+    NotifySession n = notify_at(s.notify, (Int) noff.v * step);
     Bool n1 = notify_write_queue(n, Half {.v = 0})?;
     // Asleep until the device interrupts, not polling.
     Int irqs = dma_wait(s.dma, 5000)?;
