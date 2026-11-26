@@ -119,6 +119,9 @@ Int futex_wait0(Int addr) {
 Int run_job(Int a) {
     _ = id_block_reset();
     _ = str_fast_load(a + 40);
+    // The starting thread's sandbox frames, under the spawn's own frame.
+    _ = cap_install(ld64(a + 24));
+    _ = c_free(ld64(a + 24));
     _ = st64(a + 16, spawn_entry(a));
     _ = str_index_reset();
     _ = resid_raw_fetch_add(a + 32, 1);
@@ -136,8 +139,9 @@ pub Int pool_main(Int w) {
     return pool_main(w);
 }
 
-// A running region: {worker, captures, result, -, done, the parent's
-// known string lengths (str_fast_save)}. The child starts at once; the
+// A running region: {worker, captures, result, the parent's sandbox
+// frames (cap_snapshot), done, the parent's known string lengths
+// (str_fast_save)}. The child starts at once; the
 // parent waits for it on the result's first use and, at the latest, before
 // leaving the scope that bound it (spec §19: completion is structured).
 // A spawn region's thread stack in MB: 256 by default, RESID_SPAWN_STACK_MB
@@ -163,9 +167,11 @@ pub Int rt_spawn_start(Int worker, Int captures) {
     _ = st64(a, worker);
     _ = st64(a + 8, captures);
     _ = st64(a + 16, 0);
-    _ = st64(a + 24, 0);
     _ = st64(a + 32, 0);
     _ = str_fast_save(a + 40);
+    // A pooled worker starts with no frames; it runs the region under a
+    // copy of this thread's, so a spawn inside a sandbox stays inside it.
+    _ = st64(a + 24, cap_snapshot());
     Int idle = pool_pop();
     if (idle != 0) {
         _ = st64(idle + 8, a);
@@ -176,8 +182,9 @@ pub Int rt_spawn_start(Int worker, Int captures) {
     Int w = xmalloc(24);
     _ = st64(w, 0) + st64(w + 8, a) + st64(w + 16, 0);
     Int t = thread_spawn(resid_raw_fn("pool_main"), w, spawn_stack_mb() * 1048576);
-    // No thread (resources exhausted): run the region here, now.
-    _ = if (t == 0) { c_free(w) + st64(a + 16, spawn_entry(a)) + st64(a + 32, 1) } else { 0 };
+    // No thread (resources exhausted): run the region here, now, on this
+    // thread's own frames.
+    _ = if (t == 0) { c_free(w) + c_free(ld64(a + 24)) + st64(a + 24, 0) + st64(a + 16, spawn_entry(a)) + st64(a + 32, 1) } else { 0 };
     return a;
 }
 

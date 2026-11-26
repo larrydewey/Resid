@@ -1,0 +1,50 @@
+// A spawn region runs under the sandbox frames of the thread that started
+// it (spec §21.3): a closure made in main and called inside
+// `sandbox (terminal)` cannot escape the ceiling through a function that
+// opens `spawn (filesystem)`. The spawn's list attenuates the inherited
+// frames; it does not replace them. Under a ceiling that keeps the family
+// the same closure's region writes, and so does a region nested in it.
+sandbox (terminal) {
+    Int run_in(Int closure(Int) f, Int x) { return f(x); }
+}
+
+sandbox (filesystem, terminal) {
+    Int run_fs(Int closure(Int) f, Int x) { return f(x); }
+}
+
+@requires(filesystem)
+Int write_in_region(Str path, Int v) {
+    Result(Int, RegionError) r = spawn (filesystem) {
+        return if (filesystem.write_all(path, "x")) { 1 } else { -1 };
+    };
+    return match r { Ok(n) => n + v, Err(e) => -100 };
+}
+
+@requires(filesystem)
+Int write_nested(Str path, Int v) {
+    Result(Int, RegionError) r = spawn (filesystem) {
+        return write_in_region(path, v);
+    };
+    return match r { Ok(n) => n, Err(e) => -200 };
+}
+
+@requires(filesystem, terminal)
+Int main() {
+    Int closure(Int) direct = lambda(v) { if (filesystem.write_all("@TMP@/direct.txt", "x")) { v } else { -1 } };
+    Int closure(Int) viaspawn = lambda(v) { write_in_region("@TMP@/escaped.txt", v) };
+    Int closure(Int) nested = lambda(v) { write_nested("@TMP@/nested.txt", v) };
+    Int z = rt 0;
+    println(report("direct", spawn (filesystem, terminal) { return run_in(direct, z); }));
+    println(report("via spawn", spawn (filesystem, terminal) { return run_in(viaspawn, z); }));
+    println(report("nested spawn", spawn (filesystem, terminal) { return run_in(nested, z); }));
+    println(f"escaped.txt written: {filesystem.exists("@TMP@/escaped.txt")}");
+    println(f"nested.txt written: {filesystem.exists("@TMP@/nested.txt")}");
+    println(report("granted via spawn", spawn (filesystem, terminal) { return run_fs(viaspawn, z); }));
+    println(report("granted nested", spawn (filesystem, terminal) { return run_fs(nested, z); }));
+    println(f"granted written: {filesystem.exists("@TMP@/escaped.txt")}");
+    return 0;
+}
+
+Str report(Str what, Result(Int, RegionError) r) {
+    return match r { Ok(n) => f"{what}: ok {n}", Err(e) => what + ": failed: " + e.message };
+}

@@ -1,0 +1,8 @@
+direct: failed: capability not granted: filesystem (write)
+via spawn: ok -100
+nested spawn: ok -100
+escaped.txt written: false
+nested.txt written: false
+granted via spawn: ok 1
+granted nested: ok 1
+granted written: true

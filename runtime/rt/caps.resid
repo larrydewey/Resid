@@ -19,6 +19,51 @@ pub Int cap_depth_set(Int d) { return st64(cap_depth_at(), d); }
 pub Int cap_top_reps_get() { Int d = cap_depth_get(); return if (d > 0) { ld64(cap_reps() + (d - 1) * 8) } else { 0 }; }
 pub Int cap_top_reps_set(Int r) { Int d = cap_depth_get(); return if (d > 0) { st64(cap_reps() + (d - 1) * 8, r) } else { 0 }; }
 
+// A spawn region inherits the frames of the thread that started it: the
+// worker installs this copy before the spawn's own frame, so the spawn's
+// list attenuates the ceiling it was started under instead of replacing
+// it. The copy is {depth, depth counts, then each frame's entries}, or 0
+// outside any sandbox. Entries point at static text, so copying the
+// pointers is enough.
+pub Int cap_snapshot() {
+    Int d = cap_depth_get();
+    if (d <= 0) { return 0; }
+    Int snap = xmalloc(8 + d * 8 + cap_snap_entries(0, d, 0) * 8);
+    _ = st64(snap, d);
+    _ = mcopy(snap + 8, cap_ns(), d * 8);
+    _ = cap_snap_copy(snap + 8 + d * 8, 0, d);
+    return snap;
+}
+
+Int cap_snap_entries(Int i, Int d, Int acc) {
+    if (i >= d) { return acc; }
+    return cap_snap_entries(i + 1, d, acc + ld64(cap_ns() + i * 8));
+}
+
+Int cap_snap_copy(Int dst, Int i, Int d) {
+    if (i >= d) { return 0; }
+    Int n = ld64(cap_ns() + i * 8);
+    _ = mcopy(dst, cap_stack() + i * 512, n * 8);
+    return cap_snap_copy(dst + n * 8, i + 1, d);
+}
+
+// Replace this thread's frames with a snapshot (0: no frames).
+pub Int cap_install(Int snap) {
+    if (snap == 0) { return cap_depth_set(0); }
+    Int d = ld64(snap);
+    _ = cap_install_at(snap + 8 + d * 8, snap + 8, 0, d);
+    return cap_depth_set(d);
+}
+
+Int cap_install_at(Int src, Int ns, Int i, Int d) {
+    if (i >= d) { return 0; }
+    Int n = ld64(ns + i * 8);
+    _ = mcopy(cap_stack() + i * 512, src, n * 8);
+    _ = st64(cap_ns() + i * 8, n);
+    _ = st64(cap_reps() + i * 8, 0);
+    return cap_install_at(src + n * 8, ns, i + 1, d);
+}
+
 @export("resid_cap_enter", "void(ptr,i64)")
 pub Int rt_cap_enter(Int caps, Int n) {
     Int d = ld64(cap_depth_at());
