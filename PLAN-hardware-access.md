@@ -527,6 +527,13 @@ and touches the registers and the device's memory directly.
   rest run in place, with no message: driver code reads as the tests'
   code does today.
 
+Typed messages (decided 2026-11-26): a request and a reply type named
+on the device, each a sum type whose variants carry layout records; a
+tag byte and the record's own layout on the wire. Chosen over one
+record each way (no variants, a missing case goes unseen) and over a
+general serializer (a wire format the compiler would choose). Built as
+stage T.
+
 Built as stage O. The host stays a fresh start of the program's binary
 (no memory shared with the program); the program registers its driver
 entry at start, and a host asked to run a driver calls it once it is

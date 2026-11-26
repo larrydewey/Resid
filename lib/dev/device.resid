@@ -934,6 +934,14 @@ List(Int) dv_u32s(List(UInt(8)) b, Int i, List(Int) acc) {
     return dv_u32s(b, i + 4, acc.concat([(Int) b[i] | ((Int) b[i + 1] << 8) | ((Int) b[i + 2] << 16) | ((Int) b[i + 3] << 24)]));
 }
 
+/// A message's bytes after its kind: `tag` first (the variant's number;
+/// generated code's, compiler/word.resid's typed messages).
+pub Result(List(UInt(8)), DeviceError) dv_tagged(Int tag, Result(List(UInt(8)), DeviceError) body) {
+    List(UInt(8)) b = body?;
+    List(UInt(8)) head = [(UInt(8)) tag];
+    return Ok(head.concat(b));
+}
+
 /// A driver call's refusals as what they mean.
 pub Result(List(DevOut), DeviceError) dv_driver_answer(Result(List(DevOut), DeviceError) r) {
     return match (r) {

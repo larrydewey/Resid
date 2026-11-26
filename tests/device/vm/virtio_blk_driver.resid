@@ -7,16 +7,11 @@
 // to the device host for each step. Here the driver is the host's own
 // code (`@device(dma = ..., driver = ...)`, PLAN-hardware-access.md §11):
 // its register and queue accesses are loads and stores in its own
-// process, and the program sends it requests -- read a sector, write a
-// sector, the capacity -- as messages of bytes:
-//
-//   1, sector (8)              -> status, the sector's 512 bytes
-//   2, sector (8), 512 bytes   -> status
-//   3                          -> the capacity in sectors (8)
-//   4, count (2)               -> how many of `count` reads of sector 3
-//                                 the driver made by itself succeeded (2)
-//   5, rounds (2)              -> how many of `rounds` times sixteen reads,
-//                                 sixteen in flight at once, succeeded (2)
+// process, and the program sends it requests as typed messages
+// (`request = BlkRequest, reply = BlkReply`): each a sum type whose
+// variants carry layout records, so the wire format of every kind of
+// message is its declaration, and the driver's `match` is checked to
+// cover them all.
 import "dev/pci.resid";
 import "dev/virtio_pci.resid";
 import "dev/fx_device_virtio_window.resid";
@@ -83,7 +78,25 @@ type ReqHeader = { @at(0) Word kind; @at(8) Wide sector; };
 @registers(size = 1, session = device)
 type ReqStatus = { @at(0) Octet code; };
 
-@device(dma = fx_blk_dma, driver = disk_driver)
+// What the program asks, and what the driver answers. On the wire: the
+// variant's number, then its record.
+@layout(le) type StepReq = { UInt(32) step; };
+@layout(le) type SectorReq = { UInt(64) sector; };
+@layout(le) type WriteReq = { UInt(64) sector; @len(512) List(UInt(8)) data; };
+@layout(le) type CountReq = { UInt(16) count; };
+
+// The notification step (which only the program can read) to start with;
+// a sector read or written; the capacity; `count` reads of sector 3 the
+// driver makes by itself; `count` rounds of sixteen reads in flight.
+type BlkRequest = BlkStart(StepReq) | BlkRead(SectorReq) | BlkWrite(WriteReq) | BlkCapacity | BlkAlone(CountReq) | BlkRounds(CountReq);
+
+@layout(le) type SectorRep = { UInt(8) status; @len(512) List(UInt(8)) data; };
+@layout(le) type StatusRep = { UInt(8) status; };
+@layout(le) type NumberRep = { UInt(64) n; };
+
+type BlkReply = BlkReady | BlkSector(SectorRep) | BlkStatus(StatusRep) | BlkNumber(NumberRep) | BlkRefused;
+
+@device(dma = fx_blk_dma, driver = disk_driver, request = BlkRequest, reply = BlkReply)
 type Blk = { Common common; Notify notify; BlkConfig config; };
 
 // The memory: descriptors at 0, the available ring at one page, the used
@@ -240,84 +253,97 @@ Result(Int, DeviceError) rounds(Disk k, Int n, Int left, Int good) {
     return rounds(k, n + 16, left - 1, good + ok);
 }
 
-// One message from the program, done and answered: the count of the
+// One request from the program, done and answered: the count of the
 // device's requests afterwards.
 @requires(device)
-Result(Int, DeviceError) handle(Disk k, Int n, List(UInt(8)) msg) {
-    Int op = if (msg.len() >= 1) { (Int) msg[0] } else { 0 };
-    if (op == 1 && msg.len() == 9) {
-        Int st = transfer(k, n, false, from_le(msg, 1, 8))?;
-        List(UInt(8)) data = dma_read(k.s.dma, at_data(), 512)?;
-        List(UInt(8)) head = [(UInt(8)) st];
-        Bool r = driver_reply(head.concat(data))?;
-        return Ok(n + 1);
-    }
-    if (op == 2 && msg.len() == 521) {
-        Bool w = dma_write(k.s.dma, at_data(), msg[9..521])?;
-        Int st = transfer(k, n, true, from_le(msg, 1, 8))?;
-        Bool r = driver_reply([(UInt(8)) st])?;
-        return Ok(n + 1);
-    }
-    if (op == 3) {
-        Wide cap = blk_config_read_capacity(k.s.config)?;
-        List(UInt(8)) none = [];
-        Bool r = driver_reply(le((Int) cap.v, 8, none))?;
-        return Ok(n);
-    }
-    if (op == 4 && msg.len() == 3) {
-        Int count = from_le(msg, 1, 2);
-        Int good = alone(k, n, count, 0)?;
-        List(UInt(8)) none = [];
-        Bool r = driver_reply(le(good, 2, none))?;
-        return Ok(n + count);
-    }
-    if (op == 5 && msg.len() == 3) {
-        Int count = from_le(msg, 1, 2);
-        Int good = rounds(k, n, count, 0)?;
-        List(UInt(8)) none = [];
-        Bool r = driver_reply(le(good, 2, none))?;
-        return Ok(n + 16 * count);
-    }
-    // Not a request: answered with nothing.
-    List(UInt(8)) empty = [];
-    Bool r = driver_reply(empty)?;
+Result(Int, DeviceError) handle(Disk k, Int n, BlkRequest rq) {
+    return match (rq) {
+        BlkStart(p) => refuse(n),
+        BlkRead(p) => do_read(k, n, (Int) p.sector),
+        BlkWrite(p) => do_write(k, n, (Int) p.sector, p.data),
+        BlkCapacity => do_capacity(k, n),
+        BlkAlone(p) => do_alone(k, n, (Int) p.count),
+        BlkRounds(p) => do_rounds(k, n, (Int) p.count),
+    };
+}
+
+@requires(device)
+Result(Int, DeviceError) refuse(Int n) {
+    Bool r = blk_answer(BlkRefused)?;
     return Ok(n);
 }
 
-// The driver's loop: it carries how many requests the device has had.
+@requires(device)
+Result(Int, DeviceError) do_read(Disk k, Int n, Int sector) {
+    Int st = transfer(k, n, false, sector)?;
+    List(UInt(8)) data = dma_read(k.s.dma, at_data(), 512)?;
+    Bool r = blk_answer(BlkSector(SectorRep {.status = (UInt(8)) st, .data = data}))?;
+    return Ok(n + 1);
+}
+
+@requires(device)
+Result(Int, DeviceError) do_write(Disk k, Int n, Int sector, List(UInt(8)) data) {
+    Bool w = dma_write(k.s.dma, at_data(), data)?;
+    Int st = transfer(k, n, true, sector)?;
+    Bool r = blk_answer(BlkStatus(StatusRep {.status = (UInt(8)) st}))?;
+    return Ok(n + 1);
+}
+
+@requires(device)
+Result(Int, DeviceError) do_capacity(Disk k, Int n) {
+    Wide cap = blk_config_read_capacity(k.s.config)?;
+    Bool r = blk_answer(BlkNumber(NumberRep {.n = cap.v}))?;
+    return Ok(n);
+}
+
+@requires(device)
+Result(Int, DeviceError) do_alone(Disk k, Int n, Int count) {
+    Int good = alone(k, n, count, 0)?;
+    Bool r = blk_answer(BlkNumber(NumberRep {.n = (UInt(64)) good}))?;
+    return Ok(n + count);
+}
+
+@requires(device)
+Result(Int, DeviceError) do_rounds(Disk k, Int n, Int count) {
+    Int good = rounds(k, n, count, 0)?;
+    Bool r = blk_answer(BlkNumber(NumberRep {.n = (UInt(64)) good}))?;
+    return Ok(n + 16 * count);
+}
+
+// The driver's loop: it carries how many requests the device has had. A
+// message that is no BlkRequest is answered BlkRefused.
 @requires(device)
 Int serve(Disk k, Int n) {
-    return match (driver_next(60000)) {
+    return match (blk_next(60000)) {
         Err(e) => 1,
         Ok(ev) => match (ev) {
-            DrvRequest(msg) => match (handle(k, n, msg)) { Ok(n2) => serve(k, n2), Err(e) => 2 },
-            DrvInterrupt(c) => serve(k, n),
-            DrvIdle => serve(k, n),
+            BlkAsked(rq) => match (handle(k, n, rq)) { Ok(n2) => serve(k, n2), Err(e) => 2 },
+            BlkMalformed(why) => match (blk_answer(BlkRefused)) { Ok(b) => serve(k, n), Err(e) => 2 },
+            BlkInterrupt(c) => serve(k, n),
+            BlkIdle => serve(k, n),
         },
     };
 }
 
-// The driver: what the host runs. The program's first message is the
-// notification step (four bytes), which only it can read.
+// The driver: what the host runs. The program's first message is
+// BlkStart, the notification step.
 @requires(device)
 Int disk_driver(BlkSession s) {
     Int noff = match (bring_up(s)) { Ok(v) => v, Err(e) => 0 - 1 };
     if (noff < 0) { return 3; }
-    return match (driver_next(60000)) {
+    return match (blk_next(60000)) {
         Ok(ev) => match (ev) {
-            DrvRequest(msg) => start(s, noff, msg),
-            DrvInterrupt(c) => 4,
-            DrvIdle => 4,
+            BlkAsked(rq) => match (rq) { BlkStart(p) => start(s, noff, (Int) p.step), _ => 5 },
+            _ => 4,
         },
         Err(e) => 4,
     };
 }
 
 @requires(device)
-Int start(BlkSession s, Int noff, List(UInt(8)) msg) {
-    if (msg.len() != 4) { return 5; }
-    NotifySession bell = NotifySession {.id = s.notify.id, .map = s.notify.map, .base = s.notify.base + noff * from_le(msg, 0, 4), .len = 2};
-    return match (driver_reply([1])) { Ok(b) => serve(Disk {.s = s, .bell = bell}, 0), Err(e) => 6 };
+Int start(BlkSession s, Int noff, Int step) {
+    NotifySession bell = NotifySession {.id = s.notify.id, .map = s.notify.map, .base = s.notify.base + noff * step, .len = 2};
+    return match (blk_answer(BlkReady)) { Ok(b) => serve(Disk {.s = s, .bell = bell}, 0), Err(e) => 6 };
 }
 
 // ─── In the program ─────────────────────────────────────────────────
@@ -329,50 +355,60 @@ List(UInt(8)) pattern(Int i, List(UInt(8)) acc) { return if (i >= 512) { acc } e
 
 Bool same(List(UInt(8)) a, Int from, List(UInt(8)) b, Int i) { return i >= b.len() || (from + i < a.len() && a[from + i] == b[i] && same(a, from, b, i + 1)); }
 
-List(UInt(8)) ask(Int op, Int sector) {
-    List(UInt(8)) head = [(UInt(8)) op];
-    return le(sector, 8, head);
+// A sector read through the driver: its status and bytes, or -1.
+@requires(device)
+Result(SectorRep, DeviceError) read_sector(DriverLink d, Int sector) {
+    BlkReply r = blk_ask(d, BlkRead(SectorReq {.sector = (UInt(64)) sector}))?;
+    return match (r) { BlkSector(x) => Ok(x), _ => Err(BadReply("blk", "not a sector")) };
 }
+
+Int number_of(BlkReply r) { return match (r) { BlkNumber(x) => (Int) x.n, _ => 0 - 1 }; }
+Int status_of(BlkReply r) { return match (r) { BlkStatus(x) => (Int) x.status, _ => 0 - 1 }; }
+Str kind_of(BlkReply r) { return match (r) { BlkReady => "ready", BlkSector(x) => "a sector", BlkStatus(x) => "a status", BlkNumber(x) => "a number", BlkRefused => "refused" }; }
 
 // `left` reads of sector 3 by message; how many came back whole.
 @requires(device)
 Result(Int, DeviceError) reads(DriverLink d, Int left, Int good) {
     if (left <= 0) { return Ok(good); }
-    List(UInt(8)) r = driver_call(d, ask(1, 3))?;
-    return reads(d, left - 1, if (r.len() == 513 && (Int) r[0] == 0) { good + 1 } else { good });
+    SectorRep r = read_sector(d, 3)?;
+    return reads(d, left - 1, if ((Int) r.status == 0) { good + 1 } else { good });
 }
 
 // Times on lines that start "note:", which the test's script shows and
-// does not compare: a read asked for by message, and a read the driver
-// makes with no one asking (2000 of them in one message).
+// does not compare: a read asked for by message, a read the driver makes
+// with no one asking (2000 of them for one message), and one of sixteen
+// in flight (3200 for one message).
 @requires(device, clock(readonly))
 Result(Str, DeviceError) timed(DriverLink d) {
     Int t0 = clock.monotonic_ns();
     Int by_message = reads(d, 200, 0)?;
     Int t1 = clock.monotonic_ns();
-    List(UInt(8)) none = [];
-    List(UInt(8)) four = [4];
-    List(UInt(8)) r = driver_call(d, le(2000, 2, four))?;
+    BlkReply r = blk_ask(d, BlkAlone(CountReq {.count = 2000}))?;
     Int t2 = clock.monotonic_ns();
-    List(UInt(8)) five = [5];
-    List(UInt(8)) g = driver_call(d, le(200, 2, five))?;
+    BlkReply g = blk_ask(d, BlkRounds(CountReq {.count = 200}))?;
     Int t3 = clock.monotonic_ns();
     println(f"note: {(t1 - t0) / 200000} microseconds a read asked of the driver by message, {(t2 - t1) / 2000000} with no message, {(t3 - t2) / 3200000} with sixteen in flight");
-    return Ok(f"{by_message} of 200 reads by message, {from_le(r, 0, 2)} of 2000 by the driver alone, {from_le(g, 0, 2)} of 3200 sixteen at a time");
+    return Ok(f"{by_message} of 200 reads by message, {number_of(r)} of 2000 by the driver alone, {number_of(g)} of 3200 sixteen at a time");
 }
 
 @requires(device, clock(readonly))
 Result(Str, DeviceError) talk(DriverLink d, Int step) {
     List(UInt(8)) none = [];
-    List(UInt(8)) ready = driver_call(d, le(step, 4, none))?;
-    List(UInt(8)) cap = driver_call(d, [3])?;
-    List(UInt(8)) three = driver_call(d, ask(1, 3))?;
+    BlkReply ready = blk_ask(d, BlkStart(StepReq {.step = (UInt(32)) step}))?;
+    BlkReply cap = blk_ask(d, BlkCapacity)?;
+    SectorRep three = read_sector(d, 3)?;
     List(UInt(8)) pat = pattern(0, none);
-    List(UInt(8)) wrote = driver_call(d, ask(2, 6).concat(pat))?;
-    List(UInt(8)) six = driver_call(d, ask(1, 6))?;
-    List(UInt(8)) odd = driver_call(d, [9, 9])?;
+    BlkReply wrote = blk_ask(d, BlkWrite(WriteReq {.sector = 6, .data = pat}))?;
+    SectorRep six = read_sector(d, 6)?;
+    // A second BlkStart is a request the driver refuses; bytes that are
+    // no BlkRequest at all reach it as malformed, and it refuses those.
+    BlkReply again = blk_ask(d, BlkStart(StepReq {.step = 0}))?;
+    List(UInt(8)) odd = driver_call(d, [99, 1, 2])?;
+    Str odd_is = match (blk_reply_from_message(odd)) { Ok(x) => kind_of(x), Err(e) => "not a reply" };
+    // A record of the wrong length never leaves the program.
+    Str short = match (blk_ask(d, BlkWrite(WriteReq {.sector = 7, .data = [1, 2, 3]}))) { Ok(x) => kind_of(x), Err(e) => "refused before it was sent" };
     Str rate = timed(d)?;
-    return Ok(f"the driver is ready: {ready.len() == 1}\ncapacity {from_le(cap, 0, 8)} sectors\nread sector 3: status {three[0]}, text: " + text(three, 1, 19, "") + f"\nwrote sector 6: status {wrote[0]}\nread it back: status {six[0]}, the same bytes: {six.len() == 513 && same(six, 1, pat, 0)}\na message that is no request: {odd.len()} bytes back\n" + rate);
+    return Ok("the driver is " + kind_of(ready) + f"\ncapacity {number_of(cap)} sectors\nread sector 3: status {three.status}, text: " + text(three.data, 0, 18, "") + f"\nwrote sector 6: status {status_of(wrote)}\nread it back: status {six.status}, the same bytes: {same(six.data, 0, pat, 0)}\na second start: " + kind_of(again) + "\nbytes that are no request: " + odd_is + "\na write of three bytes: " + short + "\n" + rate);
 }
 
 @requires(device, clock(readonly))

@@ -825,15 +825,24 @@ WdS wd_ddecl(Str s, Int k, WdS st) {
     WdDB b = wd_dmembers(str_split(str_slice(s, ob + 1, cb - 1), ";"), name, st.gen, 0, WdDB {.ms = [], .err = ""});
     if (b.err != "") { return wd_rbad(st, b.err, k); }
     if (b.ms.len() == 0 || b.ms.len() > 16) { return wd_rbad(st, "device " + name + " has 1 to 16 register blocks", k); }
+    // `request = T, reply = U`: the driver's messages have types.
+    Str rq = wd_arg(args, "request", 0);
+    Str rp = wd_arg(args, "reply", 0);
+    if ((rq != "") != (rp != "") || (rq != "" && drv == "")) { return wd_rbad(st, "@device with typed messages names both, for a driver: `@device(dma = dev, driver = f, request = T, reply = U)`", k); }
+    WdSum rqs = if (rq == "") { WdSum {.vs = [], .err = ""} } else { wd_sum(s, rq) };
+    WdSum rps = if (rp == "") { WdSum {.vs = [], .err = ""} } else { wd_sum(s, rp) };
+    if (rqs.err != "") { return wd_rbad(st, "device " + name + ": " + rqs.err, k); }
+    if (rps.err != "") { return wd_rbad(st, "device " + name + ": " + rps.err, k); }
+    Str typed = if (rq == "") { "" } else { wd_msg_gen(st.gen, rq, rqs.vs) + wd_msg_gen(st.gen + wd_msg_gen(st.gen, rq, rqs.vs), rp, rps.vs) + wd_typed_gen(name, rq, rp) };
     if (dma != "" && wd_dhas(b.ms, "dma", 0)) { return wd_rbad(st, "device " + name + ": `dma` is the name of the memory a `@device(dma = ...)` session carries; call the block something else", k); }
-    return WdS {.out = wd_copy(wd_blank(st.out, s, k, e), s, e, cb), .i = cb, .gen = st.gen + (if (dma != "") { wd_dgen_dma(name, b.ms, dma) + (if (drv != "") { wd_dgen_driver(name, b.ms, dma, drv, wd_count(st.gen, "\nInt __wd_drv_", 0, 0)) } else { "" }) } else { wd_dgen(name, b.ms, dev, devw) }), .ts = st.ts, .code = "", .err = "", .at = -1};
+    return WdS {.out = wd_copy(wd_blank(st.out, s, k, e), s, e, cb), .i = cb, .gen = st.gen + (if (dma != "") { wd_dgen_dma(name, b.ms, dma) + (if (drv != "") { wd_dgen_driver(name, b.ms, dma, drv, wd_count(st.gen, "\nInt __wd_drv_", 0, 0)) + typed } else { "" }) } else { wd_dgen(name, b.ms, dev, devw) }), .ts = st.ts, .code = "", .err = "", .at = -1};
 }
 
 Bool wd_dargs_known(List(Str) args, Int i) {
     if (i >= args.len()) { return true; }
     Int eq = wd_char(args[i], 61, 0, str_len(args[i]));
     Str key = if (eq > 0) { str_trim(str_slice(args[i], 0, eq)) } else { "" };
-    Bool ok = (key == "session" || key == "session_write" || key == "dma" || key == "driver") && str_trim(str_slice(args[i], eq + 1, str_len(args[i]))) != "";
+    Bool ok = (key == "session" || key == "session_write" || key == "dma" || key == "driver" || key == "request" || key == "reply") && str_trim(str_slice(args[i], eq + 1, str_len(args[i]))) != "";
     return ok && wd_dargs_known(args, i + 1);
 }
 
@@ -876,6 +885,101 @@ Str wd_dgen_dma(Str name, List(WdDM) ms, Str dev) {
         "    T __wd_r = __wd_f(" + name + "Session {" + wd_dinits(ms, 0, StrBuf()) + ", .dma = DmaRegion {.id = __wd_id, .map = dv_session_res(__wd_ws, 0, __wd_n).len(), .iova = " + dev + "().iova, .len = " + dev + "().dma}});\n" +
         "    Result(Bool, DeviceError) __wd_e = device_session_end(\"" + sn + "\", __wd_id);\n" +
         "    return match (__wd_e) { Ok(__wd_b) => Ok(__wd_r), Err(__wd_x) => Ok(__wd_r) };\n}\n";
+}
+
+// ─── Typed messages ─────────────────────────────────────────────────
+// `@device(dma = d, driver = f, request = T, reply = U)`: T and U are sum
+// types declared before the device, each variant with nothing or with one
+// layout record (compiler/layout.resid writes that record's parser and
+// serializer). A message is one byte, the variant's number in the order
+// declared, then the record's bytes. For each of T and U:
+//
+//   Result(List(UInt(8)), DeviceError) t_message(T m)
+//   Result(T, DeviceError) t_from_message(List(UInt(8)) b)      total
+//
+// and for the device:
+//
+//   Result(U, DeviceError) dev_ask(DriverLink d, T request)      in the program (device)
+//   type DevEvent = DevAsked(T) | DevInterrupt(Int) | DevIdle | DevMalformed(DeviceError)
+//   Result(DevEvent, DeviceError) dev_next(Int timeout_ms)       in the driver
+//   Result(Bool, DeviceError) dev_answer(U reply)                in the driver
+//
+// A message that is no T reaches the driver as DevMalformed, to answer as
+// it sees fit: the program is waiting.
+
+type WdV = { Str name; Str payload; };
+type WdSum = { List(WdV) vs; Str err; };
+
+// The variants of the sum type `name` declared in s.
+WdSum wd_sum(Str s, Str name) {
+    Int n = str_len(s);
+    Int k = wd_sum_at(s, name, 0);
+    if (k < 0) { return WdSum {.vs = [], .err = "a message type is a sum type declared before the device (`type " + name + " = A(RecordA) | B;`); found no such declaration of `" + name + "`"}; }
+    Int eq = wd_char(s, 61, k, n);
+    Int sc = if (eq < 0) { -1 } else { wd_char(s, 59, eq, n) };
+    if (sc < 0) { return WdSum {.vs = [], .err = "the declaration of `" + name + "` does not end"}; }
+    return wd_sum_vs(str_split(str_slice(s, eq + 1, sc), "|"), name, 0, WdSum {.vs = [], .err = ""});
+}
+
+// Where `type <name>` is followed by `=`, from i on; -1 when nowhere.
+Int wd_sum_at(Str s, Str name, Int i) {
+    Int n = str_len(s);
+    Int k = ly_find_pub(s, "type " + name, i);
+    if (k < 0) { return -1; }
+    Int after = wd_ws(s, k + 5 + str_len(name), n);
+    return if (after < n && str_char_at(s, after) == 61) { k } else { wd_sum_at(s, name, k + 5) };
+}
+
+WdSum wd_sum_vs(List(Str) parts, Str name, Int i, WdSum acc) {
+    if (i >= parts.len()) { return if (acc.vs.len() == 0 || acc.vs.len() > 255) { WdSum {.vs = [], .err = "`" + name + "` has 1 to 255 kinds of message"} } else { acc }; }
+    Str v = str_trim(parts[i]);
+    Int op = wd_char(v, 40, 0, str_len(v));
+    Str vn = if (op < 0) { v } else { str_trim(str_slice(v, 0, op)) };
+    Bool closed = op < 0 || str_ends_with(v, ")");
+    Str pay = if (op < 0 || !closed) { "" } else { str_trim(str_slice(v, op + 1, str_len(v) - 1)) };
+    if (vn == "" || !closed || str_contains(pay, ",") || str_contains(pay, "(") || (op >= 0 && pay == "")) { return WdSum {.vs = [], .err = "a kind of message of `" + name + "` is a name alone or with one layout record (`Read(ReadReq)`), got `" + v + "`"}; }
+    return wd_sum_vs(parts, name, i + 1, WdSum {.vs = acc.vs.concat([WdV {.name = vn, .payload = pay}]), .err = ""});
+}
+
+// The two functions of a message type, unless `gen` has them already (a
+// type that two devices name).
+Str wd_msg_gen(Str gen, Str ty, List(WdV) vs) {
+    Str sn = wd_snake(ty);
+    if (str_contains(gen, " " + sn + "_message(" + ty + " __wd_m)")) { return ""; }
+    Str to = "\n// generated: " + ty + " as a message\npub Result(List(UInt(8)), DeviceError) " + sn + "_message(" + ty + " __wd_m) {\n    List(UInt(8)) __wd_e = [];\n    return match (__wd_m) {\n" + wd_msg_to(vs, 0, StrBuf()) + "    };\n}\n";
+    Str from = "pub Result(" + ty + ", DeviceError) " + sn + "_from_message(List(UInt(8)) __wd_b) {\n    if (__wd_b.len() < 1) { return Err(BadReply(\"" + ty + "\", \"an empty message\")); }\n    Int __wd_t = (Int) __wd_b[0];\n" + wd_msg_from(ty, vs, 0, StrBuf()) + "    return Err(BadReply(\"" + ty + "\", \"an unknown kind of message\"));\n}\n";
+    return to + from;
+}
+
+Str wd_msg_to(List(WdV) vs, Int i, StrBuf acc) {
+    if (i >= vs.len()) { return acc.finish(); }
+    WdV v = vs[i];
+    Str arm = if (v.payload == "") { "        " + v.name + " => dv_tagged(" + f"{i}" + ", Ok(__wd_e)),\n" } else { "        " + v.name + "(__wd_p) => dv_tagged(" + f"{i}" + ", " + wd_snake(v.payload) + "_bytes(__wd_p)),\n" };
+    return wd_msg_to(vs, i + 1, acc.push(arm));
+}
+
+Str wd_msg_from(Str ty, List(WdV) vs, Int i, StrBuf acc) {
+    if (i >= vs.len()) { return acc.finish(); }
+    WdV v = vs[i];
+    Str arm = if (v.payload == "") {
+        "    if (__wd_t == " + f"{i}" + ") { return if (__wd_b.len() == 1) { Ok(" + v.name + ") } else { Err(BadReply(\"" + ty + "\", \"trailing bytes\")) }; }\n"
+    } else {
+        "    if (__wd_t == " + f"{i}" + ") {\n        " + v.payload + " __wd_p = " + wd_snake(v.payload) + "_parse(__wd_b[1..__wd_b.len()])?;\n        return Ok(" + v.name + "(__wd_p));\n    }\n"
+    };
+    return wd_msg_from(ty, vs, i + 1, acc.push(arm));
+}
+
+// What a device with typed messages gets: the program's ask, the driver's
+// event, next and answer.
+Str wd_typed_gen(Str name, Str rq, Str rp) {
+    Str sn = wd_snake(name);
+    Str rqs = wd_snake(rq);
+    Str rps = wd_snake(rp);
+    return "\n// generated from @device " + name + ": its driver's messages\n" +
+        "@requires(device)\npub Result(" + rp + ", DeviceError) " + sn + "_ask(DriverLink __wd_d, " + rq + " __wd_r) {\n    List(UInt(8)) __wd_b = " + rqs + "_message(__wd_r)?;\n    List(UInt(8)) __wd_a = driver_call(__wd_d, __wd_b)?;\n    return " + rps + "_from_message(__wd_a);\n}\n" +
+        "pub type " + name + "Event = " + name + "Asked(" + rq + ") | " + name + "Interrupt(Int) | " + name + "Idle | " + name + "Malformed(DeviceError);\n" +
+        "@requires(device(readonly))\npub Result(" + name + "Event, DeviceError) " + sn + "_next(Int __wd_ms) {\n    DriverEvent __wd_e = driver_next(__wd_ms)?;\n    return match (__wd_e) {\n        DrvRequest(__wd_b) => match (" + rqs + "_from_message(__wd_b)) { Ok(__wd_r) => Ok(" + name + "Asked(__wd_r)), Err(__wd_x) => Ok(" + name + "Malformed(__wd_x)) },\n        DrvInterrupt(__wd_n) => Ok(" + name + "Interrupt(__wd_n)),\n        DrvIdle => Ok(" + name + "Idle),\n    };\n}\n" +
+        "@requires(device(readonly))\npub Result(Bool, DeviceError) " + sn + "_answer(" + rp + " __wd_r) {\n    List(UInt(8)) __wd_b = " + rps + "_message(__wd_r)?;\n    return driver_reply(__wd_b);\n}\n";
 }
 
 // How many times `pat` is in `s` from i on.

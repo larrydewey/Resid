@@ -1,0 +1,15 @@
+[0, 2, 1, 0, 0, 0, 0, 0, 0]
+[1, 1, 0, 0, 0, 0, 0, 0, 0, 9, 8, 7, 6]
+[2]
+WriteReq: bad input: data: length 4
+DataRep: bad input: n: n <= 8
+read sector 258
+write sector 5, 4 bytes
+capacity
+data: status 0, [7, 7, 7]
+CardRequest: bad reply: an empty message
+CardRequest: bad reply: an unknown kind of message
+SectorReq: bad reply: sector: truncated
+CardRequest: bad reply: trailing bytes
+SectorReq: bad reply: trailing bytes
+DataRep: bad reply: n: n <= 8

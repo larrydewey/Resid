@@ -25,10 +25,12 @@ a message that is no request: 0 bytes back
 50 of 50 more requests brought 64 bytes
 20000 register reads and 200000 of its memory in the driver, all as expected: true
 -- a disk's driver in its host
-the driver is ready: true
+the driver is ready
 capacity 2048 sectors
 read sector 3: status 0, text: RESID-SECTOR-THREE
 wrote sector 6: status 0
 read it back: status 0, the same bytes: true
-a message that is no request: 0 bytes back
+a second start: refused
+bytes that are no request: refused
+a write of three bytes: refused before it was sent
 200 of 200 reads by message, 2000 of 2000 by the driver alone, 3200 of 3200 sixteen at a time

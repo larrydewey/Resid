@@ -1,0 +1,12 @@
+// Typed messages name both a request and a reply type, for a driver.
+@word(32) type Ctl = { Bool on; @reserved(31); };
+
+@registers(size = 0x10, session = device)
+type Regs = { @at(0) Ctl ctl; };
+
+type Ask = Ping;
+
+@device(dma = card, driver = run, request = Ask)
+type Card = { Regs regs; };
+
+Int main() { return 0; }

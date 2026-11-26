@@ -405,7 +405,21 @@ region, with no diagnostic.
   exit to QEMU. One run of five did not finish in the first machine and
   was not seen again. The disk's driver now also keeps sixteen reads in
   flight (a queue of 64, chains laid down once): in the emulated
-  machine 20 µs a read against 182 one at a time.
+  machine 20 µs a read against 182 one at a time, and on the laptop
+  under KVM 5 µs against 29.
+- **Stage T: typed messages.** `@device(dma = d, driver = f, request =
+  T, reply = U)`: T and U are sum types declared before the device,
+  each variant with nothing or one layout record. `word.resid` reads
+  the declarations (`wd_sum`) and writes, for each type, `t_message`
+  and `t_from_message` (a tag byte, the variant's number, then the
+  record's bytes; total), and for the device `dev_ask` in the program
+  and `DevEvent`, `dev_next` and `dev_answer` in the driver. Bytes that
+  are no request reach the driver as `DevMalformed`. No new serializer:
+  layout types' own. `virtio_blk_driver.resid` uses them; cases
+  `device_messages` (messages to bytes and back, every way to be
+  malformed) and conformance `err_device_messages`. Not yet: a
+  diagnostic for a driver function named as the generated scope is
+  (`t_driver`), which today is a duplicate definition.
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

@@ -1,0 +1,76 @@
+// Typed messages between a program and its driver
+// (PLAN-hardware-access.md §11): `@device(dma = ..., driver = f, request
+// = T, reply = U)`, where T and U are sum types whose variants carry
+// layout records. This case touches no device and starts no host: it
+// turns messages into bytes and back, and shows what bytes that are no
+// message become. A driver that takes such messages runs in
+// tests/device/virtio_vm.sh.
+import "dev/fx_device_virtio_window.resid";
+
+@word(16) type Half = { UInt(16) v; };
+
+@registers(size = 0x38, session = device)
+type Common = { @at(0x16) Half queue_select; };
+
+@layout(le) type SectorReq = { UInt(64) sector; };
+@layout(le) type WriteReq = { UInt(64) sector; @len(4) List(UInt(8)) data; };
+type CardRequest = CardRead(SectorReq) | CardWrite(WriteReq) | CardCapacity;
+
+@layout(le) type DataRep = { UInt(8) status; @check(n <= 8) UInt(8) n; @len(n) List(UInt(8)) data; };
+type CardReply = CardData(DataRep) | CardDone | CardRefused;
+
+@requires(device)
+Int run_card(CardSession s) {
+    return match (card_next(1000)) {
+        Ok(ev) => match (ev) {
+            CardAsked(rq) => match (card_answer(match (rq) { CardRead(p) => CardData(DataRep {.status = 0, .n = 0, .data = []}), CardWrite(p) => CardDone, CardCapacity => CardRefused })) { Ok(b) => run_card(s), Err(e) => 1 },
+            CardMalformed(why) => match (card_answer(CardRefused)) { Ok(b) => run_card(s), Err(e) => 1 },
+            CardInterrupt(n) => run_card(s),
+            CardIdle => run_card(s),
+        },
+        Err(e) => 2,
+    };
+}
+
+@device(dma = fx_rng_dma, driver = run_card, request = CardRequest, reply = CardReply)
+type Card = { Common common; };
+
+Str bytes(Result(List(UInt(8)), DeviceError) r) { return match (r) { Ok(b) => f"{b}", Err(e) => device_error_text(e) }; }
+
+Str request(Result(CardRequest, DeviceError) r) {
+    return match (r) {
+        Ok(m) => match (m) { CardRead(p) => f"read sector {p.sector}", CardWrite(p) => f"write sector {p.sector}, {p.data.len()} bytes", CardCapacity => "capacity" },
+        Err(e) => device_error_text(e),
+    };
+}
+
+Str reply(Result(CardReply, DeviceError) r) {
+    return match (r) {
+        Ok(m) => match (m) { CardData(p) => f"data: status {p.status}, {p.data}", CardDone => "done", CardRefused => "refused" },
+        Err(e) => device_error_text(e),
+    };
+}
+
+Int main() {
+    // A message is its variant's number, then its record's bytes.
+    println(bytes(card_request_message(CardRead(SectorReq {.sector = 258}))));
+    println(bytes(card_request_message(CardWrite(WriteReq {.sector = 1, .data = [9, 8, 7, 6]}))));
+    println(bytes(card_request_message(CardCapacity)));
+    // A record that breaks its own layout is not sent.
+    println(bytes(card_request_message(CardWrite(WriteReq {.sector = 1, .data = [9]}))));
+    println(bytes(card_reply_message(CardData(DataRep {.status = 0, .n = 9, .data = [1, 2, 3, 4, 5, 6, 7, 8, 9]}))));
+    // And back.
+    println(request(card_request_from_message([0, 2, 1, 0, 0, 0, 0, 0, 0])));
+    println(request(card_request_from_message([1, 5, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4])));
+    println(request(card_request_from_message([2])));
+    println(reply(card_reply_from_message([0, 0, 3, 7, 7, 7])));
+    // Bytes that are no message: none, an unknown kind, too few, too many,
+    // a record whose own check fails.
+    println(request(card_request_from_message([])));
+    println(request(card_request_from_message([3])));
+    println(request(card_request_from_message([0, 2, 1])));
+    println(request(card_request_from_message([2, 0])));
+    println(request(card_request_from_message([0, 2, 1, 0, 0, 0, 0, 0, 0, 0])));
+    println(reply(card_reply_from_message([0, 0, 9, 1, 2, 3, 4, 5, 6, 7, 8, 9])));
+    return 0;
+}

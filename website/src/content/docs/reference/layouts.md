@@ -382,6 +382,43 @@ a driver that returns ends its host, and the program's next
 `driver_call` fails. The host is a fresh start of the program's own
 binary, so the driver shares no memory with the program.
 
+#### Typed messages
+
+Name a request and a reply type on the device and the driver's messages
+have types. Each is a sum type declared before the device whose
+variants carry nothing or one [layout record](#layout-types):
+
+```resid
+@layout(le) type SectorReq = { UInt(64) sector; };
+@layout(le) type WriteReq  = { UInt(64) sector; @len(512) List(UInt(8)) data; };
+type BlkRequest = BlkRead(SectorReq) | BlkWrite(WriteReq) | BlkCapacity;
+
+@layout(le) type SectorRep = { UInt(8) status; @len(512) List(UInt(8)) data; };
+type BlkReply = BlkSector(SectorRep) | BlkDone | BlkRefused;
+
+@device(dma = virtio_blk_dma, driver = disk_driver, request = BlkRequest, reply = BlkReply)
+type Blk = { Common common; Notify notify; };
+```
+
+| Generated | |
+|---|---|
+| `blk_ask(link, request)` | in the program: the request sent, the reply parsed (`device`) |
+| `BlkEvent` | `BlkAsked(BlkRequest)`, `BlkInterrupt(Int)`, `BlkIdle` or `BlkMalformed(DeviceError)` |
+| `blk_next(timeout_ms)` | in the driver: the next `BlkEvent` |
+| `blk_answer(reply)` | in the driver: the reply to the request it took |
+| `blk_request_message(m)`, `blk_request_from_message(bytes)` | a message as bytes and back, and the same for the reply type |
+
+On the wire a message is one byte, the variant's number in the order
+declared, then the record's bytes in its declared layout: the format of
+every kind of message is its declaration. Parsing is total. Bytes that
+are no request reach the driver as `BlkMalformed` with the reason, to
+answer as it chooses, since the program is waiting; a reply that is no
+reply is `BadReply` in the program. A record that breaks its own layout
+(a `@len` or a `@check`) is refused before it is sent. The driver's
+`match` over the request is checked to cover every variant. A driver
+function may not be named `t_driver`, which is the scope the device
+generates.
+
 #### Batches
 
 Every access of a session is a message to its host and its answer. A
