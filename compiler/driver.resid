@@ -9462,7 +9462,8 @@ Str graph_hash_esc(Str hex, Int i, StrBuf acc) {
 // whether the verify closure was pinned (compiler/attest.resid), one text
 // per line.
 @requires(filesystem(readonly))
-List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph, Str grant, List(Int) comp, Str native, Str reduce, Str devices, Str nasm, Str attest, Str caps, Str declass) {
+// `rt`: what -rt and -rtr linked beside the program (prov_rt_rec), or "".
+List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph, Str grant, List(Int) comp, Str native, Str reduce, Str devices, Str nasm, Str attest, Str caps, Str declass, Str rt) {
     List(Str) paths = str_split(done, ";");
     List(Str) gs = if (grant == "") { [] } else { str_split(grant, ",") };
     // `native`: "module=sha256hex;..." for each linked native module (§47).
@@ -9484,8 +9485,11 @@ List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int)
     // capabilities after native_asm.
     Int copt2 = if (caps != "") { 1 } else { 0 };
     Int dopt2 = if (declass != "") { 1 } else { 0 };
-    List(Int) m0 = cbe_map(6 + nopt + gopt + copt + vopt + ropt + dopt + aopt + topt + copt2 + dopt2, []);
-    List(Int) m1 = cbe_bytes(code, cbe_text("code", m0));
+    Int rtopt = if (rt != "") { 1 } else { 0 };
+    List(Int) m0 = cbe_map(6 + nopt + gopt + copt + vopt + ropt + dopt + aopt + topt + copt2 + dopt2 + rtopt, []);
+    // "rt", the shortest key, comes first.
+    List(Int) m0r = if (rtopt == 1) { cbe_text(rt, cbe_text("rt", m0)) } else { m0 };
+    List(Int) m1 = cbe_bytes(code, cbe_text("code", m0r));
     List(Int) m2 = prov_texts(gs, 0, cbe_array(gs.len(), cbe_text("grant", m1)));
     List(Int) m3 = if (gopt == 1) { cbe_bytes(graph, cbe_text("graph", m2)) } else { m2 };
     List(Int) m4a = if (nopt == 1) { cbe_bytes(notes, cbe_text("notes", m3)) } else { m3 };
@@ -9668,12 +9672,22 @@ List(Int) prov_u32(Int v) {
     return cbe_be(v, 4, []);
 }
 
+// The extra C file -rt links and the runtime IR -rtr puts in place of the
+// released one, each by SHA-256: native code no check of the compiler's
+// covers, so the record names it.
+@requires(filesystem(readonly))
+Str prov_rt_rec(Str rtc, Str rtr) {
+    Str a = if (rtc == "") { "" } else { "-rt " + rtc + " sha256 " + hex_encode(filesystem.sha256(rtc)) };
+    Str b = if (rtr == "") { "" } else { "-rtr " + rtr + " sha256 " + hex_encode(filesystem.sha256(rtr)) };
+    return if (a != "" && b != "") { a + "; " + b } else { a + b };
+}
+
 // Sign `out` in place. Returns 0, or 1 when signing is required but fails.
 // The seed is held as a secret from the moment it is read: the public key
 // and the signature are computed by the secret copy of lib/ed25519g.resid
 // and published (declassified) by it, which is the declassify grant here.
 @requires(filesystem, environment, declassify)
-Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str reduce, Str devices, Str nasm, Str attest, Str caps, Str declass) {
+Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str reduce, Str devices, Str nasm, Str attest, Str caps, Str declass, Str rt) {
     Str kpath = prov_key_path();
     if (kpath == "") {
         println("note: provenance: unsigned " + profile + " build (no signing key)");
@@ -9687,7 +9701,7 @@ Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str 
     List(Int) code = filesystem.sha256(out);
     List(Int) notes = prov_file_hash(out + ".resid-notes.cbor");
     List(Int) graph = prov_file_hash(out + ".resid-graph.cbor");
-    List(Int) map = prov_payload(out, profile, done, code, notes, graph, grant, prov_self_hash(), native, reduce, devices, nasm, attest, caps, declass);
+    List(Int) map = prov_payload(out, profile, done, code, notes, graph, grant, prov_self_hash(), native, reduce, devices, nasm, attest, caps, declass, rt);
     Str ekey = environment.get("RESID_PROV_KEY");
     Bool conceal = environment.get("RESID_PROV_ENCRYPT") == "1";
     if (conceal && ekey == "") {
@@ -10071,9 +10085,10 @@ Str vf_first_outside(List(Str) caps, Int i, List(Str) fams) {
 
 // `residc verify`: the trailer's signature under a trusted key, then what the
 // record says, split into EVIDENCE (re-derived here: code, sidecars, the
-// detached copy, the compiler, the graph's sources and capabilities, and the
-// sources when --sources names a tree) and ATTESTATION (only the signer says
-// so: toolchain, profile, output, grant, and sources without --sources).
+// detached copy, the graph's sources and capabilities, and the sources when
+// --sources names a tree) and ATTESTATION (only the signer says so: the
+// compiler, toolchain, profile, output, grant, what -rt/-rtr linked, and
+// sources without --sources).
 // --anchored accepts only a key from $RESID_HOME/keys.
 @requires(filesystem(readonly), environment)
 Int cmd_verify(Str bin_path, Str pub_given, Bool anchored, Str srcdir) {
@@ -10122,12 +10137,15 @@ Int cmd_verify(Str bin_path, Str pub_given, Bool anchored, Str srcdir) {
     List(Int) comp = cbe_map_bytes(map, "compiler");
     List(Int) self = prov_self_hash();
     if (comp.len() == 32 && self.len() == 32 && hex_encode(comp) == hex_encode(self)) {
-        println("evidence: built by this residc (compiler " + hex_encode(comp) + ")");
+        // The signer wrote this hash; nothing here rebuilt the binary.
+        println("attestation: compiler " + hex_encode(comp) + " (this residc's hash, as the signer records it; not re-derived)");
     } else if (comp.len() == 32) {
         println("attestation: compiler " + hex_encode(comp) + " (not this residc)");
     } else {
         println("attestation: compiler not recorded");
     }
+    Str rtl = cbe_map_text(map, "rt");
+    Bool _rtp = if (rtl != "") { println("attestation: linked unchecked native code: " + rtl) } else { true };
     List(Str) grant = cbe_map_texts_in(map, 0, "grant");
     List(Str) srcs = vf_sources_of(map, "sources");
     if (gh.len() > 0) {
@@ -11122,7 +11140,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int _prov_in = resid_bulk_push();
     // Notes are a projection of the residual graph (gart.resid).
     Int nrc  =  write_graph_notes(out, ga_notes(gx_unpack(gpk[2]), gpk[4], rsrc, rr.map, path));
-    Int prc  =  write_provenance(out, profile, rr.done, grk[0], nkeep[1], redrec, dvkeep[0], nkeep[2], attest_rec, capk[0], deck[0]);
+    Int prc  =  write_provenance(out, profile, rr.done, grk[0], nkeep[1], redrec, dvkeep[0], nkeep[2], attest_rec, capk[0], deck[0], prov_rt_rec(rtc, pick_opt(argc, "-rtr", "")));
     Int _prov_out = resid_bulk_pop();
     return prc;
 }

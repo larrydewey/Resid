@@ -214,7 +214,8 @@ Not guaranteed:
   blocked: OS randomness is not a capability.
 - **The build tree.** `-rt` still links an arbitrary extra C file without
   checks. It is a builder's flag, and an attacker who can write the build
-  tree is out of scope.
+  tree is out of scope. The provenance record names the file by SHA-256,
+  and `residc verify` prints it.
 
 ### resid-gui's font and image modules
 
@@ -553,15 +554,16 @@ provenance themselves; run `residc verify` before trusting their inputs.
 | The record's `grant` is `main`'s declared `@requires`, not an empty list; a program without authority records `[]`. | grant is main's @requires, empty grant for a main without @requires |
 | When the graph artifact is signed, its sources must be the record's and every capability its nodes use must lie within the grant, with its mode: a node writing with a family the grant holds only read-only is refused. A record that lies about either, under a valid signature, is refused. | graph capability outside the signed grant, graph sources differ from the signed record |
 | The verdict says which keyring the key came from: `anchored` (`$RESID_HOME/keys`), `supplied` (`--pub`, `RESID_VERIFY_PUB`) or `local` (`keys/*.pub` in the current directory). A key found in both the install and the current directory is reported as anchored. `--anchored` refuses anything but the install's keyring. | supplied key is reported, cwd keys/ is local, RESID_HOME/keys is anchored, --anchored refuses a supplied key, --anchored refuses a local key |
-| Evidence and attestation are printed apart. The code hash, the sidecars, the detached copy, the builder (when the verifying `residc` is the one recorded) and the graph cross-checks are evidence; toolchain, profile, output and grant are attestation; sources are attestation unless `--sources DIR` re-hashes them, and then a changed or missing file is a failure. | code hash is evidence, builder compiler is evidence, another compiler: builder is attested, sources are attested without a tree, --sources re-derives, --sources catches a changed source |
+| Evidence and attestation are printed apart. The code hash, the sidecars, the detached copy and the graph cross-checks are evidence; the compiler hash (verify does not rebuild the binary, so a match with its own hash is still the signer's word), toolchain, profile, output and grant are attestation; sources are attestation unless `--sources DIR` re-hashes them, and then a changed or missing file is a failure. | code hash is evidence, builder compiler is attested, another compiler: builder is attested, sources are attested without a tree, --sources re-derives, --sources catches a changed source |
+| A C file linked with `-rt`, and a runtime IR named with `-rtr`, are recorded by path and SHA-256 (`rt`), and verify prints them as unchecked native code. | -rt build is signed, -rt file is in the record |
 | The trailer is readable by an independent implementation (Python `cbor2` + `cryptography`), which also verifies the signature and the code hash. | independent reader accepts the genuine trailer |
 | CBOR one-, two- and four-byte length forms read back; a head whose length runs past the buffer is refused. | two sources use the two-byte length form, cbor one-, two- and four-byte lengths read back |
 | A concealed payload needs `RESID_PROV_KEY`, and a wrong key fails authentication. | concealed verify without key, concealed wrong key |
 | Rebuilding the same source with the same key gives the same bytes. | reproducible |
 
-Not guaranteed: `toolchain` and `profile` are attestation only, and
-`compiler` is evidence only when the `residc` running `verify` is the
-builder (otherwise it is a hash the reader may compare by hand); a
+Not guaranteed: `toolchain`, `profile` and `compiler` are attestation
+only: a signer using another toolchain can write the stock compiler's
+hash, and only rebuilding the sources shows what produced the binary; a
 `local` key verifies the signature exactly as an anchored one does, and
 is only *named* as local -- `--anchored` is the switch that refuses it;
 the graph cross-check applies only to builds that carry a signed graph

@@ -120,7 +120,16 @@ export RESID_VERIFY_PUB="$PUB"
 check "code hash is evidence" 0 "evidence: code hash matches" "$COMPILER" verify s
 check "notes sidecar is evidence" 0 "evidence: s.resid-notes.cbor matches" "$COMPILER" verify s
 check "detached copy is evidence" 0 "evidence: s.resid-prov.cbor equals the trailer" "$COMPILER" verify s
-check "builder compiler is evidence" 0 "evidence: built by this residc" "$COMPILER" verify s
+# The compiler hash is the signer's word: verify does not rebuild the
+# binary, so a match with its own hash is not evidence of who built it.
+check "builder compiler is attested" 0 "attestation: compiler .* (this residc's hash, as the signer records it; not re-derived)" "$COMPILER" verify s
+vout="$("$COMPILER" verify s 2>&1)"
+if grep -q "^evidence: .*compiler\|built by" <<< "$vout"; then fail=$((fail + 1)); echo "FAIL the builder compiler is reported as evidence"; else pass=$((pass + 1)); fi
+# An extra C file linked with -rt is native code no check covers: the
+# record names it by SHA-256, and verify prints it.
+printf 'int resid_extra_marker(void) { return 7; }\n' > extra.c
+check "-rt build is signed" 0 "provenance: signed" "$COMPILER" p.resid -o srt -rt extra.c
+check "-rt file is in the record" 0 "attestation: linked unchecked native code: -rt extra.c sha256 $(sha256sum extra.c | cut -c1-64)" "$COMPILER" verify srt
 check "sources are attested without a tree" 0 "attestation: 1 source file(s), hashes signed but not re-derived" "$COMPILER" verify s
 check "toolchain and profile are attested" 0 "attestation: toolchain resid-stage2 3.5, profile release, output s" "$COMPILER" verify s
 check "empty grant for a main without @requires" 0 "attestation: grant \[\]" "$COMPILER" verify s

@@ -41,7 +41,7 @@ evidence: code hash matches (c2b6…)
 evidence: app.resid-notes.cbor matches its signed hash
 evidence: app.resid-graph.cbor matches its signed hash
 evidence: app.resid-prov.cbor equals the trailer
-evidence: built by this residc (compiler a8cf…)
+attestation: compiler a8cf… (this residc's hash, as the signer records it; not re-derived)
 evidence: the graph's sources are the record's, and its capabilities are within the grant
 attestation: 3 source file(s), hashes signed but not re-derived (--sources DIR checks a tree)
 attestation: toolchain resid-stage2 3.5, profile debug, output app
@@ -50,13 +50,14 @@ verify: ok (kid e815aaa1920ec0ba, code c2b6…, trust anchored)
 ```
 
 - **Evidence** is recomputed here: the code hash, each sidecar's hash,
-  the detached copy (byte-equal to the trailer), whether the `residc`
-  running `verify` is the compiler recorded, and, when the graph artifact
+  the detached copy (byte-equal to the trailer), and, when the graph artifact
   is signed (debug builds), that its sources are the record's and that
   every capability its nodes use lies within the grant. A record that
   lies about the grant fails even under a valid signature.
-- **Attestation** is what only the signer says: toolchain, profile,
-  output name, grant. The source hashes are attestation too, unless
+- **Attestation** is what only the signer says: the compiler hash (even
+  when it is the hash of the `residc` running `verify`, which does not
+  rebuild the binary), toolchain, profile, output name, grant, and any C
+  file linked with `-rt` or runtime IR named with `-rtr` (by SHA-256). The source hashes are attestation too, unless
   `--sources DIR` names a tree to hash them against; then a changed or
   missing file is a failure and the sources become evidence.
 
