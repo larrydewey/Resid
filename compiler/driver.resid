@@ -9467,8 +9467,8 @@ Str graph_hash_esc(Str hex, Int i, StrBuf acc) {
 // `attest`: the anchors, policies and decisions a program declares and
 // whether the verify closure was pinned (compiler/attest.resid), one text
 // per line.
-@requires(filesystem(readonly))
 // `rt`: what -rt and -rtr linked beside the program (prov_rt_rec), or "".
+@requires(filesystem(readonly))
 List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph, Str grant, List(Int) comp, Str native, Str reduce, Str devices, Str nasm, Str attest, Str caps, Str declass, Str rt) {
     List(Str) paths = str_split(done, ";");
     List(Str) gs = if (grant == "") { [] } else { str_split(grant, ",") };
