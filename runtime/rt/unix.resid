@@ -144,6 +144,10 @@ Bool unix_sock_ok(Int fd) {
 pub Int fam_display() { return 1; }
 pub Int fam_a11y() { return 2; }
 pub Int fam_broker() { return 3; }
+// A TCP listener or connection the network verbs made (resid_tcp_listen*,
+// resid_tcp_connect, resid_tcp_accept*): the TCP verbs do not ask for it
+// (they take any AF_INET/AF_INET6 socket), process.run_with_fds does.
+pub Int fam_tcp() { return 4; }
 
 Int fam_table() { return resid_raw_global("rt_fd_fam", 524288); }
 
@@ -173,7 +177,7 @@ Int fd_fam_ino(Int fd, Int ino) {
 }
 
 // Marks fd (when it is one) as the family's; fd either way.
-Int fam_mark(Int fd, Int fam) { return if (fd >= 0) { fd_fam_set(fd, fam) * 0 + fd } else { fd }; }
+pub Int fam_mark(Int fd, Int fam) { return if (fd >= 0) { fd_fam_set(fd, fam) * 0 + fd } else { fd }; }
 
 // May the display verbs use fd? A socket the display connected or paired,
 // or the accessibility bus where the force-time guard grants

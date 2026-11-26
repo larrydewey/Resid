@@ -19,7 +19,7 @@ therefore enters a program only at `main` or a `test` block.
 | `filesystem` | the `filesystem` provider |
 | `environment` | the `environment` provider |
 | `args` | the `args` provider |
-| `process` | `process.run` and the native debugger builtins |
+| `process` | `process.run`, `process.run_with_fds` and the native debugger builtins |
 | `network` | the TCP builtins |
 | `terminal` | the terminal builtins (`resid_term_*`) and `lib/readline.resid` |
 | `clock` | the `clock` provider and `lib/clock.resid` |
@@ -36,7 +36,7 @@ Printing, reading stdin and OS randomness need no capability.
 
 `@requires` entries take the same modes as sandboxes: `readonly` or
 `readwrite` (the default). A read-only grant does not cover a write
-(filesystem write verbs, `process.run`, terminal raw mode, `clock.sleep_ns`,
+(filesystem write verbs, `process.run`, `process.run_with_fds`, terminal raw mode, `clock.sleep_ns`,
 a listener bound to an address other than loopback, and a device descriptor
 whose `write` is true). An unknown family
 or mode is an error (`E0213`).

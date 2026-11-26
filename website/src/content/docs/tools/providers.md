@@ -94,11 +94,37 @@ the umask; secrets go through `write_secret` (owner-only), never
 | `environment.has(name)` | `Bool`: the variable is set, even to `""` | `environment` |
 | `args.count()`, `args.get(i)` | the command line; `args.get(0)` is the program | `args` |
 | `process.run(cmd)` | the exit status | `process` (a write) |
+| `process.run_with_fds(cmd, fds)` | the same; -2, running nothing, when a descriptor in `fds` is refused | `process` (a write) |
 | `resid_sandbox_confine(rw, ro)` | 1 when the program now runs confined, 0 without Landlock | `process` (a write) |
 | `resid_sandbox_confine_listening(rw, ro)` | the same, leaving TCP bind possible | `process` (a write) |
 
 `process.run` runs a program directly (no shell) with its standard streams
-inherited.
+inherited. It returns the program's exit status, 127 when the program
+cannot be run, and -1 for an empty command, a failed fork or a program
+killed by a signal. Every descriptor the runtime makes is close-on-exec, so
+the program inherits nothing else.
+
+`process.run_with_fds(cmd, fds)` is `process.run` where the descriptors in
+`fds` (a `List(Int)`, at most 64) stay open in that one program, at the
+same numbers, so `cmd` can name them. A server that listens once and hands
+the listener to children it retires after some connections:
+
+```resid
+@requires(process, network)
+Int serve_one(Str dir, Int lfd) {
+    return process.run_with_fds(f"relay child {dir} {lfd}", [lfd]);
+}
+```
+
+Only descriptors the runtime made and the program still holds can be
+listed: a TCP listener or connection (`resid_tcp_listen*`,
+`resid_tcp_connect`, `resid_tcp_accept*`) or a `resid_unix_*` socket. Any
+other number -- stdio, a UDP socket, the display, a file, a closed or
+unmade descriptor -- makes the call return -2 without running anything.
+Close-on-exec is cleared only in the child, so other programs started at the
+same time inherit nothing. A Resid child uses an inherited TCP descriptor
+with the `resid_tcp_*` builtins as usual; the `resid_unix_*` verbs take only
+sockets the child made itself.
 
 `resid_sandbox_confine` confines the rest of the program (it continues in
 a forked child): files only beneath the `rw` paths (every right but

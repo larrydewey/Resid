@@ -1,0 +1,9 @@
+made true
+process.run sees the listener: false
+run_with_fds sees the listener: true
+run_with_fds sees an unlisted connection: false
+process.run sees the listener after: false
+child exit 0
+reply: hello from the child
+unix listener: true true false
+empty list: 0 1

@@ -2638,6 +2638,8 @@ Str gk_provider_params(Str fam, Str m) {
     if (fam == "environment" && m == "get") { return "Str"; }
     if (fam == "args" && m == "get") { return "Int"; }
     if (fam == "process" && m == "run") { return "Str"; }
+    // run_with_fds(cmd, fds): the listed descriptors stay open in that child.
+    if (fam == "process" && m == "run_with_fds") { return "Str,List(Int)"; }
     if (fam == "clock") { if (m == "sleep_ns") { return "Int"; } return "?"; }
     if (fam != "filesystem") { return "?"; }
     Bool path = m == "read_all" || m == "exists" || m == "is_dir" || m == "create_dir" || m == "open" || m == "list_dir" || m == "read_bytes" || m == "read_bytes_u8" || m == "sha256" || m == "create" || m == "create_new" || m == "remove" || m == "modified_ms";
@@ -2700,7 +2702,7 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
     }
     if (fam == "args" && m == "count") { return gt(k, "Int", id); }
     if (fam == "args" && m == "get") { return gt(k, "Str", id); }
-    if (fam == "process" && m == "run") { return gt(k, "Int", id); }
+    if (fam == "process" && (m == "run" || m == "run_with_fds")) { return gt(k, "Int", id); }
     if (fam == "clock") { return gt(k, "Int", id); }
     return gterr(k, "unknown provider method " + fam + "." + m, id);
 }

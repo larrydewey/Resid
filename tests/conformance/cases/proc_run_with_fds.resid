@@ -1,0 +1,48 @@
+// process.run_with_fds(cmd, fds) runs cmd as process.run does, but the
+// descriptors listed stay open in that one child, at the same numbers, so
+// its argv can name them: a server listens once and hands the listener to
+// a child (Symbolon's `relay child DIR FD`). The child here is this
+// program again: it accepts one connection on the inherited listener and
+// replies. Only the listed descriptors are inherited, only by that child:
+// a plain process.run still sees none of them (fd_cloexec), before and
+// after, and an unlisted connection is not inherited either.
+// `test -e /proc/self/fd/N` answers 0 when the child holds descriptor N.
+@requires(process, network, args)
+Int main() {
+    if (args.count() == 3 && args.get(1) == "child") { return child(str_parse_int(args.get(2))); }
+    Int l = resid_tcp_listen(0);
+    Int port = resid_tcp_bound_port(l);
+    // Waits in the listener's queue until the child accepts it.
+    Int c = resid_tcp_connect("127.0.0.1", port);
+    println(f"made {l > 2 && c > 2}");
+    println(f"process.run sees the listener: {held(l)}");
+    println(f"run_with_fds sees the listener: {held_with(l, [l])}");
+    println(f"run_with_fds sees an unlisted connection: {held_with(c, [l])}");
+    println(f"process.run sees the listener after: {held(l)}");
+    Int rc = process.run_with_fds(f"@TMP@/bin child {l}", [l]);
+    println(f"child exit {rc}");
+    println(f"reply: {resid_tcp_recv_all(c)}");
+    // A resid_unix_* listener is handed on the same way.
+    Int u = resid_unix_listen("@TMP@/u/sock");
+    println(f"unix listener: {u > 2} {held_with(u, [u])} {held(u)}");
+    // An empty list is process.run.
+    List(Int) none = [];
+    println(f"empty list: {process.run_with_fds("true", none)} {process.run_with_fds("false", none)}");
+    return 0;
+}
+
+// The inherited listener: one connection, one reply.
+@requires(network)
+Int child(Int fd) {
+    Int a = resid_tcp_accept(fd);
+    if (a < 0) { return 3; }
+    _ = resid_tcp_send(a, "hello from the child");
+    _ = resid_tcp_close(a);
+    return 0;
+}
+
+@requires(process)
+Bool held(Int fd) { return process.run(f"test -e /proc/self/fd/{fd}") == 0; }
+
+@requires(process)
+Bool held_with(Int fd, List(Int) keep) { return process.run_with_fds(f"test -e /proc/self/fd/{fd}", keep) == 0; }

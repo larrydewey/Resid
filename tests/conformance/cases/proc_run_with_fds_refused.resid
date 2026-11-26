@@ -1,0 +1,27 @@
+// process.run_with_fds hands on only a descriptor the runtime made and the
+// program still holds: a TCP listener or connection, or a resid_unix_*
+// socket. Anything else -- a number that names nothing, stdio, a UDP
+// socket, a display socket, a closed listener's number -- is -2, and the
+// command does not run (no file is created).
+@requires(process, network, display, filesystem)
+Int main() {
+    Int u = resid_udp_bind(0);
+    List(Int) p = resid_disp_pair();
+    Int l = resid_tcp_listen(0);
+    _ = resid_tcp_close(l);
+    println(f"made {u > 2 && p.len() == 2}");
+    println(f"unmade 77: {touch([77])}");
+    println(f"stdout: {touch([1])}");
+    println(f"negative: {touch([-1])}");
+    println(f"udp: {touch([u])}");
+    println(f"display: {touch([p[0]])}");
+    println(f"closed listener: {touch([l])}");
+    Int l2 = resid_tcp_listen(0);
+    println(f"one good, one bad: {touch([l2, 77])}");
+    println(f"ran: {filesystem.exists("@TMP@/ran")}");
+    println(f"good: {touch([l2])} {filesystem.exists("@TMP@/ran")}");
+    return 0;
+}
+
+@requires(process)
+Int touch(List(Int) keep) { return process.run_with_fds("touch @TMP@/ran", keep); }

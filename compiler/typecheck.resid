@@ -3827,7 +3827,7 @@ Bool is_write_verb(Str family, Str verb) {
     if (family == "filesystem" && (verb == "create" || verb == "create_new" || verb == "write_handle")) { return true; }
     if (family == "filesystem" && (verb == "remove" || verb == "rename")) { return true; }
     if (family == "filesystem" && (verb == "write_at" || verb == "sync" || verb == "truncate")) { return true; }
-    if (family == "process" && verb == "run") { return true; }
+    if (family == "process" && (verb == "run" || verb == "run_with_fds")) { return true; }
     if (family == "clock" && verb == "sleep_ns") { return true; }
     return false;
 }
@@ -4267,7 +4267,7 @@ Bool is_prov_verb(Str fam, Str v) {
     if (fam == "environment") { if (v == "get") { return true; } return v == "has"; }
     if (fam == "git") { if (v == "rev") { return true; } return v == "branch"; }
     if (fam == "args") { if (v == "count") { return true; } return v == "get"; }
-    if (fam == "process") { return v == "run"; }
+    if (fam == "process") { return v == "run" || v == "run_with_fds"; }
     if (fam == "clock") { return v == "now_ns" || v == "now_sec" || v == "monotonic_ns" || v == "sleep_ns"; }
     if (fam == "device") { return dev_verb(v); }
     return false;

@@ -4026,6 +4026,7 @@ Str p_sym(Str pname, Str meth) {
     }
     if (pname == "process") {
         if (meth == "run") { return "resid_process_run"; }
+        if (meth == "run_with_fds") { return "resid_process_run_fds"; }
     }
     if (pname == "environment") {
         if (meth == "get") { return "resid_env_get"; }
@@ -4071,7 +4072,7 @@ Str p_rty(Str pname, Str meth) {
         if (meth == "write_at" || meth == "sync" || meth == "truncate") { return "Bool"; }
     }
     if (pname == "process") {
-        if (meth == "run") { return "Int"; }
+        if (meth == "run" || meth == "run_with_fds") { return "Int"; }
     }
     if (pname == "environment") {
         if (meth == "get") { return "Str"; }
@@ -4110,6 +4111,7 @@ Int p_nargs(Str pname, Str meth) {
     }
     if (pname == "process") {
         if (meth == "run") { return 1; }
+        if (meth == "run_with_fds") { return 2; }
     }
     if (pname == "environment") {
         if (meth == "get") { return 1; }
@@ -4797,7 +4799,7 @@ Str provider_family_of_line(Str line) {
     if (str_contains(line, "@resid_dbg_")) { return "process"; }
     if (str_contains(line, "@resid_pty_read") || str_contains(line, "@resid_pty_wait") || str_contains(line, "@resid_pty_status")) { return "process"; }
     if (str_contains(line, "@resid_pty_")) { return "process!"; }
-    if (str_contains(line, "@resid_process_run")) { return "process!"; }
+    if (str_contains(line, "@resid_process_run")) { return "process!"; }   // run, run_with_fds (resid_process_run_fds)
     if (str_contains(line, "@resid_env_")) { return "environment"; }
     if (str_contains(line, "@resid_args_")) { return "args"; }
     if (str_contains(line, "@resid_process_run")) { return "process"; }

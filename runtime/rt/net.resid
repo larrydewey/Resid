@@ -158,7 +158,7 @@ Int connect_any(Int l, Int i, Int n) {
     _ = base_timeouts(fd);
     _ = no_delay(fd);
     _ = dl_set(fd, 0);
-    return fd;
+    return fam_mark(fd, fam_tcp());
 }
 
 // connect(2) that gives up after `ms`: a host that never answers would
@@ -310,7 +310,7 @@ Int listen_sa(Int sa, Bool v6only) {
     if (ld8(sa) == 10 && !set_v6only(fd, v6only)) { return sys_close(fd) * 0 - 1; }
     if (resid_raw_syscall(49, fd, sa, sa_len(sa), 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }  // bind
     if (resid_raw_syscall(50, fd, 128, 0, 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }   // listen
-    return fd;
+    return fam_mark(fd, fam_tcp());
 }
 
 // ─── UDP ───────────────────────────────────────────────────────────────
@@ -530,7 +530,7 @@ pub Int rt_tcp_accept(Int fd) {
     _ = base_timeouts(c);
     _ = no_delay(c);
     _ = dl_set(c, 0);
-    return c;
+    return fam_mark(c, fam_tcp());
 }
 
 // One accepted connection if one is waiting, -2 if none is, -1 on a
@@ -552,7 +552,7 @@ pub Int rt_tcp_accept_now(Int fd) {
     _ = base_timeouts(c);
     _ = no_delay(c);
     _ = dl_set(c, 0);
-    return c;
+    return fam_mark(c, fam_tcp());
 }
 
 // poll(2) as ppoll (AArch64 has no poll): ms < 0 waits without bound.
@@ -1014,6 +1014,7 @@ Int recv_loop(Int fd, Int out, Int cap, Int len) {
 pub Int rt_tcp_close(Int fd) {
     if (!sock_ok(fd)) { return 0; }
     _ = dl_set(fd, 0);
+    _ = fd_fam_clear(fd);
     return if (sys_close(fd) == 0) { 1 } else { 0 };
 }
 
@@ -1141,7 +1142,8 @@ pub Int rt_tcp_recv_some(Int fd, Int max0) {
 //   - accept drops a peer whose SO_PEERCRED uid is not this user's, and
 //     connect refuses a server that is not this user's;
 //   - every descriptor is close-on-exec, so a child started with
-//     process.run inherits none;
+//     process.run inherits none (process.run_with_fds hands on only the
+//     ones it names, net_fd_inheritable);
 //   - only descriptors these functions made can be used with them (a table
 //     marks them), so a `network` grant still cannot reach a display or
 //     other AF_UNIX socket the program holds.
@@ -1314,6 +1316,21 @@ pub Int rt_unix_connect(Int path) {
 }
 
 Bool ux_conn(Int fd) { return ux_mark(fd) == 1; }
+
+// May process.run_with_fds hand `fd` to a child? Only a descriptor the
+// network verbs made and the program still holds: a TCP listener or
+// connection (its fam_tcp mark, which carries the socket's inode, so a
+// number closed and reused does not pass) or a resid_unix_* listener or
+// connection (its ux mark, on a Unix socket no other family marked).
+// Never stdio (inherited anyway), the display, the accessibility bus, the
+// PTY broker, a device or native host's descriptors, a received
+// descriptor, a file, or a number that names nothing.
+pub Bool net_fd_inheritable(Int fd) {
+    if (fd <= 2 || fd >= 65536) { return false; }
+    Int f = fd_fam(fd);
+    if (f == fam_tcp()) { return true; }
+    return f == 0 && ux_mark(fd) != 0 && sock_domain(fd) == 1;
+}
 
 // Sends all of `l` (bytes, at most 1 MB); false on error or a descriptor
 // these functions did not make.

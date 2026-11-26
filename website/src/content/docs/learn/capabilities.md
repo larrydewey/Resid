@@ -51,7 +51,7 @@ capabilities.
 | `filesystem` | the `filesystem.*` provider: `read_all`, `write_all`, `read_bytes`, `write_bytes`, `append_bytes`, `write_secret`, `exists`, `is_dir`, `list_dir`, `create_dir`, `remove`, `rename`, `size`, `modified_ms`, `read_range`, `write_at`, `sync`, `truncate`, `sha256`, `open` / `read_handle` / `close`, and files in pieces: `create` / `create_new` / `write_handle`, `read_some` / `read_at` / `size` / `is_open` |
 | `environment` | `environment.get(name)`, `environment.has(name)` |
 | `args` | `args.count()`, `args.get(i)` |
-| `process` | `process.run(cmd)` and the native debugger builtins |
+| `process` | `process.run(cmd)`, `process.run_with_fds(cmd, fds)` and the native debugger builtins |
 | `network` | the TCP builtins |
 | `terminal` | the terminal builtins (`resid_term_*`) and `lib/readline.resid` |
 | `clock` | `clock.now_ns()`, `clock.now_sec()`, `clock.monotonic_ns()`, `clock.sleep_ns(n)` and `lib/clock.resid` |
