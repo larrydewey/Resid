@@ -7605,7 +7605,8 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_pty_status expects (Int, Int), got (" + argtys + ")"};
     }
-    // Confinement only removes authority: it needs no capability.
+    // Confinement forks the program and takes away authority it was
+    // granted: the full `process` grant (gk_builtin_family).
     if (name == "resid_sandbox_confine") {
         if (builtin_args(argtys, "List(Str),List(Str)")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_sandbox_confine expects (List(Str), List(Str)), got (" + argtys + ")"};

@@ -4395,7 +4395,9 @@ Str gk_builtin_family(Str n) {
     if (str_starts_with(n, "resid_disp_")) { return "display"; }
     if (str_starts_with(n, "resid_a11y_")) { return "accessibility"; }
     if (str_starts_with(n, "resid_tcp_") || str_starts_with(n, "resid_unix_") || str_starts_with(n, "resid_udp_")) { return "network"; }
-    if (str_starts_with(n, "resid_dbg_") || str_starts_with(n, "resid_pty_")) { return "process"; }
+    // resid_sandbox_confine forks the program and confines the copy that
+    // goes on, taking away what the program granted: a write of `process`.
+    if (str_starts_with(n, "resid_dbg_") || str_starts_with(n, "resid_pty_") || n == "resid_sandbox_confine") { return "process"; }
     if (str_starts_with(n, "resid_term_")) { return "terminal"; }
     if (str_starts_with(n, "resid_clock_")) { return "clock"; }
     if (n == "resid_device_call" || n == "resid_device_call_w" || n == "resid_device_secret" || str_starts_with(n, "resid_device_drv_")) { return "device"; }
@@ -4403,9 +4405,10 @@ Str gk_builtin_family(Str n) {
 }
 
 // Builtins that change state a read-only grant does not cover.
-// Writes under a moded family: raw mode, sleeping, and binding a listener
-// to an address other than loopback (exposing a port is a write).
-Bool gk_builtin_write(Str n) { return n == "resid_device_drv_store" || n == "resid_udp_bind_at" || n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns" || n == "resid_tcp_listen_at" || n == "resid_unix_listen" || n == "resid_device_call_w"; }
+// Writes under a moded family: raw mode, sleeping, binding a listener
+// to an address other than loopback (exposing a port is a write), and
+// confining the program (resid_sandbox_confine).
+Bool gk_builtin_write(Str n) { return n == "resid_device_drv_store" || n == "resid_udp_bind_at" || n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns" || n == "resid_tcp_listen_at" || n == "resid_unix_listen" || n == "resid_device_call_w" || n == "resid_sandbox_confine"; }
 
 // Runtime internals that free or move memory the program may still see
 // (spec §5: storage is never exposed). Only the compiler's own source may

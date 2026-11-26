@@ -1,0 +1,11 @@
+// resid_sandbox_confine forks the program and confines the copy that goes
+// on, taking away what the program granted, and its result told a regular
+// file from a missing path: it needs the full `process` grant (E0219), so
+// a library holding none cannot call it.
+Int helper() {
+    List(Str) none = [];
+    return resid_sandbox_confine(none, ["/etc/hostname"]);
+}
+
+@requires(filesystem)
+Int main() { return helper(); }

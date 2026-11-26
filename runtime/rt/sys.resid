@@ -831,8 +831,12 @@ pub Int rt_pty_status(Int broker, Int pid) {
 // event loop of sockets, terminals and memory needs. Anything else fails
 // with EPERM (a foreign architecture or x32 call kills the process), so
 // in particular nothing can be executed. 1 when confined; 0 when the
-// kernel has no Landlock and nothing was changed; -1 when confinement
-// failed part-way (the caller must exit).
+// kernel has no Landlock and nothing was changed. When confinement fails
+// part-way the process ends (exit status 125): no unconfined copy goes on.
+//
+// It is a capability of the program as a whole (`process`, a write:
+// gk_builtin_family), checked again here at force time, so a dependency
+// holding no grant cannot fork the program and take its authority away.
 //
 // Seccomp filters, Landlock domains and no_new_privs belong to a thread,
 // and the runtime runs main on a thread of its own beside the process's
@@ -844,10 +848,11 @@ pub Int rt_pty_status(Int broker, Int pid) {
 // sshd sees). Call this early, before state other threads would need.
 @export("resid_sandbox_confine", "i64(ptr,ptr)")
 pub Int rt_sandbox_confine(Int rw, Int ro) {
+    _ = rt_cap_check(resid_raw_addr("process!"));
     Int abi = resid_raw_syscall(444, 0, 0, 1, 0, 0, 0);   // landlock_create_ruleset(NULL, 0, VERSION)
     if (abi < 1) { return 0; }
     Int pid = c_fork();
-    if (pid < 0) { return 0 - 1; }
+    if (pid < 0) { return confine_failed(); }
     if (pid > 0) {
         Int st = wait_pid(pid, 0);
         Int code = if (st < 0) { 1 } else { if ((st & 127) == 0) { (st >> 8) & 255 } else { 128 + (st & 127) } };
@@ -857,20 +862,29 @@ pub Int rt_sandbox_confine(Int rw, Int ro) {
     Int attr = resid_raw_tls("ll_attr", 8);
     _ = st64(attr, all);
     Int rs = resid_raw_syscall(444, attr, 8, 0, 0, 0, 0);
-    if (rs < 0) { return 0 - 1; }
+    if (rs < 0) { return confine_failed(); }
     // ro: LANDLOCK_ACCESS_FS_READ_FILE (4) | READ_DIR (8); never EXECUTE (1).
     Bool ok = ll_rules(rs, rw, all & (0 - 2)) && ll_rules(rs, ro, 4 | 8)
         && resid_raw_syscall(157, 38, 1, 0, 0, 0, 0) == 0                     // PR_SET_NO_NEW_PRIVS
         && resid_raw_syscall(446, rs, 0, 0, 0, 0, 0) == 0;                    // landlock_restrict_self
     _ = sys_close(rs);
-    if (!ok) { return 0 - 1; }
+    if (!ok) { return confine_failed(); }
     Int prog = sb_filter();
     Int fprog = resid_raw_tls("sb_fprog", 16);
     _ = st64(fprog, sb_len()) + st64(fprog + 8, prog);
-    return if (resid_raw_syscall(317, 1, 1, fprog, 0, 0, 0) == 0) { 1 } else { 0 - 1 };   // seccomp(SET_MODE_FILTER, TSYNC)
+    return if (resid_raw_syscall(317, 1, 1, fprog, 0, 0, 0) == 0) { 1 } else { confine_failed() };   // seccomp(SET_MODE_FILTER, TSYNC)
 }
 
-// One path-beneath rule per directory in the list (a missing one is skipped).
+// A confinement begun and not finished: the child ends, so neither an
+// unconfined copy of the program goes on nor a caller learns which step
+// (which path) failed; its parent exits with the same status.
+Int confine_failed() {
+    Int m = resid_raw_addr("resid_sandbox_confine: confinement failed\n");
+    _ = resid_raw_syscall(1, 2, m, c_strlen(m), 0, 0, 0);
+    return resid_raw_syscall(231, 125, 0, 0, 0, 0, 0);
+}
+
+// One path-beneath rule per path in the list (a missing one is skipped).
 Bool ll_rules(Int rs, Int l, Int access) {
     Int n = c_list_len(l);
     Int items = c_list_to_array(l);
@@ -879,13 +893,20 @@ Bool ll_rules(Int rs, Int l, Int access) {
     return ok;
 }
 
+// A path that is not a directory gets only the rights a file can hold
+// (EXECUTE 1, WRITE_FILE 2, READ_FILE 4, TRUNCATE 16384, IOCTL_DEV 32768):
+// with a directory's rights the kernel refused the rule, which told a
+// regular file from a missing path.
 Bool ll_each(Int rs, Int items, Int i, Int n, Int access) {
     if (i >= n) { return true; }
     Int fd = sys_open(ld64(items + i * 8), 2097152 | 524288, 0);   // O_PATH | O_CLOEXEC
     if (fd < 0) { return ll_each(rs, items, i + 1, n, access); }
+    Int sb = resid_raw_tls("ll_st", 256);
+    Bool dir = resid_raw_syscall(5, fd, sb, 0, 0, 0, 0) == 0 && (ld32(sb + st_mode_at()) & 61440) == 16384;   // fstat, S_IFDIR
+    Int acc = if (dir) { access } else { access & (1 | 2 | 4 | 16384 | 32768) };
     Int pb = resid_raw_tls("ll_pb", 16);
-    _ = resid_raw_fill(pb, 0, 16) + st64(pb, access) + st32(pb + 8, fd);
-    Int r = resid_raw_syscall(445, rs, 1, pb, 0, 0, 0);   // landlock_add_rule(PATH_BENEATH)
+    _ = resid_raw_fill(pb, 0, 16) + st64(pb, acc) + st32(pb + 8, fd);
+    Int r = if (acc == 0) { 0 } else { resid_raw_syscall(445, rs, 1, pb, 0, 0, 0) };   // landlock_add_rule(PATH_BENEATH)
     _ = sys_close(fd);
     if (r != 0) { return false; }
     return ll_each(rs, items, i + 1, n, access);
