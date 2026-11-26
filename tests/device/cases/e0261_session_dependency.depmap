@@ -1,0 +1,2 @@
+dep::@DIR@/pkg/dep.resid::device
+@devices::dep::tsm_report

@@ -970,8 +970,19 @@ Bool dv_bounds(Kg g, Int root, DvFn fns, Map(Str, Int) own, List(Int) calls, Lis
     List(Str) allowed = if (c < 0) { [] } else { dv_nonempty(str_split(str_slice(rest, c + 2, str_len(rest)), ","), 0, ListBuf()) };
     List(Int) reach = dv_reach_from(g, fns, dv_roots(g, root, fns, nls, smap, dep), 0, {});
     Int over = dv_over(own, calls, ds, reach, allowed, 0);
+    // A function that acts on a session someone else opened (lib/dev/'s
+    // `@descriptor(session_use)` and `@descriptor(session_raw)`: dma_read,
+    // device_batch, driver_call, the accesses a register block's generated
+    // code makes, ...) holds no descriptor itself: what it reaches is
+    // whatever the program has open when it runs. Reaching one counts as
+    // reaching every descriptor the program opens a session, DMA session
+    // or driver under (red team DH-1/F2).
+    Int su = if (over < 0) { dv_session_fn(g, reach, 0) } else { 0 - 1 };
+    Int sov = if (su >= 0) { dv_open_over(g, calls, ds, allowed, 0) } else { 0 - 1 };
     Bool bad = if (over >= 0) {
         dv_diag_at("E0261", "dependency `" + dep + "` reaches device descriptor `" + ds[over].name + "` (device." + ds[over].kind + "), which its manifest bound devices = [" + str_join(allowed, ", ") + "] does not cover (spec §21.1)", g, calls[over], src, smap)
+    } else if (sov >= 0) {
+        dv_diag_at("E0261", "dependency `" + dep + "` reaches `" + g.ns[su].text + "`, which acts on the sessions the program has open, and so reaches device descriptor `" + ds[sov].name + "` (device." + g.ns[calls[sov]].text + "), which its manifest bound devices = [" + str_join(allowed, ", ") + "] does not cover (spec §21.1)", g, calls[sov], src, smap)
     } else { false };
     return bad || dv_bounds(g, root, fns, own, calls, ds, nls, smap, pk, i + 1, src);
 }
@@ -987,6 +998,23 @@ Int dv_over(Map(Str, Int) own, List(Int) calls, List(DvD) ds, List(Int) reach, L
     if (i >= calls.len()) { return 0 - 1; }
     Bool hit = dv_inside(own, calls[i], reach, 0) && !dv_allowed(ds[i].name, allowed, 0);
     return if (hit) { i } else { dv_over(own, calls, ds, reach, allowed, i + 1) };
+}
+
+// The first of the reached functions that acts on an open session, or -1.
+Int dv_session_fn(Kg g, List(Int) reach, Int i) {
+    if (i >= reach.len()) { return 0 - 1; }
+    Int f = reach[i];
+    Bool hit = g.ns[f].kind == "fn" && str_contains(g.ns[f].aux, "@descriptor(session_");
+    return if (hit) { f } else { dv_session_fn(g, reach, i + 1) };
+}
+
+// The first verb that opens a session under a descriptor outside
+// `allowed`, or -1.
+Int dv_open_over(Kg g, List(Int) calls, List(DvD) ds, List(Str) allowed, Int i) {
+    if (i >= calls.len()) { return 0 - 1; }
+    Str v = g.ns[calls[i]].text;
+    Bool open = v == "session_open" || v == "dma_open" || v == "driver_open";
+    return if (open && !dv_allowed(ds[i].name, allowed, 0)) { i } else { dv_open_over(g, calls, ds, allowed, i + 1) };
 }
 
 Bool dv_allowed(Str name, List(Str) allowed, Int i) {

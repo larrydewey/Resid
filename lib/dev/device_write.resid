@@ -167,6 +167,7 @@ pub Result(List(DevOut), DeviceError) device_engine_dma_open_w(DmaDev op, List(P
 
 /// Writes `bytes` at `off` of a DMA session's memory, at most 65536 a
 /// message. Err(BadInput) outside the memory or after the session's end.
+@descriptor(session_use)
 @requires(device)
 pub Result(Bool, DeviceError) dma_write(DmaRegion r, Int off, List(UInt(8)) bytes) {
     if (off < 0 || off + bytes.len() > r.len) { return Err(BadInput("dma", "the bytes are not inside the memory")); }
@@ -192,6 +193,7 @@ ListBuf(Int) dma_bytes(ListBuf(Int) b, List(UInt(8)) bytes, Int i, Int end) {
 /// host: stores, writes, loads, reads and waits, in order. Returns an
 /// output for each load and wait (OutNum) and each read (OutBytes), in
 /// order. When the host refuses one, those before it were made.
+@descriptor(session_use)
 @requires(device)
 pub Result(List(DevOut), DeviceError) device_batch(SessionKey key, List(DevOp) ops) {
     DvReq r = dv_prep_batch(key, ops);
@@ -215,6 +217,7 @@ pub Result(List(DevOut), DeviceError) device_engine_driver_open_w(DmaDev op, Lis
 /// answer, at most a minute. Err(BadInput) after the session's end;
 /// BadReply or Timeout when the driver's host is gone or silent, which
 /// also ends the session.
+@descriptor(session_use)
 @requires(device)
 pub Result(List(UInt(8)), DeviceError) driver_call(DriverLink d, List(UInt(8)) request) {
     if (request.len() > 65536) { return Err(BadInput("driver", "a message is at most 65536 bytes")); }

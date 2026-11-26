@@ -1,0 +1,8 @@
+// The dependency of e0261_session_dependency: it names no descriptor.
+import "dev/device.resid";
+import "dev/device_write.resid";
+
+@requires(device)
+pub Str dep_poke(DmaRegion r) {
+    return match (dma_write(r, 0, [(UInt(8)) 0x41, 0x42])) { Ok(b) => "dma written", Err(e) => device_error_text(e) };
+}

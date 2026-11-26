@@ -16,6 +16,11 @@
 #   NAME.fail     compilation must fail
 #   NAME.compile  lines that must each appear in the compiler's output
 #   NAME.out      expected stdout of the built binary
+#   NAME.depsrc   a dependency's module, copied beside the case as pkg/dep.resid
+#   NAME.depmap   the dependency map the case is compiled with (-depmap), with
+#                 @DIR@ replaced by the case's directory: a package's module
+#                 and its manifest's `devices = [...]` bound, as resid-manifest
+#                 writes them (E0261)
 #   NAME.needs-fido  a FIDO security key must be plugged in, else skipped
 #   NAME.needs    device paths the case runs against, one per line: when one
 #                 is missing (or not readable and writable) here, the case
@@ -96,7 +101,10 @@ for f in "$CASES"/*.resid; do
     fi
     d="$WORK/$n"; mkdir -p "$d"; cp "$f" "$d/$n.resid"
     why=""
-    (cd "$d" && timeout 600 "$COMPILER" "$n.resid" -o bin) > "$d/c.log" 2>&1; rc=$?
+    dm=()
+    if [ -f "$CASES/$n.depsrc" ]; then mkdir -p "$d/pkg"; cp "$CASES/$n.depsrc" "$d/pkg/dep.resid"; fi
+    if [ -f "$CASES/$n.depmap" ]; then sed "s#@DIR@#$d#g" "$CASES/$n.depmap" > "$d/depmap.txt"; dm=(-depmap depmap.txt); fi
+    (cd "$d" && timeout 600 "$COMPILER" "$n.resid" -o bin "${dm[@]}") > "$d/c.log" 2>&1; rc=$?
     if [ -f "$CASES/$n.fail" ]; then
         [ "$rc" -ne 0 ] || why="compiled, but must fail"
     else

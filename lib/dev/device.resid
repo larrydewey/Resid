@@ -905,6 +905,7 @@ pub type DriverEvent = DrvIdle | DrvRequest(List(UInt(8))) | DrvInterrupt(Int);
 /// a message from the program or the device's interrupt. When the program
 /// ends the session this call does not return: the driver's process ends.
 /// Err(BadInput) outside a driver's host.
+@descriptor(session_use)
 @requires(device(readonly))
 pub Result(DriverEvent, DeviceError) driver_next(Int timeout_ms) {
     if (timeout_ms < 0 || timeout_ms > 60000) { return Err(BadInput("driver", "a wait is at most 60000 milliseconds")); }
@@ -920,6 +921,7 @@ pub Result(DriverEvent, DeviceError) driver_next(Int timeout_ms) {
 }
 
 /// In a driver: answers the message driver_next gave, with at most 64 KiB.
+@descriptor(session_use)
 @requires(device(readonly))
 pub Result(Bool, DeviceError) driver_reply(List(UInt(8)) bytes) {
     if (bytes.len() > 65536) { return Err(BadInput("driver", "a message is at most 65536 bytes")); }
@@ -967,6 +969,7 @@ pub Result(List(DevOut), DeviceError) dv_driver_answer(Result(List(DevOut), Devi
 
 /// Reads `n` bytes at `off` of a DMA session's memory, at most 65536 a
 /// message. Err(BadInput) outside the memory or after the session's end.
+@descriptor(session_use)
 @requires(device(readonly))
 pub Result(List(UInt(8)), DeviceError) dma_read(DmaRegion r, Int off, Int n) {
     if (off < 0 || n < 0 || off + n > r.len) { return Err(BadInput("dma", "the bytes are not inside the memory")); }
@@ -993,6 +996,7 @@ Result(List(UInt(8)), DeviceError) dma_read_from(DmaRegion r, Int off, Int left,
 /// meanwhile, and so does this call. The interrupt is the device's MSI-X
 /// vector 0, which the driver points its queues at; Err(BadInput) for a
 /// device without MSI-X, a session that has ended, or a longer wait.
+@descriptor(session_use)
 @requires(device(readonly))
 pub Result(Int, DeviceError) dma_wait(DmaRegion r, Int timeout_ms) {
     if (timeout_ms < 0 || timeout_ms > 60000) { return Err(BadInput("dma", "a wait is at most 60000 milliseconds")); }
@@ -1130,6 +1134,7 @@ pub DvReq dv_prep_batch(SessionKey key, List(DevOp) ops) {
 /// message. Returns an output for each load and
 /// wait (OutNum) and each read (OutBytes), in order; Err(BadInput) for a
 /// batch that writes, one the host refuses, or a session that has ended.
+@descriptor(session_use)
 @requires(device(readonly))
 pub Result(List(DevOut), DeviceError) device_batch_ro(SessionKey key, List(DevOp) ops) {
     if (dv_ops_write(ops, 0)) { return Err(BadInput("batch", "a batch that stores, writes or takes a register that clears when read needs device_batch and the `device` grant")); }
