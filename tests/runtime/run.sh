@@ -436,6 +436,16 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/list_with.resid -o "$W/list_with
 else
     fail=$((fail + 1)); echo "FAIL owned updates of a frozen list: $(tail -1 "$W/list_with.out" "$W/list_with.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# xs.grow shares its buffer's tip as an append does (map.resid,
+# list_grow), so a run of grows is amortized and leaves no copies behind.
+# Measured: 30 MB; before, every grow copied the list (over 13 GB here).
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/list_grow.resid -o "$W/list_grow") > "$W/list_grow.log" 2>&1 \
+    && RESID_MEM_LIMIT=48 timeout 120 "$W/list_grow" > "$W/list_grow.out" 2>&1 \
+    && [ "$(tr '\n' ' ' < "$W/list_grow.out")" = "50000 49999 101000 999 140010 19999 900000 223 " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL grow in a loop: $(tail -1 "$W/list_grow.out" "$W/list_grow.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # Volatile raw loads and stores (lower.resid): two processes pass a counter
 # through a shared page, each polling with resid_raw_loadv64; a plain load
 # is hoisted out of the loop and the program never ends. Built from its own

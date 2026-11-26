@@ -2468,9 +2468,16 @@ Int fill_target(Int l, Int owned, Int from, Int n) {
     return with_fresh(l, 0);
 }
 
-// xs.grow(n, x): a new transient list of xs's elements then n copies of
-// w. k is the raw slot kind of the element type (0 for tagged words); an
-// empty list may not know its kind yet (`[]`), so it takes k.
+// xs.grow(n, x): xs's elements then n copies of w. k is the raw slot kind
+// of the element type (0 for tagged words); an empty list may not know its
+// kind yet (`[]`), so it takes k. A flat list that is its buffer's tip
+// shares the buffer as an append does (append_core): the new slots are
+// claimed atomically past every header's count, so xs still sees only its
+// own elements, and a buffer without room is copied doubled. A run of grows
+// is so amortized O(1) an element, as concat is, and leaves no copy behind
+// per call. Any other list (empty, transient, a trie) is copied into a
+// fresh buffer, doubled, that the next grow can share; a list of inline
+// records into a fresh transient.
 @export("resid_list_grow_w", "ptr(ptr,i64,i64,i64)")
 pub Int rt_list_grow_w(Int l, Int n, Int w, Int k) { return if (k == 4 || k == 5 || lbytes(l)) { bl_grow_list(l, n, w) } else { list_grow(l, n, w, k) }; }
 
@@ -2483,11 +2490,23 @@ Int list_grow(Int l, Int n, Int w, Int k) {
     // c + n stays within flat_new's largest capacity.
     if (n > 1152921504606846972 - c) { return rt_index_abort(n, c, 0); }
     if (n == 0) { return l; }
+    if (rec_words(ltype(l)) == 0) { return grow_tip(l, c, n, w, k); }
     Int t = with_fresh(l, n);
     Int f = lroot(t);
     _ = words_fill(f + 24 + c * 8, n, w);
     _ = st64(f, c + n) + st64(f + 16, c + n) + st64(t, c + n);
     return sync_elems(if (c == 0 && k != 0) { st64(t + 24, k) * 0 + t } else { t });
+}
+
+Int grow_tip(Int l, Int c, Int n, Int w, Int k) {
+    Int f = if (c > 0 && lflat(l)) { lroot(l) } else { 0 };
+    Bool tip = f != 0 && !ltransient(l) && c + n <= ld64(f + 8) && resid_raw_cas(f, c, c + n);
+    Int dst = if (tip) { f } else { flat_new((c + n) * 2) };
+    _ = if (!tip && f != 0) { mcopy(dst + 24, f + 24, c * 8) } else { 0 };
+    _ = if (!tip && f == 0) { with_fill(l, dst, 0, c) } else { 0 };
+    _ = if (!tip) { st64(dst, c + n) } else { 0 };
+    _ = words_fill(dst + 24 + c * 8, n, w);
+    return set_list(list_hdr(), c + n, 0 - 1, dst, if (c == 0 && k != 0) { k } else { ltype(l) });
 }
 
 // n words at p, all w: the first stored, then doubled by copies of at
