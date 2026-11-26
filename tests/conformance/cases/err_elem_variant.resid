@@ -1,0 +1,9 @@
+// A list or slot of one record type must never receive another record
+// type: lowering would read the other record's memory as this one's.
+type Apple = { Int x; Str s; };
+type Bean = { Str name; };
+Apple ap() { return Apple {.x = 1, .s = "one"}; }
+Bean bn() { return Bean {.name = "bee"}; }
+
+type Sh = Ci(List(Apple)) | Sq(Bean);
+Int main() { Sh s = Ci([bn()]); return match (s) { Ci(a) => a[0].x, Sq(b) => 0 }; }

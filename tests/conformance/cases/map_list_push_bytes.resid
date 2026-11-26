@@ -14,7 +14,7 @@ Map(Int, List(UInt(8))) grow(Map(Int, List(UInt(8))) m, Int i, Int n) {
     if (i >= n) { return m; }
     List(UInt(8)) nil = [];
     List(UInt(8)) cur = m.get(i % 3) else { nil };
-    return grow(m.insert(i % 3, cur.concat([i])), i + 1, n);
+    return grow(m.insert(i % 3, cur.concat([(UInt(8)) i])), i + 1, n);
 }
 
 // Appends onto key 1 after a snapshot of it was taken.
@@ -22,14 +22,14 @@ Map(Int, List(UInt(8))) after_snapshot(Map(Int, List(UInt(8))) m, Int i, Int n) 
     if (i >= n) { return m; }
     List(UInt(8)) nil = [];
     List(UInt(8)) cur = m.get(1) else { nil };
-    return after_snapshot(m.insert(1, cur.concat([100 + i])), i + 1, n);
+    return after_snapshot(m.insert(1, cur.concat([(UInt(8)) (100 + i)])), i + 1, n);
 }
 
 // The default is a shared, non-empty list.
 Map(Str, List(UInt(8))) with_base(Map(Str, List(UInt(8))) m, List(UInt(8)) base, Int i, Int n) {
     if (i >= n) { return m; }
     List(UInt(8)) cur = m.get("k") else { base };
-    return with_base(m.insert("k", cur.concat([i])), base, i + 1, n);
+    return with_base(m.insert("k", cur.concat([(UInt(8)) i])), base, i + 1, n);
 }
 
 // A list read by a plain get this iteration is still held next iteration:
@@ -39,7 +39,7 @@ Int carry(Map(Int, List(UInt(8))) m, Int i, Int n, List(UInt(8)) keep, Int acc) 
     List(UInt(8)) peek = m.get(5) else { keep };
     List(UInt(8)) nil = [];
     List(UInt(8)) cur = m.get(5) else { nil };
-    return carry(m.insert(5, cur.concat([i])), i + 1, n, peek, acc + keep.len());
+    return carry(m.insert(5, cur.concat([(UInt(8)) i])), i + 1, n, peek, acc + keep.len());
 }
 
 Map(Str, List(Str)) words(Map(Str, List(Str)) m, Int i, Int n) {
