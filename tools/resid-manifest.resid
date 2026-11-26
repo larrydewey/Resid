@@ -1195,6 +1195,8 @@ Bool has_control(Str s, Int i, Int n) {
 Str dep_root_err(Str r) {
     if (r == "") { return "is empty"; }
     if (depmap_unsafe(r)) { return "contains a control character or '::'"; }
+    if (str_starts_with(r, "/")) { return "'" + r + "' is absolute"; }
+    if (str_split(r, "/").contains("..")) { return "'" + r + "' leaves the package (a '..' segment)"; }
     return "";
 }
 
@@ -1230,10 +1232,11 @@ DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Bool h
     if (any_depmap_unsafe(caps, 0) || (devs != "\x01" && depmap_unsafe(devs))) {
         return dep_error(acc, "dependency '" + name + "': a capability or device contains a control character or '::'");
     }
-    // The root is a depmap field too.
+    // The root lies inside the package: a registry archive's root is
+    // covered by its hash only there, as its sources are (sealed path).
     Str rerr = dep_root_err(dm.root);
     if (rerr != "") {
-        return dep_error(acc, "dependency '" + name + "': root " + rerr);
+        return dep_error(acc, "dependency '" + name + "': root " + rerr + "; it must be a relative path inside the package");
     }
     Str root = dep_dir + "/" + dm.root;
     if (depmap_unsafe(root)) {

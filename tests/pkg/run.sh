@@ -499,6 +499,24 @@ mkdir -p "$W/ctl"
 "$PKG" extract "$W/ctl" "$W/ctl" > /dev/null 2>&1
 if [ -f "$W/ctl/ok.resid" ] && [ ! -e "$W/ctl/src/m.resid"$'\n''#.resid' ]; then ok; else bad "extract control character in a name"; fi
 
+# A registry package's root lies inside its verified archive (the sealed
+# path rule): a root that leaves it would compile source nobody hashed.
+mkpkg "$W/outr" outr 1.0.0 'pub Str outr() { return "inside"; }'
+printf 'root = "../../../../../outside.resid"\n' >> "$W/outr/resid.toml"
+mkdir -p "$W/outreg"; "$PKG" publish "$W/outr" "$W/outreg" > /dev/null 2>&1
+mkdir -p "$W/outapp/src"
+printf '[package]\nname = "outapp"\nversion = "0.1.0"\n\n[registry]\npath = "../outreg"\n\n[signing]\nallow_unsigned = true\n\n[dependencies.outr]\nversion = "1.0.0"\n' > "$W/outapp/resid.toml"
+printf 'import "outr";\nInt main() { println(outr()); return 0; }\n' > "$W/outapp/src/main.resid"
+# From the cache (outapp/target/resid/deps/outr-1.0.0-<h>), five up is $W.
+printf 'pub Str outr() { return "outside"; }\n' > "$W/outside.resid"
+expect_fail outapp "leaves the package"
+# A path dependency's root, likewise: absolute, or above the package.
+mkpkg "$W/absr" absr 1.0.0 'pub Str absr() { return "x"; }'
+printf 'root = "%s"\n' "$W/absr/src/main.resid" >> "$W/absr/resid.toml"
+mkdir -p "$W/absapp/src"
+printf '[package]\nname = "absapp"\nversion = "0.1.0"\n\n[dependencies.absr]\npath = "../absr"\n' > "$W/absapp/resid.toml"
+expect_fail absapp "is absolute"
+
 # Extraction never writes outside the target directory.
 python3 - "$W/trav.resid-pkg" <<'PY'
 import struct, sys
