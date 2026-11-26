@@ -1132,7 +1132,8 @@ Bool chain_to_store(List(Int) cert, List(List(Int)) pool, TrustStore st, Instant
 // ─── TLS client-side server-certificate check ────────────────────────
 
 /// Full server authentication: the leaf must name the host we connected to,
-/// be inside its validity window, and chain to a root in `st`. An empty
+/// be inside its validity window, allow digitalSignature when it has a
+/// keyUsage (it signs the CertificateVerify), and chain to a root in `st`. An empty
 /// store trusts nothing -- a client that cannot say who it trusts does not
 /// connect, rather than falling back to "any certificate with the right
 /// hostname", which is a check an attacker with any certificate can pass.
@@ -1144,7 +1145,7 @@ pub Bool tls_server_trusted(List(Int) leaf, List(List(Int)) inters, List(Int) ho
     if (!x509_valid_now(leaf, now)) { return false; }
     if (!san_has_match(leaf, host)) { return false; }
     return match x509_parse(leaf) {
-        Ok(c) => cert_crit_ok(c) && cert_server_auth(c) && chain_to_store(leaf, inters, st, now, trust_max_depth(), TlsPath {.leaf = c, .host = host}, 0),
+        Ok(c) => cert_crit_ok(c) && cert_server_auth(c) && cert_key_usage(c, 0) && chain_to_store(leaf, inters, st, now, trust_max_depth(), TlsPath {.leaf = c, .host = host}, 0),
         Err(e) => false,
     };
 }

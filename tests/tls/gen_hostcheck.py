@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate tests/tls/fixtures/hostcheck/: leaves for the host check in
 lib/chain.resid's tls_server_trusted -- address literals (v6), host forms
-against name constraints (nc).
+against name constraints (nc), and the leaf's keyUsage (ku).
 
     gen_hostcheck.py [group ...]    (default: every group)
 
@@ -34,6 +34,11 @@ BC_LEAF = (x509.BasicConstraints(ca=False, path_length=None), True)
 KU_CA = (x509.KeyUsage(False, False, False, False, False, True, True, False, False), True)
 def dns(n): return x509.DNSName(n)
 def ip(a): return x509.IPAddress(ipaddress.ip_address(a))
+def ku(**bits):
+    names = ["digital_signature", "content_commitment", "key_encipherment", "data_encipherment",
+             "key_agreement", "key_cert_sign", "crl_sign", "encipher_only", "decipher_only"]
+    return (x509.KeyUsage(*[bits.get(n, False) for n in names]), True)
+
 def root(prefix, extra=()):
     k = key()
     r = build(f"Hostcheck {prefix} Root", name(f"Hostcheck {prefix} Root"), k.public_key(), k, [BC_CA, KU_CA] + list(extra))
@@ -71,7 +76,17 @@ def nc():
     leaf("ncp_ip4.der", pr, prk, [ip("192.0.2.7")])
     leaf("ncp_ip4mapped.der", pr, prk, [ip("::ffff:192.0.2.7")])
 
-GROUPS = {"v6": v6, "nc": nc}
+def ku_group():
+    # The leaf's keyUsage, when present, has to allow digitalSignature: a
+    # TLS 1.3 server signs its CertificateVerify with the key.
+    r, rk = root("ku")
+    leaf("ku_keyenc.der", r, rk, [dns("ku.test")], [ku(key_encipherment=True)])
+    leaf("ku_certsign.der", r, rk, [dns("ku.test")], [ku(key_cert_sign=True, crl_sign=True)])
+    leaf("ku_digsig.der", r, rk, [dns("ku.test")], [ku(digital_signature=True)])
+    leaf("ku_digsig_keyenc.der", r, rk, [dns("ku.test")], [ku(digital_signature=True, key_encipherment=True)])
+    leaf("ku_none.der", r, rk, [dns("ku.test")])
+
+GROUPS = {"v6": v6, "nc": nc, "ku": ku_group}
 for g in (sys.argv[1:] or list(GROUPS)):
     GROUPS[g]()
 print("wrote", OUT)

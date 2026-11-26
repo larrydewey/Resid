@@ -157,6 +157,17 @@ probe "$HC/nc_root.pem" "$HC/nc_ok.der" "good.test x"; want host-with-space-refu
 probe "$HC/ncp_root.pem" "$HC/ncp_ip4.der" 192.0.2.7; want ncp-permitted-ip4 true
 probe "$HC/ncp_root.pem" "$HC/ncp_ip4mapped.der" ::ffff:192.0.2.7; want ncp-permitted-ip4-mapped true
 
+# A leaf's keyUsage, when it has one, has to allow digitalSignature: the
+# server proves its key with a CertificateVerify signature (RFC 8446
+# §4.4.2.2). An encipherment-only key, or one for signing certificates
+# and CRLs, does not authenticate a server; no keyUsage at all is
+# unrestricted.
+probe "$HC/ku_root.pem" "$HC/ku_keyenc.der" ku.test; want ku-keyenc-only false
+probe "$HC/ku_root.pem" "$HC/ku_certsign.der" ku.test; want ku-certsign-only false
+probe "$HC/ku_root.pem" "$HC/ku_digsig.der" ku.test; want ku-digsig true
+probe "$HC/ku_root.pem" "$HC/ku_digsig_keyenc.der" ku.test; want ku-digsig-keyenc true
+probe "$HC/ku_root.pem" "$HC/ku_none.der" ku.test; want ku-absent true
+
 # ── Certificate message framing (tm_cert_list) ──────────────────────
 # A server's chain arrives as one message; the intermediates in it are
 # what the trust store walks. Getting the walk wrong here is not cosmetic:
