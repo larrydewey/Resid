@@ -1,0 +1,11 @@
+// A driver function may not have a name the device generates:
+// `card_driver` is the scope that starts the driver from the program.
+@word(32) type Ctl = { Bool on; @reserved(31); };
+
+@registers(size = 0x10, session = device)
+type Regs = { @at(0) Ctl ctl; };
+
+@device(dma = card, driver = card_driver)
+type Card = { Regs regs; };
+
+Int main() { return 0; }

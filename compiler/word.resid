@@ -825,6 +825,10 @@ WdS wd_ddecl(Str s, Int k, WdS st) {
     WdDB b = wd_dmembers(str_split(str_slice(s, ob + 1, cb - 1), ";"), name, st.gen, 0, WdDB {.ms = [], .err = ""});
     if (b.err != "") { return wd_rbad(st, b.err, k); }
     if (b.ms.len() == 0 || b.ms.len() > 16) { return wd_rbad(st, "device " + name + " has 1 to 16 register blocks", k); }
+    // The driver's own name must not be one the device generates: the
+    // two would be one function defined twice.
+    Str dsn = wd_snake(name);
+    if (drv != "" && (drv == dsn + "_driver" || drv == dsn + "_session" || drv == dsn + "_ask" || drv == dsn + "_next" || drv == dsn + "_answer")) { return wd_rbad(st, "device " + name + ": its driver is named `" + drv + "`, which is a function the device generates (`" + dsn + "_driver(windows, f)` starts the driver from the program; `" + dsn + "_session`, `" + dsn + "_ask`, `" + dsn + "_next` and `" + dsn + "_answer` are generated too); give the driver function another name, such as `run_" + dsn + "`", k); }
     // `request = T, reply = U`: the driver's messages have types.
     Str rq = wd_arg(args, "request", 0);
     Str rp = wd_arg(args, "reply", 0);

@@ -417,9 +417,10 @@ region, with no diagnostic.
   are no request reach the driver as `DevMalformed`. No new serializer:
   layout types' own. `virtio_blk_driver.resid` uses them; cases
   `device_messages` (messages to bytes and back, every way to be
-  malformed) and conformance `err_device_messages`. Not yet: a
-  diagnostic for a driver function named as the generated scope is
-  (`t_driver`), which today is a duplicate definition.
+  malformed) and conformance `err_device_messages`. A driver function
+  named as something the device generates (`t_driver` and the rest) is
+  E0298, where it was a duplicate definition
+  (`err_device_driver_name`).
 - Not done: the full re-share in the cosigner is unmeasured; moves for
   maps with record values and for `StrBuf`; the report as an error.
   `PLAN-hardware-access.md` §9 lists what follows.

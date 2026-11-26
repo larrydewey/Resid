@@ -416,8 +416,8 @@ answer as it chooses, since the program is waiting; a reply that is no
 reply is `BadReply` in the program. A record that breaks its own layout
 (a `@len` or a `@check`) is refused before it is sent. The driver's
 `match` over the request is checked to cover every variant. A driver
-function may not be named `t_driver`, which is the scope the device
-generates.
+function may not have a name the device generates (`t_driver`,
+`t_session`, `t_ask`, `t_next`, `t_answer`): `E0298`.
 
 #### Batches
 
