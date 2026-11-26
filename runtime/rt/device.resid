@@ -1523,6 +1523,10 @@ Int ds_batch_outs(Int body, Int blen, Int pos, Int rb, Int rp, Int ob, Int at) {
 Int ds_drv_call(Int buf, Int n) {
     Int len = n - 14;
     if (len < 0 || len > 65536) { return dev_err_reply(de_refused(), 79); }
+    // A message may make the driver store to its device: it is a write,
+    // and says so, whichever entry it came through (the read entry lets
+    // a write byte of 0 through; ds_bulk and ds_batch_req check theirs).
+    if (ld8(buf + 5) != 1) { return dev_err_reply(de_refused(), 73); }
     Int id = le_get(buf + 6, 8);
     Int e = if (id > 0) { ds_find(id, 0) } else { 0 };
     if (e == 0) { return dev_err_reply(de_refused(), 71); }

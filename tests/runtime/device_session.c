@@ -681,6 +681,19 @@ int main(int argc, char** argv, char** envp) {
     req_msg(&q, dv, mm, 5);
     r = call(&q, 0);
     check("driver_message_needs_write_grant", code(&r) == 2);
+    /* A message is a write whatever the entry: one whose write byte is 0
+     * reaches the read entry, which lets it through, and the session
+     * refuses it there (73), before the driver sees it (red team DH-2). */
+    q.b[5] = 0;
+    r = call(&q, 0);
+    check("driver_message_read_entry_refused", code(&r) == 10 && value(&r) == 73);
+    q.b[5] = 0;
+    r = call(&q, 1);
+    check("driver_message_write_byte_zero_refused", code(&r) == 10 && value(&r) == 73);
+    mm[0] = 'L';
+    req_msg(&q, dv, mm, 5);
+    r = call(&q, 1);
+    check("driver_alive_after_refusals", bytes_are(&r, blk + 16, 4));
     req_close(&q, dv);
     r = call(&q, 0);
     check("driver_close", stored(&r));
