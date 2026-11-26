@@ -590,6 +590,7 @@ relative layout reproduced.
 |---|---|
 | A server is trusted only when its leaf names the connected host, is inside its validity window, and chains to a root in the trust store. | pemstore-full-chain, wrong-host, expired-leaf |
 | Path constraints (RFC 5280) are enforced on every link up to the root: a CA's `pathLenConstraint` bounds the CAs beneath it; its name constraints (dNSName and iPAddress subtrees, permitted and excluded) must admit every name in the leaf and the host it was matched for, and a constraint of any other name form refuses the chain rather than being ignored; a certificate with a critical extension the walk does not process is refused; a leaf with an extendedKeyUsage must name serverAuth (or anyExtendedKeyUsage). A dNSName `*` is a wildcard only as a whole leftmost label (`*.`). | nc-*, pathlen-*, eku-*, critical-unknown-ext, partial-wildcard (`fixtures/pathcons`, `gen_pathcons.py`) |
+| The host is put in one spelling before it is matched and before name constraints see it, so an excluded subtree cannot be dodged by writing the host differently: one trailing `.` is dropped from the host, from dNSNames and from dNSName subtrees; an IPv4-mapped IPv6 address (`::ffff:10.0.0.1`) is its IPv4 address, and is checked against IPv4 and IPv6 subtrees alike; a host with a `:` is an IPv6 address or refused, and an address is matched only by an iPAddress entry, never by a dNSName that spells it. A host holding anything but letters, digits, `-`, `_`, `.` and `:`, or a dotted quad with a trailing `.`, is refused. | nc-excluded-*, nc-dnsname-is-no-address, ncp-permitted-ip4-mapped, dotted-quad-with-dot-refused, host-with-space-refused (`fixtures/hostcheck`, `gen_hostcheck.py`) |
 | The store may be a PEM bundle or a directory of DER certificates; both hold the same anchor. | derstore-full-chain |
 | Intermediates come from the chain the server sent, and a chain that needs one is rejected when it is not sent. | pemstore-no-chain |
 | A leaf is only as trusted as the anchor that issued it. | wrong-anchor, other-root-own-leaf, derstore-rejects-other-leaf |
@@ -624,6 +625,10 @@ Not guaranteed:
   so it is not covered by a CRL: pinning is an explicit decision to trust
   those exact bytes, revocability included.
 - A trust anchor is not itself checked for revocation.
+- Only the IPv4-mapped form (`::ffff:0:0/96`) is treated as its IPv4
+  address. An IPv6 address that reaches an IPv4 host some other way
+  (the deprecated IPv4-compatible `::a.b.c.d`, or a NAT64 prefix such
+  as `64:ff9b::/96`) is an IPv6 address to name constraints.
 - `require_signatures` does not extend to path dependencies, which spec
   §28.3 exempts as local source.
 - SHA-1 (in any signature), SHA-3, DSA, RSA below 2048 bits and ECDSA

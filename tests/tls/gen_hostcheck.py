@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate tests/tls/fixtures/hostcheck/: leaves for the host check in
-lib/chain.resid's tls_server_trusted -- address literals (v6).
+lib/chain.resid's tls_server_trusted -- address literals (v6), host forms
+against name constraints (nc).
 
     gen_hostcheck.py [group ...]    (default: every group)
 
@@ -53,7 +54,24 @@ def v6():
     leaf("v6_db8_1.der", r, rk, [ip("2001:db8::1")])
     leaf("v6_db8_1_left.der", r, rk, [ip("2001:db8:1::")])
 
-GROUPS = {"v6": v6}
+def nc():
+    # A root excluding the name evil.test and the range 10.0.0.0/8, and
+    # leaves that spell those in other forms.
+    excl = [dns("evil.test"), x509.IPAddress(ipaddress.ip_network("10.0.0.0/8"))]
+    r, rk = root("nc", [(x509.NameConstraints(permitted_subtrees=None, excluded_subtrees=excl), True)])
+    leaf("nc_dns.der", r, rk, [dns("evil.test")])
+    leaf("nc_dns_dot.der", r, rk, [dns("evil.test.")])
+    leaf("nc_sub_dot.der", r, rk, [dns("www.evil.test.")])
+    leaf("nc_ip4.der", r, rk, [ip("10.0.0.1")])
+    leaf("nc_ip4mapped.der", r, rk, [ip("::ffff:10.0.0.1")])
+    leaf("nc_dns_mapped.der", r, rk, [dns("::ffff:10.0.0.1")])
+    leaf("nc_ok.der", r, rk, [dns("good.test"), ip("192.0.2.1"), ip("2001:db8::1")])
+    # A permitted IPv4 range: a mapped address inside it is inside it.
+    pr, prk = root("ncp", [(x509.NameConstraints(permitted_subtrees=[x509.IPAddress(ipaddress.ip_network("192.0.2.0/24"))], excluded_subtrees=None), True)])
+    leaf("ncp_ip4.der", pr, prk, [ip("192.0.2.7")])
+    leaf("ncp_ip4mapped.der", pr, prk, [ip("::ffff:192.0.2.7")])
+
+GROUPS = {"v6": v6, "nc": nc}
 for g in (sys.argv[1:] or list(GROUPS)):
     GROUPS[g]()
 print("wrote", OUT)

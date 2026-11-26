@@ -133,6 +133,30 @@ probe "$HC/v6_root.pem" "$HC/v6_db8_1.der" 2001:DB8:0::0:1; want v6-db8-1-other-
 probe "$HC/v6_root.pem" "$HC/v6_db8_1_left.der" 2001:db8::1; want v6-db8-1-left-refused false
 probe "$HC/v6_root.pem" "$HC/v6_loop.der" "::1%lo"; want v6-zone-refused false
 
+# Name constraints see the host in one spelling. The root excludes the
+# name evil.test and the range 10.0.0.0/8; a trailing `.` is the same
+# name, an IPv4-mapped IPv6 address is the same IPv4 address, and a host
+# with a `:` is an address, never a name a dNSName could carry.
+probe "$HC/nc_root.pem" "$HC/nc_dns.der" evil.test; want nc-excluded-name false
+probe "$HC/nc_root.pem" "$HC/nc_dns_dot.der" evil.test.; want nc-excluded-name-dot false
+probe "$HC/nc_root.pem" "$HC/nc_dns.der" evil.test.; want nc-excluded-host-dot false
+probe "$HC/nc_root.pem" "$HC/nc_sub_dot.der" www.evil.test.; want nc-excluded-sub-dot false
+probe "$HC/nc_root.pem" "$HC/nc_ip4.der" 10.0.0.1; want nc-excluded-ip4 false
+probe "$HC/nc_root.pem" "$HC/nc_ip4mapped.der" 0:0:0:0:0:ffff:0a00:0001; want nc-excluded-ip4-mapped false
+probe "$HC/nc_root.pem" "$HC/nc_ip4mapped.der" ::ffff:10.0.0.1; want nc-excluded-ip4-mapped-dotted false
+probe "$HC/nc_root.pem" "$HC/nc_ip4.der" ::ffff:10.0.0.1; want nc-excluded-ip4-host-mapped false
+probe "$HC/nc_root.pem" "$HC/nc_dns_mapped.der" ::ffff:10.0.0.1; want nc-dnsname-is-no-address false
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" good.test; want nc-outside-excluded true
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" good.test.; want nc-outside-excluded-dot true
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" 192.0.2.1; want nc-outside-excluded-ip4 true
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" ::ffff:192.0.2.1; want nc-outside-excluded-ip4-mapped true
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" 2001:db8::1; want nc-outside-excluded-ip6 true
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" 192.0.2.1.; want dotted-quad-with-dot-refused false
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" good.test..; want two-trailing-dots-refused false
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" "good.test x"; want host-with-space-refused false
+probe "$HC/ncp_root.pem" "$HC/ncp_ip4.der" 192.0.2.7; want ncp-permitted-ip4 true
+probe "$HC/ncp_root.pem" "$HC/ncp_ip4mapped.der" ::ffff:192.0.2.7; want ncp-permitted-ip4-mapped true
+
 # ── Certificate message framing (tm_cert_list) ──────────────────────
 # A server's chain arrives as one message; the intermediates in it are
 # what the trust store walks. Getting the walk wrong here is not cosmetic:

@@ -101,11 +101,23 @@ pub Bool ci_eq_range(List(Int) a, Int ai, List(Int) b, Int bi, Int count) {
     return ci_eq_range(a, na, b, nb2, nc);
 }
 
-/// Whether `host` matches the dNSName pattern `pat`, ignoring ASCII case.
-/// A leading `*.` stands for exactly one non-empty leftmost label
-/// (RFC 6125); any other pattern must equal `host` whole.
-pub Bool dns_match(List(Int) host, List(Int) pat) {
+/// `n` without one trailing `.`: `evil.test.` and `evil.test` are one
+/// fully qualified name, and the resolver sends both as the same query.
+pub List(Int) dns_canon(List(Int) n) {
+    Int k = n.len();
+    if (k > 1 && n[k - 1] == 46) { return n[0..(k - 1)]; }
+    return n;
+}
+
+/// Whether `host` matches the dNSName pattern `pat`, ignoring ASCII case
+/// and one trailing `.` on either. A leading `*.` stands for exactly one
+/// non-empty leftmost label (RFC 6125); any other pattern must equal
+/// `host` whole.
+pub Bool dns_match(List(Int) host0, List(Int) pat0) {
+    List(Int) host = dns_canon(host0);
+    List(Int) pat = dns_canon(pat0);
     Int plen = pat.len();
+    if (plen == 0) { return false; }
     Int star = pat[0];
     if (star == 42 && plen > 2 && pat[1] == 46) {
         Int hlen = host.len();
@@ -134,9 +146,62 @@ pub Bool dns_match(List(Int) host, List(Int) pat) {
 /// address can produce, so a dNSName never satisfies this.
 pub Bool ip_san_hit(List(Int) addr, List(Int) host) {
     if (addr.len() != 4 && addr.len() != 16) { return false; }
-    List(Int) want = ip_addr_bytes(host);
-    if (want.len() != addr.len()) { return false; }
-    return eq_bytes(want, addr);
+    List(Int) want = ip_canon(ip_addr_bytes(host));
+    List(Int) have = ip_canon(addr);
+    if (want.len() == 0 || want.len() != have.len()) { return false; }
+    return eq_bytes(want, have);
+}
+
+/// An address in the form it is compared in: an IPv4-mapped IPv6 address
+/// (`::ffff:a.b.c.d`) is the IPv4 address `a.b.c.d` -- a dual-stack
+/// socket connected to one reaches the other -- so it is its four bytes.
+/// Every other address is itself.
+pub List(Int) ip_canon(List(Int) a) {
+    if (a.len() == 16 && ip_is_mapped(a, 0)) { return a[12..16]; }
+    return a;
+}
+
+// Bytes 0..9 zero and 10..11 0xff: the ::ffff:0:0/96 prefix.
+Bool ip_is_mapped(List(Int) a, Int i) {
+    if (i >= 12) { return true; }
+    Int want = if (i >= 10) { 255 } else { 0 };
+    if (a[i] != want) { return false; }
+    return ip_is_mapped(a, i + 1);
+}
+
+/// The forms `a` is checked against name constraints in: its canonical
+/// form, and for an IPv4 address its IPv4-mapped IPv6 form as well, so an
+/// IPv4 subtree and a `::ffff:0:0/96` subtree both bind it.
+pub List(List(Int)) ip_forms(List(Int) a) {
+    List(Int) c = ip_canon(a);
+    if (c.len() == 4) { return [c, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255].concat(c)]; }
+    return [c];
+}
+
+/// `host` in the form the server is authenticated for, or an empty list
+/// when it is no host this check will vouch for. A host holding a `:` is
+/// an IPv6 literal and has to parse as one; otherwise one trailing `.` is
+/// dropped (a dotted quad with one is a name to the resolver and an
+/// address here, so it is refused). Only letters, digits, `-`, `_`, `.`
+/// and `:` are allowed: the runtime ends a host at a space, so anything
+/// after one would be checked but never dialled.
+pub List(Int) tls_host_canon(List(Int) host) {
+    if (host.len() == 0 || !host_chars_ok(host, 0)) { return []; }
+    if (ip_has_colon(host, 0)) {
+        return if (ip_v6_bytes(host).len() == 16) { host } else { [] };
+    }
+    List(Int) h = dns_canon(host);
+    if (h.len() == host.len()) { return h; }
+    if (h[h.len() - 1] == 46 || ip_v4_bytes(h, 0, h.len()).len() == 4) { return []; }
+    return h;
+}
+
+Bool host_chars_ok(List(Int) h, Int i) {
+    if (i >= h.len()) { return true; }
+    Int c = h[i];
+    Bool ok = (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 58) || c == 45 || c == 46 || c == 95;
+    if (!ok) { return false; }
+    return host_chars_ok(h, i + 1);
 }
 
 /// The 4 or 16 bytes the address literal `host` names, or an empty list.
@@ -289,7 +354,11 @@ pub Bool san_has_match(List(Int) cert, List(Int) host) {
 /// Whether the parsed certificate `c` names `host` in a dNSName or
 /// iPAddress subjectAltName entry.
 pub Bool cert_san_match(Cert c, List(Int) host) {
-    return san_any_dns(cert_san(c, 130), host, 0) || san_any_ip(cert_san(c, 135), host, 0);
+    // An address is matched only by an iPAddress entry and a name only by
+    // a dNSName (RFC 9525 §6.2): a dNSName spelled `10.0.0.1` or
+    // `::ffff:10.0.0.1` names no address.
+    if (ip_has_colon(host, 0) || ip_addr_bytes(host).len() > 0) { return san_any_ip(cert_san(c, 135), host, 0); }
+    return san_any_dns(cert_san(c, 130), host, 0);
 }
 
 Bool san_any_dns(List(List(Int)) names, List(Int) host, Int i) {
@@ -443,7 +512,10 @@ Bool ci_ends_with(List(Int) a, List(Int) suf) {
 /// base is every name. A wildcard SAN is checked as written: its `*` label
 /// matches no base label, so `*.a.test` is within `a.test` but not within
 /// `x.a.test`.
-pub Bool dns_within(List(Int) n, List(Int) base) {
+pub Bool dns_within(List(Int) n0, List(Int) base0) {
+    // One trailing `.` is the same name, on either side.
+    List(Int) n = dns_canon(n0);
+    List(Int) base = dns_canon(base0);
     if (base.len() == 0) { return true; }
     if (base[0] == 46) { return n.len() > base.len() && ci_ends_with(n, base); }
     if (n.len() == base.len()) { return ci_eq_bytes(n, base); }
@@ -484,9 +556,18 @@ Bool nc_dns_ok(NameCons k, List(Int) n) {
     return !dns_in_any(n, k.exclude.dns, 0);
 }
 
+// An address is checked in each of its forms (ip_forms): it is permitted
+// when any form is, and excluded when any form is.
 Bool nc_ip_ok(NameCons k, List(Int) a) {
-    if (k.permit.ip.len() > 0 && !ip_in_any(a, k.permit.ip, 0)) { return false; }
-    return !ip_in_any(a, k.exclude.ip, 0);
+    List(List(Int)) forms = ip_forms(a);
+    if (k.permit.ip.len() > 0 && !ip_forms_in_any(forms, k.permit.ip, 0)) { return false; }
+    return !ip_forms_in_any(forms, k.exclude.ip, 0);
+}
+
+Bool ip_forms_in_any(List(List(Int)) forms, List(List(Int)) bases, Int i) {
+    if (i >= forms.len()) { return false; }
+    if (ip_in_any(forms[i], bases, 0)) { return true; }
+    return ip_forms_in_any(forms, bases, i + 1);
 }
 
 Bool nc_all_dns(NameCons k, List(List(Int)) ns, Int i) {
@@ -507,7 +588,11 @@ Bool nc_all_ip(NameCons k, List(List(Int)) ns, Int i) {
 pub Bool nc_admits(NameCons k, Cert leaf, List(Int) host) {
     if (!k.ok) { return false; }
     if (!nc_all_dns(k, cert_san(leaf, 130), 0) || !nc_all_ip(k, cert_san(leaf, 135), 0)) { return false; }
+    // A host the runtime would dial as an address is checked as one: a
+    // `:` makes it IPv6, and one that does not parse is refused rather
+    // than checked as a name no constraint mentions.
     List(Int) ip = ip_addr_bytes(host);
+    if (ip.len() == 0 && ip_has_colon(host, 0)) { return false; }
     return if (ip.len() > 0) { nc_ip_ok(k, ip) } else { nc_dns_ok(k, host) };
 }
 
@@ -1051,8 +1136,11 @@ Bool chain_to_store(List(Int) cert, List(List(Int)) pool, TrustStore st, Instant
 /// store trusts nothing -- a client that cannot say who it trusts does not
 /// connect, rather than falling back to "any certificate with the right
 /// hostname", which is a check an attacker with any certificate can pass.
-pub Bool tls_server_trusted(List(Int) leaf, List(List(Int)) inters, List(Int) host, Instant now, TrustStore st) {
+pub Bool tls_server_trusted(List(Int) leaf, List(List(Int)) inters, List(Int) host0, Instant now, TrustStore st) {
     if (st.roots.len() == 0) { return false; }
+    // The name and the constraints see one spelling of the host.
+    List(Int) host = tls_host_canon(host0);
+    if (host.len() == 0) { return false; }
     if (!x509_valid_now(leaf, now)) { return false; }
     if (!san_has_match(leaf, host)) { return false; }
     return match x509_parse(leaf) {
