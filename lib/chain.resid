@@ -101,11 +101,23 @@ pub Bool ci_eq_range(List(Int) a, Int ai, List(Int) b, Int bi, Int count) {
     return ci_eq_range(a, na, b, nb2, nc);
 }
 
-/// Whether `host` matches the dNSName pattern `pat`, ignoring ASCII case.
-/// A leading `*.` stands for exactly one non-empty leftmost label
-/// (RFC 6125); any other pattern must equal `host` whole.
-pub Bool dns_match(List(Int) host, List(Int) pat) {
+/// `n` without one trailing `.`: `evil.test.` and `evil.test` are one
+/// fully qualified name, and the resolver sends both as the same query.
+pub List(Int) dns_canon(List(Int) n) {
+    Int k = n.len();
+    if (k > 1 && n[k - 1] == 46) { return n[0..(k - 1)]; }
+    return n;
+}
+
+/// Whether `host` matches the dNSName pattern `pat`, ignoring ASCII case
+/// and one trailing `.` on either. A leading `*.` stands for exactly one
+/// non-empty leftmost label (RFC 6125); any other pattern must equal
+/// `host` whole.
+pub Bool dns_match(List(Int) host0, List(Int) pat0) {
+    List(Int) host = dns_canon(host0);
+    List(Int) pat = dns_canon(pat0);
     Int plen = pat.len();
+    if (plen == 0) { return false; }
     Int star = pat[0];
     if (star == 42 && plen > 2 && pat[1] == 46) {
         Int hlen = host.len();
@@ -134,9 +146,62 @@ pub Bool dns_match(List(Int) host, List(Int) pat) {
 /// address can produce, so a dNSName never satisfies this.
 pub Bool ip_san_hit(List(Int) addr, List(Int) host) {
     if (addr.len() != 4 && addr.len() != 16) { return false; }
-    List(Int) want = ip_addr_bytes(host);
-    if (want.len() != addr.len()) { return false; }
-    return eq_bytes(want, addr);
+    List(Int) want = ip_canon(ip_addr_bytes(host));
+    List(Int) have = ip_canon(addr);
+    if (want.len() == 0 || want.len() != have.len()) { return false; }
+    return eq_bytes(want, have);
+}
+
+/// An address in the form it is compared in: an IPv4-mapped IPv6 address
+/// (`::ffff:a.b.c.d`) is the IPv4 address `a.b.c.d` -- a dual-stack
+/// socket connected to one reaches the other -- so it is its four bytes.
+/// Every other address is itself.
+pub List(Int) ip_canon(List(Int) a) {
+    if (a.len() == 16 && ip_is_mapped(a, 0)) { return a[12..16]; }
+    return a;
+}
+
+// Bytes 0..9 zero and 10..11 0xff: the ::ffff:0:0/96 prefix.
+Bool ip_is_mapped(List(Int) a, Int i) {
+    if (i >= 12) { return true; }
+    Int want = if (i >= 10) { 255 } else { 0 };
+    if (a[i] != want) { return false; }
+    return ip_is_mapped(a, i + 1);
+}
+
+/// The forms `a` is checked against name constraints in: its canonical
+/// form, and for an IPv4 address its IPv4-mapped IPv6 form as well, so an
+/// IPv4 subtree and a `::ffff:0:0/96` subtree both bind it.
+pub List(List(Int)) ip_forms(List(Int) a) {
+    List(Int) c = ip_canon(a);
+    if (c.len() == 4) { return [c, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255].concat(c)]; }
+    return [c];
+}
+
+/// `host` in the form the server is authenticated for, or an empty list
+/// when it is no host this check will vouch for. A host holding a `:` is
+/// an IPv6 literal and has to parse as one; otherwise one trailing `.` is
+/// dropped (a dotted quad with one is a name to the resolver and an
+/// address here, so it is refused). Only letters, digits, `-`, `_`, `.`
+/// and `:` are allowed: the runtime ends a host at a space, so anything
+/// after one would be checked but never dialled.
+pub List(Int) tls_host_canon(List(Int) host) {
+    if (host.len() == 0 || !host_chars_ok(host, 0)) { return []; }
+    if (ip_has_colon(host, 0)) {
+        return if (ip_v6_bytes(host).len() == 16) { host } else { [] };
+    }
+    List(Int) h = dns_canon(host);
+    if (h.len() == host.len()) { return h; }
+    if (h[h.len() - 1] == 46 || ip_v4_bytes(h, 0, h.len()).len() == 4) { return []; }
+    return h;
+}
+
+Bool host_chars_ok(List(Int) h, Int i) {
+    if (i >= h.len()) { return true; }
+    Int c = h[i];
+    Bool ok = (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 58) || c == 45 || c == 46 || c == 95;
+    if (!ok) { return false; }
+    return host_chars_ok(h, i + 1);
 }
 
 /// The 4 or 16 bytes the address literal `host` names, or an empty list.
@@ -180,76 +245,89 @@ pub List(Int) ip_v4_at(List(Int) h, Int i, Int n, Int val, Int digits, List(Int)
     return ip_v4_at(h, i + 1, n, val * 10 + (c - 48), digits + 1, acc);
 }
 
-/// State of the IPv6 literal scanner: bytes before and after a `::`
-/// (`left`, `right`), whether a `::` was seen (`gap`), whether the literal
-/// is malformed (`bad`), and the group being read (`val`, `digits`).
-type IpScan = { List(Int) left; List(Int) right; Bool gap; Bool bad; Int val; Int digits; };
+/// One side of a `::` in an IPv6 literal, read: its bytes, or `ok` false
+/// when the side is malformed.
+type V6Side = { Bool ok; List(Int) b; };
 
-/// The 16 bytes of the IPv6 literal `host`, or an empty list. A single `::`
-/// expands to at least one zero group; dotted IPv4 tails and zone suffixes
-/// are not accepted.
+/// The 16 bytes of the IPv6 literal `host` (RFC 4291 §2.2), or an empty
+/// list. Groups are one to four hex digits in either case; at most one
+/// `::` stands for one or more zero groups, at the start, the end or
+/// anywhere between; the last 32 bits may be written as a dotted IPv4
+/// address (`::ffff:10.0.0.1`). A zone (`fe80::1%eth0`), brackets, a
+/// single leading or trailing `:` and a `:::` are not literals here.
 pub List(Int) ip_v6_bytes(List(Int) host) {
-    IpScan s = ip_v6_scan(host, 0, host.len(), IpScan { .left = [], .right = [], .gap = false, .bad = false, .val = 0, .digits = 0 });
-    if (s.bad) { return []; }
-    List(Int) l = ip_v6_end(s.left, s.val, s.digits);
-    List(Int) r = s.right;
-    if (s.gap) {
-        if (l.len() + r.len() > 14) { return []; }
-        return l.concat(ip_zero_bytes(16 - l.len() - r.len())).concat(r);
+    Int n = host.len();
+    if (n < 2) { return []; }
+    Int g = ip_find_dcolon(host, 0, n);
+    if (g < 0) {
+        V6Side all = ip_v6_side(host, 0, n, []);
+        if (!all.ok || all.b.len() != 16) { return []; }
+        return all.b;
     }
-    if (l.len() + r.len() != 16) { return []; }
-    return l.concat(r);
+    // A second `::` is ambiguous; `:::` leaves a `:` with no group on the
+    // right, which the side reader refuses.
+    if (ip_find_dcolon(host, g + 2, n) >= 0) { return []; }
+    V6Side l = if (g == 0) { V6Side { .ok = true, .b = [] } } else { ip_v6_side(host, 0, g, []) };
+    V6Side r = if (g + 2 == n) { V6Side { .ok = true, .b = [] } } else { ip_v6_side(host, g + 2, n, []) };
+    if (!l.ok || !r.ok) { return []; }
+    // A dotted IPv4 part ends the address, so it may only be on the right
+    // (or, with no `::`, last): a left side holding one is refused.
+    if (ip_has_dot(host, 0, g)) { return []; }
+    if (l.b.len() + r.b.len() > 14) { return []; }
+    return l.b.concat(ip_zero_bytes(16 - l.b.len() - r.b.len())).concat(r.b);
 }
 
-/// `acc` with the pending group `val` appended as two bytes; unchanged when
-/// no digits were read, empty when more than four were.
-pub List(Int) ip_v6_end(List(Int) acc, Int val, Int digits) {
-    if (digits == 0) { return acc; }
-    if (digits > 4) { return []; }
-    return acc.concat([(val >> 8) & 255, val & 255]);
+/// The index of the first `::` in `h[i..n)`, or -1.
+pub Int ip_find_dcolon(List(Int) h, Int i, Int n) {
+    if (i + 1 >= n) { return 0 - 1; }
+    if (h[i] == 58 && h[i + 1] == 58) { return i; }
+    return ip_find_dcolon(h, i + 1, n);
 }
 
-/// Scanner behind `ip_v6_bytes`: reads `h[i..n)` into `s`, setting `bad` on
-/// a malformed literal. The last group is left pending in `val`/`digits`.
-pub IpScan ip_v6_scan(List(Int) h, Int i, Int n, IpScan s) {
-    if (i >= n) { return s; }
-    Int c = h[i];
-    if (c == 58) {
-        Bool twice = i + 1 < n && h[i + 1] == 58;
-        if (twice) {
-            if (s.gap) { return ip_bad(s); }
-            // The group in hand closes on the left of the `::`, whatever
-            // is read after it belongs on the right.
-            IpScan closed = if (s.digits > 0) { ip_v6_push(s) } else { s };
-            return ip_v6_scan(h, i + 2, n, ip_v6_gap(closed));
-        }
-        if (i == 0) { return ip_bad(s); }
-        if (s.digits == 0) { return ip_bad(s); }
-        return ip_v6_scan(h, i + 1, n, ip_v6_push(s));
+/// Whether `h[i..n)` holds a `.`.
+pub Bool ip_has_dot(List(Int) h, Int i, Int n) {
+    if (i >= n) { return false; }
+    if (h[i] == 46) { return true; }
+    return ip_has_dot(h, i + 1, n);
+}
+
+/// The index of the first `:` in `h[i..n)`, or `n`.
+pub Int ip_group_end(List(Int) h, Int i, Int n) {
+    if (i >= n || h[i] == 58) { return i; }
+    return ip_group_end(h, i + 1, n);
+}
+
+/// `acc` and then the `:`-separated groups of `h[i..n)` as bytes. Every
+/// group is one to four hex digits, except that the last may be a dotted
+/// IPv4 address (four bytes); an empty group -- a leading, trailing or
+/// doubled `:` -- makes the side malformed.
+pub V6Side ip_v6_side(List(Int) h, Int i, Int n, List(Int) acc) {
+    V6Side bad = V6Side { .ok = false, .b = [] };
+    if (i >= n || acc.len() > 16) { return bad; }
+    Int e = ip_group_end(h, i, n);
+    if (e == n && ip_has_dot(h, i, n)) {
+        List(Int) v4 = ip_v4_bytes(h, i, n);
+        if (v4.len() != 4) { return bad; }
+        return V6Side { .ok = true, .b = acc.concat(v4) };
     }
-    Int d = ip_hex_digit(c);
-    if (d < 0) { return ip_bad(s); }
-    if (s.digits >= 4) { return ip_bad(s); }
-    Int v = s.val * 16 + d;
-    Int dg = s.digits + 1;
-    return ip_v6_scan(h, i + 1, n, IpScan { .left = s.left, .right = s.right, .gap = s.gap, .bad = false, .val = v, .digits = dg });
+    Int v = ip_hex_group(h, i, e);
+    if (v < 0) { return bad; }
+    List(Int) acc2 = acc.concat([(v >> 8) & 255, v & 255]);
+    if (e == n) { return V6Side { .ok = true, .b = acc2 }; }
+    return ip_v6_side(h, e + 1, n, acc2);
 }
 
-/// Close the group being read, on whichever side of a `::` we are.
-pub IpScan ip_v6_push(IpScan s) {
-    List(Int) done = s.left.concat([(s.val >> 8) & 255, s.val & 255]);
-    if (s.gap) { return IpScan { .left = s.left, .right = s.right.concat([(s.val >> 8) & 255, s.val & 255]), .gap = true, .bad = false, .val = 0, .digits = 0 }; }
-    return IpScan { .left = done, .right = s.right, .gap = s.gap, .bad = false, .val = 0, .digits = 0 };
+/// The value of the one to four hex digits `h[i..e)`, or -1.
+pub Int ip_hex_group(List(Int) h, Int i, Int e) {
+    return ip_hex_group_at(h, i, e, i, 0);
 }
 
-/// `s` marked as past its `::`, with a fresh empty group.
-pub IpScan ip_v6_gap(IpScan s) {
-    return IpScan { .left = s.left, .right = s.right, .gap = true, .bad = false, .val = 0, .digits = 0 };
-}
-
-/// `s` marked as malformed.
-pub IpScan ip_bad(IpScan s) {
-    return IpScan { .left = s.left, .right = s.right, .gap = s.gap, .bad = true, .val = s.val, .digits = s.digits };
+Int ip_hex_group_at(List(Int) h, Int s, Int e, Int i, Int acc) {
+    if (e <= s || e - s > 4) { return 0 - 1; }
+    if (i >= e) { return acc; }
+    Int d = ip_hex_digit(h[i]);
+    if (d < 0) { return 0 - 1; }
+    return ip_hex_group_at(h, s, e, i + 1, acc * 16 + d);
 }
 
 /// The value of hex digit `c` in either case, or -1.
@@ -276,7 +354,11 @@ pub Bool san_has_match(List(Int) cert, List(Int) host) {
 /// Whether the parsed certificate `c` names `host` in a dNSName or
 /// iPAddress subjectAltName entry.
 pub Bool cert_san_match(Cert c, List(Int) host) {
-    return san_any_dns(cert_san(c, 130), host, 0) || san_any_ip(cert_san(c, 135), host, 0);
+    // An address is matched only by an iPAddress entry and a name only by
+    // a dNSName (RFC 9525 §6.2): a dNSName spelled `10.0.0.1` or
+    // `::ffff:10.0.0.1` names no address.
+    if (ip_has_colon(host, 0) || ip_addr_bytes(host).len() > 0) { return san_any_ip(cert_san(c, 135), host, 0); }
+    return san_any_dns(cert_san(c, 130), host, 0);
 }
 
 Bool san_any_dns(List(List(Int)) names, List(Int) host, Int i) {
@@ -430,7 +512,10 @@ Bool ci_ends_with(List(Int) a, List(Int) suf) {
 /// base is every name. A wildcard SAN is checked as written: its `*` label
 /// matches no base label, so `*.a.test` is within `a.test` but not within
 /// `x.a.test`.
-pub Bool dns_within(List(Int) n, List(Int) base) {
+pub Bool dns_within(List(Int) n0, List(Int) base0) {
+    // One trailing `.` is the same name, on either side.
+    List(Int) n = dns_canon(n0);
+    List(Int) base = dns_canon(base0);
     if (base.len() == 0) { return true; }
     if (base[0] == 46) { return n.len() > base.len() && ci_ends_with(n, base); }
     if (n.len() == base.len()) { return ci_eq_bytes(n, base); }
@@ -471,9 +556,18 @@ Bool nc_dns_ok(NameCons k, List(Int) n) {
     return !dns_in_any(n, k.exclude.dns, 0);
 }
 
+// An address is checked in each of its forms (ip_forms): it is permitted
+// when any form is, and excluded when any form is.
 Bool nc_ip_ok(NameCons k, List(Int) a) {
-    if (k.permit.ip.len() > 0 && !ip_in_any(a, k.permit.ip, 0)) { return false; }
-    return !ip_in_any(a, k.exclude.ip, 0);
+    List(List(Int)) forms = ip_forms(a);
+    if (k.permit.ip.len() > 0 && !ip_forms_in_any(forms, k.permit.ip, 0)) { return false; }
+    return !ip_forms_in_any(forms, k.exclude.ip, 0);
+}
+
+Bool ip_forms_in_any(List(List(Int)) forms, List(List(Int)) bases, Int i) {
+    if (i >= forms.len()) { return false; }
+    if (ip_in_any(forms[i], bases, 0)) { return true; }
+    return ip_forms_in_any(forms, bases, i + 1);
 }
 
 Bool nc_all_dns(NameCons k, List(List(Int)) ns, Int i) {
@@ -494,7 +588,11 @@ Bool nc_all_ip(NameCons k, List(List(Int)) ns, Int i) {
 pub Bool nc_admits(NameCons k, Cert leaf, List(Int) host) {
     if (!k.ok) { return false; }
     if (!nc_all_dns(k, cert_san(leaf, 130), 0) || !nc_all_ip(k, cert_san(leaf, 135), 0)) { return false; }
+    // A host the runtime would dial as an address is checked as one: a
+    // `:` makes it IPv6, and one that does not parse is refused rather
+    // than checked as a name no constraint mentions.
     List(Int) ip = ip_addr_bytes(host);
+    if (ip.len() == 0 && ip_has_colon(host, 0)) { return false; }
     return if (ip.len() > 0) { nc_ip_ok(k, ip) } else { nc_dns_ok(k, host) };
 }
 
@@ -866,16 +964,20 @@ pub List(Int) name_at(List(Int) data, Int pos) {
     return der_slice_seeded(data, cs, e - 1);
 }
 
-/// Is this CRL one `issuer` signed, and current at `now`?
+/// Is this CRL one `issuer` signed, and current at `now`, with nothing in
+/// it this walk cannot process?
 ///
-/// Issuer name, the thisUpdate..nextUpdate window, and the signature over
-/// the tbsCertList. A CRL whose nextUpdate has passed is not used at all:
+/// Issuer name, the thisUpdate..nextUpdate window, the signature over
+/// the tbsCertList, and its extensions (`crl_ext_ok`). A CRL whose nextUpdate has passed is not used at all:
 /// it says what was true when it was issued, and a stale CRL is exactly how
 /// a revoked certificate keeps working.
 pub Bool crl_usable(List(Int) crl, List(Int) issuer, Instant now) {
     // The signature first: it parses the CRL strictly, and the positions
     // read below are then in a structure the issuer vouched for.
     if (!x509_signed_by(crl, issuer)) { return false; }
+    // RFC 5280 §5.2: a CRL with a critical extension, or a critical entry
+    // extension, that is not processed is not used at all.
+    if (!crl_ext_ok(crl)) { return false; }
     Int ip = crl_issuer_pos(crl);
     if (ip < 0) { return false; }
     Int sp2 = x509_subject_pos(issuer);
@@ -893,9 +995,148 @@ pub Bool crl_usable(List(Int) crl, List(Int) issuer, Instant now) {
     return t <= nextn;
 }
 
+/// What a CRL's extensions let it say (RFC 5280 §5.2, §5.3), read once:
+/// whether it is well formed with every critical extension, on the CRL and
+/// on each entry, one processed here (`ok`); whether an
+/// issuingDistributionPoint scopes it to part of what its issuer issued
+/// (`scoped`); whether it is a delta CRL (`delta`); and whether an entry
+/// says removeFromCRL (`removes`).
+type CrlScan = { Bool ok; Bool scoped; Bool delta; Bool removes; };
+
+CrlScan crl_scan_bad() { return CrlScan { .ok = false, .scoped = false, .delta = false, .removes = false }; }
+
+/// Whether this CRL may be used at all: every critical extension is one
+/// processed here, it is not indirect (its entries could be another
+/// issuer's, named by a certificateIssuer this does not read), and no
+/// entry un-revokes with removeFromCRL, which only a base CRL read
+/// together with its delta can apply.
+pub Bool crl_ext_ok(List(Int) crl) {
+    CrlScan s = crl_scan(crl);
+    return s.ok && !s.removes;
+}
+
+/// Whether this CRL speaks for every certificate its issuer issued, so
+/// that a serial it does not list is not revoked: not a delta CRL (which
+/// lists only what changed since its base) and not partitioned or scoped
+/// by an issuingDistributionPoint. A CRL that is not complete still
+/// revokes what it lists; it never answers `revocation_required`.
+pub Bool crl_complete(List(Int) crl) {
+    CrlScan s = crl_scan(crl);
+    return s.ok && !s.removes && !s.scoped && !s.delta;
+}
+
+pub CrlScan crl_scan(List(Int) crl) {
+    Der tbs = der_child(crl, der_top(crl));
+    if (!tbs.ok || tbs.tag != 48) { return crl_scan_bad(); }
+    return crl_scan_fields(crl, der_child(crl, tbs), tbs, false, CrlScan { .ok = true, .scoped = false, .delta = false, .removes = false });
+}
+
+// The tbsCertList's fields from `f`: a SEQUENCE after a Time is the list
+// of revoked certificates, and [0] is crlExtensions.
+CrlScan crl_scan_fields(List(Int) b, Der f, Der tbs, Bool timed, CrlScan acc) {
+    if (!f.ok) { return crl_scan_bad(); }
+    CrlScan here = if (f.tag == 48 && timed) { crl_scan_entries(b, f, acc) }
+        else { if (f.tag == 160) { crl_scan_exts(b, f, acc) } else { acc } };
+    if (!here.ok || der_is_last(f, tbs)) { return here; }
+    Bool t2 = timed || f.tag == 23 || f.tag == 24;
+    return crl_scan_fields(b, der_sibling(b, f, tbs), tbs, t2, here);
+}
+
+CrlScan crl_scan_entries(List(Int) b, Der list, CrlScan acc) {
+    if (list.len == 0) { return acc; }
+    return crl_scan_entry(b, der_child(b, list), list, acc);
+}
+
+// Each entry: SEQUENCE { serial, revocationDate, crlEntryExtensions OPTIONAL }.
+CrlScan crl_scan_entry(List(Int) b, Der e, Der list, CrlScan acc) {
+    if (!e.ok || e.tag != 48) { return crl_scan_bad(); }
+    Der serial = der_child(b, e);
+    Der date = der_sibling(b, serial, e);
+    if (!date.ok) { return crl_scan_bad(); }
+    Der exts = if (der_is_last(date, e)) { der_bad() } else { der_sibling(b, date, e) };
+    if (!der_is_last(date, e) && (!exts.ok || exts.tag != 48 || !der_is_last(exts, e) || exts.len == 0)) { return crl_scan_bad(); }
+    CrlScan here = if (exts.ok) { crl_scan_entry_ext(b, der_child(b, exts), exts, acc) } else { acc };
+    if (!here.ok || der_is_last(e, list)) { return here; }
+    return crl_scan_entry(b, der_sibling(b, e, list), list, here);
+}
+
+// One Extension: SEQUENCE { OID, critical BOOLEAN DEFAULT FALSE, OCTET
+// STRING }. The value element, or a malformed one.
+Der crl_ext_value(List(Int) b, Der e) {
+    if (!e.ok || e.tag != 48) { return der_bad(); }
+    Der id = der_child(b, e);
+    Der v1 = der_sibling(b, id, e);
+    Der v = if (v1.ok && v1.tag == 1) { der_sibling(b, v1, e) } else { v1 };
+    if (!v.ok || v.tag != 4 || !der_is_last(v, e)) { return der_bad(); }
+    return v;
+}
+
+Bool crl_ext_critical(List(Int) b, Der e) {
+    Der v1 = der_sibling(b, der_child(b, e), e);
+    return v1.ok && v1.tag == 1 && v1.len == 1 && b[v1.start] == 255;
+}
+
+// Entry extensions: reasonCode (read for removeFromCRL) and
+// invalidityDate are processed; certificateIssuer and anything else
+// critical make the CRL unusable.
+CrlScan crl_scan_entry_ext(List(Int) b, Der e, Der seq, CrlScan acc) {
+    Der v = crl_ext_value(b, e);
+    if (!v.ok) { return crl_scan_bad(); }
+    Str o = der_oid(b, der_child(b, e));
+    Bool crit = crl_ext_critical(b, e);
+    if (crit && o != "2.5.29.21" && o != "2.5.29.24") { return crl_scan_bad(); }
+    // CRLReason ::= ENUMERATED, removeFromCRL (8).
+    Bool rm = o == "2.5.29.21" && v.len == 3 && b[v.start] == 10 && b[v.start + 1] == 1 && b[v.start + 2] == 8;
+    CrlScan here = CrlScan { .ok = true, .scoped = acc.scoped, .delta = acc.delta, .removes = acc.removes || rm };
+    if (der_is_last(e, seq)) { return here; }
+    return crl_scan_entry_ext(b, der_sibling(b, e, seq), seq, here);
+}
+
+// crlExtensions: [0] { SEQUENCE OF Extension }.
+CrlScan crl_scan_exts(List(Int) b, Der e0, CrlScan acc) {
+    Der seq = der_child(b, e0);
+    if (!seq.ok || seq.tag != 48 || !der_is_last(seq, e0) || seq.len == 0) { return crl_scan_bad(); }
+    return crl_scan_ext(b, der_child(b, seq), seq, acc);
+}
+
+// CRL extensions: deltaCRLIndicator and issuingDistributionPoint are
+// processed; cRLNumber and authorityKeyIdentifier change nothing read
+// here; anything else critical makes the CRL unusable.
+CrlScan crl_scan_ext(List(Int) b, Der e, Der seq, CrlScan acc) {
+    Der v = crl_ext_value(b, e);
+    if (!v.ok) { return crl_scan_bad(); }
+    Str o = der_oid(b, der_child(b, e));
+    Bool crit = crl_ext_critical(b, e);
+    CrlScan here = if (o == "2.5.29.27") { CrlScan { .ok = true, .scoped = acc.scoped, .delta = true, .removes = acc.removes } }
+        else { if (o == "2.5.29.28") { crl_scan_idp(b, v, acc) }
+        else { if (crit && o != "2.5.29.20" && o != "2.5.29.35") { crl_scan_bad() } else { acc } } };
+    if (!here.ok || der_is_last(e, seq)) { return here; }
+    return crl_scan_ext(b, der_sibling(b, e, seq), seq, here);
+}
+
+// IssuingDistributionPoint ::= SEQUENCE { distributionPoint [0],
+// onlyContainsUserCerts [1], onlyContainsCACerts [2], onlySomeReasons
+// [3], indirectCRL [4], onlyContainsAttributeCerts [5] }, every field
+// optional or DEFAULT FALSE. Any field present scopes the CRL; an
+// indirect CRL, or one of attribute certificates only, is not used.
+CrlScan crl_scan_idp(List(Int) b, Der v, CrlScan acc) {
+    Der s = der_at(b, v.start, der_end(v));
+    if (!s.ok || s.tag != 48 || s.next != der_end(v)) { return crl_scan_bad(); }
+    if (s.len == 0) { return acc; }
+    return crl_scan_idp_field(b, der_child(b, s), s, acc);
+}
+
+CrlScan crl_scan_idp_field(List(Int) b, Der f, Der s, CrlScan acc) {
+    if (!f.ok) { return crl_scan_bad(); }
+    if (f.tag == 132 || f.tag == 133) { return crl_scan_bad(); }
+    CrlScan here = CrlScan { .ok = true, .scoped = true, .delta = acc.delta, .removes = acc.removes };
+    if (der_is_last(f, s)) { return here; }
+    return crl_scan_idp_field(b, der_sibling(b, f, s), s, here);
+}
+
 /// What the store's CRLs say about one certificate: whether a usable CRL
-/// revokes it, and whether any usable CRL covers it at all (`covered`, what
-/// `revocation_required` asks about).
+/// revokes it, and whether a usable, complete CRL covers it (`covered`,
+/// what `revocation_required` asks about).
 type Rev = { Bool revoked; Bool covered; };
 
 Rev crl_check_at(TrustStore st, List(Int) cert, List(Int) issuer, Instant now, Int i) {
@@ -904,12 +1145,13 @@ Rev crl_check_at(TrustStore st, List(Int) cert, List(Int) issuer, Instant now, I
     Bool usable = crl_usable(crl, issuer, now);
     if (usable && crl_revokes(crl, cert)) { return Rev { .revoked = true, .covered = true }; }
     Rev rest = crl_check_at(st, cert, issuer, now, i + 1);
-    if (usable && !rest.covered) { return Rev { .revoked = rest.revoked, .covered = true }; }
+    // A delta or scoped CRL that does not list the serial says nothing.
+    if (usable && !rest.covered && crl_complete(crl)) { return Rev { .revoked = rest.revoked, .covered = true }; }
     return rest;
 }
 
 /// What the store's CRLs say about `cert` under `issuer` at `now`: whether
-/// a usable CRL revokes it, and whether any usable CRL covers it at all.
+/// a usable CRL revokes it, and whether a usable, complete CRL covers it.
 pub Rev crl_check(TrustStore st, List(Int) cert, List(Int) issuer, Instant now) {
     return crl_check_at(st, cert, issuer, now, 0);
 }
@@ -1034,16 +1276,20 @@ Bool chain_to_store(List(Int) cert, List(List(Int)) pool, TrustStore st, Instant
 // ─── TLS client-side server-certificate check ────────────────────────
 
 /// Full server authentication: the leaf must name the host we connected to,
-/// be inside its validity window, and chain to a root in `st`. An empty
+/// be inside its validity window, allow digitalSignature when it has a
+/// keyUsage (it signs the CertificateVerify), and chain to a root in `st`. An empty
 /// store trusts nothing -- a client that cannot say who it trusts does not
 /// connect, rather than falling back to "any certificate with the right
 /// hostname", which is a check an attacker with any certificate can pass.
-pub Bool tls_server_trusted(List(Int) leaf, List(List(Int)) inters, List(Int) host, Instant now, TrustStore st) {
+pub Bool tls_server_trusted(List(Int) leaf, List(List(Int)) inters, List(Int) host0, Instant now, TrustStore st) {
     if (st.roots.len() == 0) { return false; }
+    // The name and the constraints see one spelling of the host.
+    List(Int) host = tls_host_canon(host0);
+    if (host.len() == 0) { return false; }
     if (!x509_valid_now(leaf, now)) { return false; }
     if (!san_has_match(leaf, host)) { return false; }
     return match x509_parse(leaf) {
-        Ok(c) => cert_crit_ok(c) && cert_server_auth(c) && chain_to_store(leaf, inters, st, now, trust_max_depth(), TlsPath {.leaf = c, .host = host}, 0),
+        Ok(c) => cert_crit_ok(c) && cert_server_auth(c) && cert_key_usage(c, 0) && chain_to_store(leaf, inters, st, now, trust_max_depth(), TlsPath {.leaf = c, .host = host}, 0),
         Err(e) => false,
     };
 }

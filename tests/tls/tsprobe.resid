@@ -127,6 +127,7 @@ Int revoke_main() {
     Str ca_path = if (args.count() > 7) { args.get(7) } else { "" };
     List(Int) issuer = filesystem.read_bytes(ca_path);
     println("crl_usable   = " + f"{crl_usable(crl, issuer, now)}");
+    println("crl_complete = " + f"{crl_complete(crl)}");
     println("crl_revokes  = " + f"{crl_revokes(crl, leaf)}");
     println("revoked_list = " + rev_serials(crl_revoked_serials(crl), 0, ""));
     Rev r = crl_check(st, leaf, issuer, now);

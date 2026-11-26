@@ -1,0 +1,30 @@
+crlf value -> 500
+lf value -> 500
+cr value -> 500
+esc value -> 500
+del value -> 500
+tab value -> 200
+utf8 value -> 200
+space name -> 500
+colon name -> 500
+crlf name -> 500
+empty name -> 500
+token name -> 200
+crlf content-type -> 500
+refused wire has X: no
+hand X-Good: yes
+hand X-A: no
+hand X: no
+hand Set-Cookie: no
+hand Bad Name: no
+hand lines: 4
+req ok: yes
+req path crlf: yes
+req path space: yes
+req host crlf: yes
+req method: yes
+req conn crlf: yes
+req extra blank line: yes
+req extra bare lf: yes
+req extra no crlf: yes
+req extra bad name: yes

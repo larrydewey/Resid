@@ -78,6 +78,12 @@ pub Str http_get_raw(Str url) {
     Int fd = resid_tcp_connect(u.host, u.port);
     if (fd < 0) { return ""; }
     _ = resid_tcp_deadline(fd, http_client_deadline_ms());
+    // A path or host holding a space or a control byte (CR, LF, ...) would
+    // write request lines of its own: refused like a failed send.
+    if (!http_req_word_ok(u.path) || !http_req_word_ok(u.host)) {
+        resid_tcp_close(fd);
+        return "";
+    }
     Str head1 = "GET " + u.path + " HTTP/1.1\r\n";
     Str head2 = "Host: " + u.host + "\r\n";
     Str head3 = "User-Agent: resid-http/1\r\nAccept: */*\r\nConnection: close\r\n\r\n";
@@ -193,13 +199,68 @@ pub Str http_recv_count(Int fd, Int n) {
 /// Build a request head ending in the blank line.
 /// `hostport` is the Host value, `conn` the Connection value, and `extra`
 /// further header lines, each already ending in CRLF.
+///
+/// Caller data never writes a line of its own: the result is "" (no
+/// request) when `method` is not a token, `path` or `hostport` is empty
+/// or holds a space or a control byte, `conn` is no valid field value, or
+/// `extra` is not a run of `name: value` CRLF lines with token names and
+/// values free of CR, LF, NUL, other C0 controls but HTAB, and DEL.
 pub Str http_build_request(Str method, Str path, Str hostport, Str extra, Str conn) {
+    if (!http_req_token_ok(method) || !http_req_word_ok(path) || !http_req_word_ok(hostport)
+        || !http_req_value_ok(conn) || !http_req_extra_ok(extra)) { return ""; }
     Str r1 = method + " " + path + " HTTP/1.1\r\n";
     Str r2 = "Host: " + hostport + "\r\n";
     // A User-Agent in `extra` replaces the default one.
     Str ua = if (str_contains(str_to_lower(extra), "user-agent:")) { "" } else { "User-Agent: resid-http/2\r\n" };
     Str r3 = ua + "Accept: */*\r\nConnection: " + conn + "\r\n";
     return r1 + r2 + r3 + extra + "\r\n";
+}
+
+/// Whether `s` is a token (RFC 9110 §5.6.2): a method or a field name.
+pub Bool http_req_token_ok(Str s) { return str_len(s) > 0 && http_tchars(s, 0); }
+
+Bool http_tchars(Str s, Int i) {
+    if (i >= str_len(s)) { return true; }
+    Int c = str_char_at(s, i);
+    Bool ok = (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57)
+        || c == 33 || (c >= 35 && c <= 39) || c == 42 || c == 43 || c == 45 || c == 46
+        || c == 94 || c == 95 || c == 96 || c == 124 || c == 126;
+    return ok && http_tchars(s, i + 1);
+}
+
+/// Whether `s` may be sent as a field value: no CR, LF, NUL or other C0
+/// control except HTAB, and no DEL.
+pub Bool http_req_value_ok(Str s) { return http_vchars(s, 0, true); }
+
+/// Whether `s` is one non-empty word of a request line or a Host value:
+/// no space and no control byte at all.
+pub Bool http_req_word_ok(Str s) { return str_len(s) > 0 && http_vchars(s, 0, false); }
+
+Bool http_vchars(Str s, Int i, Bool inner_space) {
+    if (i >= str_len(s)) { return true; }
+    Int c = str_char_at(s, i);
+    Bool sp = c == 32 || c == 9;
+    if ((c < 32 && c != 9) || c == 127 || (sp && !inner_space)) { return false; }
+    return http_vchars(s, i + 1, inner_space);
+}
+
+/// Whether `extra` is zero or more header lines, each `name: value` and
+/// ended by CRLF, with a token name and a valid value: so no blank line
+/// ends the head early and no bare CR or LF starts another line.
+pub Bool http_req_extra_ok(Str extra) {
+    if (extra == "") { return true; }
+    if (!str_ends_with(extra, "\r\n")) { return false; }
+    List(Str) ls = str_split(str_slice(extra, 0, str_len(extra) - 2), "\r\n");
+    return http_req_lines_ok(ls, 0);
+}
+
+Bool http_req_lines_ok(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return true; }
+    Str l = ls[i];
+    Int c = http_find(l, ":");
+    if (c <= 0) { return false; }
+    if (!http_req_token_ok(str_slice(l, 0, c)) || !http_req_value_ok(str_slice(l, c + 1, str_len(l)))) { return false; }
+    return http_req_lines_ok(ls, i + 1);
 }
 
 /// Find header `name` in `lines` from index `i`; helper for http_header_value.
@@ -295,10 +356,12 @@ pub Str http_recv_head(Int fd) {
 
 /// Send one keep-alive request on the open connection `fd` and read the reply.
 /// The body is framed by chunked coding or Content-Length; it is read to
-/// close only when no status could be parsed. Status 0 if the send fails.
+/// close only when no status could be parsed. Status 0 if the send fails
+/// or `http_build_request` refuses the request (it is then never sent).
 @requires(network)
 pub HttpResponse http_call(Int fd, Str method, Str path, Str hostport, Str extra) {
     Str req = http_build_request(method, path, hostport, extra, "keep-alive");
+    if (req == "") { return HttpResponse { .status = 0, .headers = "", .body = "" }; }
     Bool sent = resid_tcp_send(fd, req);
     if (!sent) { return HttpResponse { .status = 0, .headers = "", .body = "" }; }
     Str head = http_recv_head(fd);

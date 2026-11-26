@@ -61,6 +61,10 @@ check("echo-cl", (code, body == big, h.get("content-type")), (200, True, "applic
 chunks = b"".join(b"%x\r\n%s\r\n" % (len(big[i:i+1000]), big[i:i+1000]) for i in range(0, len(big), 1000)) + b"0\r\n\r\n"
 code, h, body = one(b"POST /echo HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n" + chunks)
 check("echo-chunked", (code, body == big), (200, True))
+# BWS after the size, before an extension or the end of the line, is
+# allowed (RFC 9112 §7.1); whitespace before it is not (rejections below).
+code, h, body = one(b"POST /echo HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5 ;x=1\r\nhello\r\n3\t\r\nabc\r\n0\r\n\r\n")
+check("chunk-bws", (code, body), (200, b"helloabc"))
 
 # pipelining: all requests sent before any reply is read, in order
 s = conn()
@@ -80,6 +84,11 @@ for name, req, want in [
     ("bad-cl", b"POST /echo HTTP/1.1\r\nHost: t\r\nContent-Length: -1\r\n\r\n", 400),
     ("fold", b"GET / HTTP/1.1\r\nHost: t\r\nX-A: 1\r\n 2\r\n\r\n", 400),
     ("space-colon", b"GET / HTTP/1.1\r\nHost : t\r\n\r\n", 400),
+    ("dup-host", b"GET / HTTP/1.1\r\nHost: t\r\nHost: evil.example\r\n\r\n", 400),
+    ("host-list", b"GET / HTTP/1.1\r\nHost: t, evil.example\r\n\r\n", 400),
+    ("chunk-lead-space", b"POST /echo HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\n\r\n 5\r\nhello\r\n0\r\n\r\n", 400),
+    ("chunk-space-around", b"POST /echo HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\n\r\n 5 \r\nhello\r\n0\r\n\r\n", 400),
+    ("chunk-lead-tab", b"POST /echo HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\n\r\n\t5\r\nhello\r\n0\r\n\r\n", 400),
     ("method", b"DELETE / HTTP/1.1\r\nHost: t\r\n\r\n", 405),
     ("too-big", b"POST /echo HTTP/1.1\r\nHost: t\r\nContent-Length: 9000000\r\n\r\n", 413),
     ("huge-head", b"GET / HTTP/1.1\r\nHost: t\r\nX-P: " + b"a" * 70000 + b"\r\n\r\n", 431),

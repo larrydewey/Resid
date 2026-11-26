@@ -45,7 +45,9 @@ type HttpRequest = {
 
 /// A whole reply, as a handler returns it.
 /// `headers` are complete "Name: value" lines without CRLF; Content-Length
-/// and Connection are added by the writer.
+/// and Connection are added by the writer. A line whose name is not a
+/// token or whose value holds a control byte (CR, LF, NUL, ...) is left
+/// out when the reply is written; `http_with_header` refuses one up front.
 type HttpReply = { Int status; List(Str) headers; List(Int) body; };
 
 /// The bounds a connection is held to; `http_limits` gives the defaults.
@@ -277,6 +279,10 @@ HsHeaders hs_headers(List(Str) lines, Int i, Map(Str, Str) acc, Int limit) {
     Str value = str_trim(str_slice(line, colon + 1, str_len(line)));
     Str key = str_to_lower(name);
     Option(Str) prior = acc.get(key);
+    // A second Host is refused, not merged (RFC 9112 §3.2): a proxy that
+    // routes on one and a handler that reads both would disagree.
+    Bool dup_host = match prior { Some(old) => key == "host", None => false };
+    if (dup_host) { return hs_headers_err("400"); }
     Str merged = match prior { Some(old) => old + ", " + value, None => value };
     return hs_headers(lines, i + 1, acc.insert(key, merged), limit);
 }
@@ -337,6 +343,9 @@ HttpRequest hs_parse_head(List(UInt(8)) b, Int end) {
     if (hh.err != "") { return hs_reject(str_parse_int(hh.err)); }
     Map(Str, Str) headers = hh.map;
     if (version == "HTTP/1.1" && !headers.contains("host")) { return hs_reject(400); }
+    // One authority: a list or a value with whitespace inside is no host.
+    Str host = headers.get("host") else { "" };
+    if (str_index_of(host, ",", 0) >= 0 || str_index_of(host, " ", 0) >= 0 || str_index_of(host, "\t", 0) >= 0) { return hs_reject(400); }
     Int q = str_index_of(target, "?", 0);
     Str path = if (q >= 0) { str_slice(target, 0, q) } else { target };
     Str query = if (q >= 0) { str_slice(target, q + 1, str_len(target)) } else { "" };
@@ -427,9 +436,7 @@ HsReq(T) hs_read_chunked(HttpRequest r, HsBuf(T) b0, Int at, HttpLimits lim, Lis
     // differently.
     if (!hs_ctl_free(b.data, at, ln.end)) { return hs_fail(400, b); }
     Str line = hs_ascii(b.data, at, ln.end, StrBuf());
-    Int semi = str_index_of(line, ";", 0);
-    Str hexs = str_trim(if (semi >= 0) { str_slice(line, 0, semi) } else { line });
-    Int size = hs_hex(hexs, 0, 0);
+    Int size = hs_chunk_size(line);
     if (size < 0) { return hs_fail(400, b); }
     Int data_at = ln.end + 2;
     if (size == 0) {
@@ -513,6 +520,24 @@ HsHead(T) hs_read_line_at(HsBuf(T) b, Int start, Int from, Int max) {
     return hs_read_line_at(hs_fill(b, b.data.len() + 1, start + max + 16384), start, next_from, max);
 }
 
+// The size on a chunk-size line, or -1. The hex digits start the line;
+// only SP or HTAB (BWS) may follow them, before a `;` extension or the
+// end (RFC 9112 §7.1). Whitespace before the size is refused: a proxy
+// that reads ` 5` differently frames the body differently.
+Int hs_chunk_size(Str line) {
+    Int semi = str_index_of(line, ";", 0);
+    Str field = if (semi >= 0) { str_slice(line, 0, semi) } else { line };
+    return hs_hex(str_slice(field, 0, hs_bws_end(field, str_len(field))), 0, 0);
+}
+
+// `e` moved back over trailing SP and HTAB in `s`.
+Int hs_bws_end(Str s, Int e) {
+    if (e <= 0) { return e; }
+    Int c = str_char_at(s, e - 1);
+    if (c != 32 && c != 9) { return e; }
+    return hs_bws_end(s, e - 1);
+}
+
 // Hex digits to a value; -1 on a non-digit or an empty string.
 Int hs_hex(Str s, Int i, Int acc) {
     if (i >= str_len(s)) { return if (i == 0) { -1 } else { acc }; }
@@ -570,12 +595,18 @@ pub Str http_reason(Int code) {
 }
 
 /// A reply with `body` as UTF-8 and a Content-Type of `content_type`.
+/// A `content_type` that is no valid field value (see `http_with_header`)
+/// refuses the reply: the result is `http_reply_status(500)`.
 pub HttpReply http_reply_text(Int status, Str content_type, Str body) {
+    if (!http_header_value_ok(content_type)) { return http_reply_status(500); }
     return HttpReply { .status = status, .headers = ["Content-Type: " + content_type], .body = http_bytes(body) };
 }
 
 /// A reply with the bytes `body` and a Content-Type of `content_type`.
+/// A `content_type` that is no valid field value refuses the reply, as in
+/// `http_reply_text`.
 pub HttpReply http_reply_bytes(Int status, Str content_type, List(Int) body) {
+    if (!http_header_value_ok(content_type)) { return http_reply_status(500); }
     return HttpReply { .status = status, .headers = ["Content-Type: " + content_type], .body = body };
 }
 
@@ -585,8 +616,52 @@ pub HttpReply http_reply_empty(Int status) {
 }
 
 /// `reply` with one more header line.
+///
+/// A header the caller cannot have meant is refused, never sent and never
+/// repaired: when `name` is not an RFC 9110 token (`http_header_name_ok`)
+/// or `value` holds CR, LF, NUL, another C0 control other than HTAB, or
+/// DEL (`http_header_value_ok`), the result is `http_reply_status(500)`
+/// in place of `reply`, which the handler can see by its status. A value
+/// carrying "\r\nSet-Cookie: x" would otherwise be a second header.
 pub HttpReply http_with_header(HttpReply reply, Str name, Str value) {
+    if (!http_header_name_ok(name) || !http_header_value_ok(value)) { return http_reply_status(500); }
     return HttpReply { .status = reply.status, .headers = reply.headers.concat([name + ": " + value]), .body = reply.body };
+}
+
+/// Whether `name` is a field name: one or more token characters (RFC 9110
+/// §5.1, §5.6.2: letters, digits and ``!#$%&'*+-.^_`|~``).
+pub Bool http_header_name_ok(Str name) {
+    return str_len(name) > 0 && hs_token_at(name, 0);
+}
+
+Bool hs_token_at(Str s, Int i) {
+    if (i >= str_len(s)) { return true; }
+    Int c = str_char_at(s, i);
+    Bool ok = (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57)
+        || c == 33 || (c >= 35 && c <= 39) || c == 42 || c == 43 || c == 45 || c == 46
+        || c == 94 || c == 95 || c == 96 || c == 124 || c == 126;
+    return ok && hs_token_at(s, i + 1);
+}
+
+/// Whether `value` may be sent as a field value: no CR, LF, NUL or other
+/// C0 control except HTAB, and no DEL (RFC 9110 §5.5).
+pub Bool http_header_value_ok(Str value) {
+    return hs_value_at(value, 0);
+}
+
+Bool hs_value_at(Str s, Int i) {
+    if (i >= str_len(s)) { return true; }
+    Int c = str_char_at(s, i);
+    if ((c < 32 && c != 9) || c == 127) { return false; }
+    return hs_value_at(s, i + 1);
+}
+
+// Whether the header line `l` is `name ":" value` with a token name and a
+// value `http_header_value_ok` accepts.
+Bool hs_field_line_ok(Str l) {
+    Int c = str_index_of(l, ":", 0);
+    if (c <= 0) { return false; }
+    return http_header_name_ok(str_slice(l, 0, c)) && http_header_value_ok(str_slice(l, c + 1, str_len(l)));
 }
 
 /// A plain-text page for `status`: the code and its reason phrase.
@@ -594,8 +669,14 @@ pub HttpReply http_reply_status(Int status) {
     return http_reply_text(status, "text/plain; charset=utf-8", f"{status} " + http_reason(status) + "\n");
 }
 
+// The header lines of a reply or stream head, each ended by CRLF. The
+// `headers` of an HttpReply or HttpStream can be built without
+// `http_with_header`, so the wire checks again: a line that is not a
+// token, a `:` and a valid value (`hs_field_line_ok`) is left out, never
+// written, so no caller data can start a header line of its own.
 Str hs_header_lines(List(Str) hs, Int i, StrBuf acc) {
     if (i >= hs.len()) { return acc.finish(); }
+    if (!hs_field_line_ok(hs[i])) { return hs_header_lines(hs, i + 1, acc); }
     return hs_header_lines(hs, i + 1, acc.push(hs[i]).push("\r\n"));
 }
 
@@ -772,8 +853,7 @@ HsFrame hs_chunks(List(UInt(8)) b, HsFrame f, HttpLimits lim) {
         return hs_chunks(b, hs_frame_chunk(f, at + 2, 2, f.total, f.lines + 1), lim);
     }
     Str line = hs_ascii(b, f.cpos, at, StrBuf());
-    Int semi = str_index_of(line, ";", 0);
-    Int size = hs_hex(str_trim(if (semi >= 0) { str_slice(line, 0, semi) } else { line }), 0, 0);
+    Int size = hs_chunk_size(line);
     if (size < 0 || f.total + size > lim.body_max) { return hs_frame_ready(f); }
     if (size == 0) { return hs_chunks(b, hs_frame_chunk(f, at + 2, 2, f.total, 0), lim); }
     if (f.lines >= hs_chunks_max()) { return hs_frame_ready(f); }
@@ -811,6 +891,7 @@ type HttpStep(K) = { K state; List(Int) out; Int wait_ms; Bool done; };
 /// A streamed reply: its head, the first step and the function that makes
 /// each step after it. No Content-Length: over HTTP/1.1 the body is
 /// chunked, so the connection can be kept; over HTTP/1.0 it ends at close.
+/// `headers` are written as an HttpReply's are: an invalid line is left out.
 type HttpStream(K) = { Int status; List(Str) headers; HttpStep(K) first; HttpStep(K) closure(K) next; };
 
 /// What a streaming handler returns: a whole reply or a stream.

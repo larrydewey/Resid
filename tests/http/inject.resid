@@ -1,0 +1,75 @@
+// Response and request header injection (RB-6): caller data never writes
+// a header line of its own. A value holding "\r\nX: y" is refused by
+// http_with_header, left out when an HttpReply built by hand carries it,
+// and makes http_build_request refuse the request. No sockets: the wire
+// bytes are inspected directly.
+import "httpserv.resid";
+import "http.resid";
+
+// The header lines of a wire reply, between the status line and the blank line.
+List(Str) head_lines(List(Int) wire) {
+    Str t = http_text(wire, 0, wire.len());
+    List(Str) hb = str_split(t, "\r\n\r\n");
+    List(Str) ls = str_split(hb[0], "\r\n");
+    return ls;
+}
+
+// The head's pieces split at every CR and every LF, so a bare one that
+// a lenient client would take as a line break counts as one here.
+List(Str) head_pieces(List(Int) wire) {
+    Str t = http_text(wire, 0, wire.len());
+    List(Str) hb = str_split(t, "\r\n\r\n");
+    return str_split(str_replace(hb[0], "\r", "\n"), "\n");
+}
+
+// Whether a line of `ls` from `i` starts with `p`.
+Bool any_starts(List(Str) ls, Int i, Str p) {
+    if (i >= ls.len()) { return false; }
+    if (str_starts_with(ls[i], p)) { return true; }
+    return any_starts(ls, i + 1, p);
+}
+
+Str st(HttpReply r) { return f"{r.status}"; }
+
+Str yes(Bool b) { return if (b) { "yes" } else { "no" }; }
+
+Int main() {
+    HttpReply base = http_reply_text(200, "text/plain", "hi\n");
+    // http_with_header refuses, visibly: a 500 in place of the reply.
+    println("crlf value -> " + st(http_with_header(base, "X-A", "a\r\nX: y")));
+    println("lf value -> " + st(http_with_header(base, "X-A", "a\nX: y")));
+    println("cr value -> " + st(http_with_header(base, "X-A", "a\rX: y")));
+    println("esc value -> " + st(http_with_header(base, "X-A", "a" + str_from_code(27) + "b")));
+    println("del value -> " + st(http_with_header(base, "X-A", "a" + str_from_code(127) + "b")));
+    println("tab value -> " + st(http_with_header(base, "X-A", "a\tb")));
+    println("utf8 value -> " + st(http_with_header(base, "X-A", "caf" + str_from_code(233) + "")));
+    println("space name -> " + st(http_with_header(base, "X A", "v")));
+    println("colon name -> " + st(http_with_header(base, "X:A", "v")));
+    println("crlf name -> " + st(http_with_header(base, "X\r\nY", "v")));
+    println("empty name -> " + st(http_with_header(base, "", "v")));
+    println("token name -> " + st(http_with_header(base, "X-Odd!#$%&'*+.^_`|~1", "v")));
+    println("crlf content-type -> " + st(http_reply_text(200, "text/plain\r\nX: y", "b")));
+    HttpReply refused = http_with_header(base, "X-A", "a\r\nX: y");
+    println("refused wire has X: " + yes(any_starts(head_pieces(http_reply_wire(refused, false, false)), 0, "X:")));
+    // Lines built by hand go through the wire check: the bad ones are left out.
+    HttpReply hand = HttpReply { .status = 200, .headers = ["X-Good: fine", "X-A: a\r\nX: y", "Bad Name: v", "NoColon", "X-B: b\nSet-Cookie: s=1"], .body = [] };
+    List(Str) ls = head_pieces(http_reply_wire(hand, true, false));
+    println("hand X-Good: " + yes(any_starts(ls, 0, "X-Good: fine")));
+    println("hand X-A: " + yes(any_starts(ls, 0, "X-A")));
+    println("hand X: " + yes(any_starts(ls, 0, "X:")));
+    println("hand Set-Cookie: " + yes(any_starts(ls, 0, "Set-Cookie")));
+    println("hand Bad Name: " + yes(any_starts(ls, 0, "Bad Name")));
+    println("hand lines: " + f"{head_lines(http_reply_wire(hand, true, false)).len()}");
+    // The client: a request is refused ("") rather than split.
+    println("req ok: " + yes(http_build_request("GET", "/a", "h:80", "X-A: 1\r\n", "close") != ""));
+    println("req path crlf: " + yes(http_build_request("GET", "/a\r\nX: y", "h", "", "close") == ""));
+    println("req path space: " + yes(http_build_request("GET", "/a HTTP/1.0", "h", "", "close") == ""));
+    println("req host crlf: " + yes(http_build_request("GET", "/", "h\r\nX: y", "", "close") == ""));
+    println("req method: " + yes(http_build_request("GE T", "/", "h", "", "close") == ""));
+    println("req conn crlf: " + yes(http_build_request("GET", "/", "h", "", "close\r\nX: y") == ""));
+    println("req extra blank line: " + yes(http_build_request("GET", "/", "h", "X-A: 1\r\n\r\nGET /evil HTTP/1.1\r\n", "close") == ""));
+    println("req extra bare lf: " + yes(http_build_request("GET", "/", "h", "X-A: 1\nX: y\r\n", "close") == ""));
+    println("req extra no crlf: " + yes(http_build_request("GET", "/", "h", "X-A: 1", "close") == ""));
+    println("req extra bad name: " + yes(http_build_request("GET", "/", "h", "X A: 1\r\n", "close") == ""));
+    return 0;
+}

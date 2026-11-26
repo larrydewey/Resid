@@ -118,6 +118,56 @@ probe "$PC/root.pem" "$PC/wild_partial.der" a.oo.example.test; want partial-wild
 probe "$PC/root.pem" "$PC/pl0_leaf.der" api.example.test "$PC/inters_pl0"; want pathlen-0-exceeded false
 probe "$PC/root.pem" "$PC/pl1_leaf.der" api.example.test "$PC/inters_pl1"; want pathlen-1-ok true
 
+# ── host forms (fixtures/hostcheck, gen_hostcheck.py) ───────────────
+# An iPAddress SAN is matched against the bytes the host literal names.
+# A compressed IPv6 host names the address the socket goes to, so `::1` is
+# the loopback and `2001:db8::1` ends in 1: a certificate for `1::` or
+# `2001:db8:1::` is for another machine.
+HC="$F/hostcheck"
+probe "$HC/v6_root.pem" "$HC/v6_loop.der" ::1; want v6-loopback true
+probe "$HC/v6_root.pem" "$HC/v6_loop.der" 0:0:0:0:0:0:0:1; want v6-loopback-long true
+probe "$HC/v6_root.pem" "$HC/v6_1colon.der" ::1; want v6-1colon-not-loopback false
+probe "$HC/v6_root.pem" "$HC/v6_1colon.der" 1::; want v6-1colon true
+probe "$HC/v6_root.pem" "$HC/v6_db8_1.der" 2001:db8::1; want v6-db8-1 true
+probe "$HC/v6_root.pem" "$HC/v6_db8_1.der" 2001:DB8:0::0:1; want v6-db8-1-other-spelling true
+probe "$HC/v6_root.pem" "$HC/v6_db8_1_left.der" 2001:db8::1; want v6-db8-1-left-refused false
+probe "$HC/v6_root.pem" "$HC/v6_loop.der" "::1%lo"; want v6-zone-refused false
+
+# Name constraints see the host in one spelling. The root excludes the
+# name evil.test and the range 10.0.0.0/8; a trailing `.` is the same
+# name, an IPv4-mapped IPv6 address is the same IPv4 address, and a host
+# with a `:` is an address, never a name a dNSName could carry.
+probe "$HC/nc_root.pem" "$HC/nc_dns.der" evil.test; want nc-excluded-name false
+probe "$HC/nc_root.pem" "$HC/nc_dns_dot.der" evil.test.; want nc-excluded-name-dot false
+probe "$HC/nc_root.pem" "$HC/nc_dns.der" evil.test.; want nc-excluded-host-dot false
+probe "$HC/nc_root.pem" "$HC/nc_sub_dot.der" www.evil.test.; want nc-excluded-sub-dot false
+probe "$HC/nc_root.pem" "$HC/nc_ip4.der" 10.0.0.1; want nc-excluded-ip4 false
+probe "$HC/nc_root.pem" "$HC/nc_ip4mapped.der" 0:0:0:0:0:ffff:0a00:0001; want nc-excluded-ip4-mapped false
+probe "$HC/nc_root.pem" "$HC/nc_ip4mapped.der" ::ffff:10.0.0.1; want nc-excluded-ip4-mapped-dotted false
+probe "$HC/nc_root.pem" "$HC/nc_ip4.der" ::ffff:10.0.0.1; want nc-excluded-ip4-host-mapped false
+probe "$HC/nc_root.pem" "$HC/nc_dns_mapped.der" ::ffff:10.0.0.1; want nc-dnsname-is-no-address false
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" good.test; want nc-outside-excluded true
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" good.test.; want nc-outside-excluded-dot true
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" 192.0.2.1; want nc-outside-excluded-ip4 true
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" ::ffff:192.0.2.1; want nc-outside-excluded-ip4-mapped true
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" 2001:db8::1; want nc-outside-excluded-ip6 true
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" 192.0.2.1.; want dotted-quad-with-dot-refused false
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" good.test..; want two-trailing-dots-refused false
+probe "$HC/nc_root.pem" "$HC/nc_ok.der" "good.test x"; want host-with-space-refused false
+probe "$HC/ncp_root.pem" "$HC/ncp_ip4.der" 192.0.2.7; want ncp-permitted-ip4 true
+probe "$HC/ncp_root.pem" "$HC/ncp_ip4mapped.der" ::ffff:192.0.2.7; want ncp-permitted-ip4-mapped true
+
+# A leaf's keyUsage, when it has one, has to allow digitalSignature: the
+# server proves its key with a CertificateVerify signature (RFC 8446
+# §4.4.2.2). An encipherment-only key, or one for signing certificates
+# and CRLs, does not authenticate a server; no keyUsage at all is
+# unrestricted.
+probe "$HC/ku_root.pem" "$HC/ku_keyenc.der" ku.test; want ku-keyenc-only false
+probe "$HC/ku_root.pem" "$HC/ku_certsign.der" ku.test; want ku-certsign-only false
+probe "$HC/ku_root.pem" "$HC/ku_digsig.der" ku.test; want ku-digsig true
+probe "$HC/ku_root.pem" "$HC/ku_digsig_keyenc.der" ku.test; want ku-digsig-keyenc true
+probe "$HC/ku_root.pem" "$HC/ku_none.der" ku.test; want ku-absent true
+
 # ── Certificate message framing (tm_cert_list) ──────────────────────
 # A server's chain arrives as one message; the intermediates in it are
 # what the trust store walks. Getting the walk wrong here is not cosmetic:
@@ -198,6 +248,38 @@ REV="$(rev bad "$STALE")"
 # verdict.
 REV="$(rev bad "$IN_WINDOW")"
 [ "$(revfield revoked_list)" = "2001" ] && ok || bad "CRL should list serial 2001, got $(revfield revoked_list)"
+
+# What a CRL's extensions let it say (fixtures/crlscope, gen_crlscope.py;
+# RFC 5280 §5.2-5.3). A critical extension, on the CRL or on an entry,
+# that the walk does not process makes the CRL unusable, and so does an
+# indirect CRL or a delta that un-revokes. A delta CRL, or one an
+# issuingDistributionPoint scopes or partitions, still revokes what it
+# lists, but not listing a serial is no answer: such a CRL never covers a
+# certificate for `revocation_required`.
+CS="$F/crlscope"
+mkdir -p "$W/crlscope" && cp "$CS/ca.der" "$W/crlscope/"
+crs() { # <name> <crl> <leaf> <field=value>...
+    local name="$1" crl="$2" leaf="$3"; shift 3
+    REV="$("$PROBE" "$W/crlscope" --revoke "$CS/$crl.der" "$CS/$leaf.der" localhost "" "$CS/ca.der" "$IN_WINDOW" 2>&1)"
+    local kv
+    for kv in "$@"; do
+        if [ "$(revfield "${kv%%=*}")" = "${kv#*=}" ]; then ok; else bad "crl $name: ${kv%%=*}=$(revfield "${kv%%=*}") want ${kv#*=}"; fi
+    done
+}
+crs full-good full good crl_usable=true crl_complete=true covered=true TRUSTED-strict=true
+crs full-bad full bad revoked=true TRUSTED=false
+crs noncrit-unknown noncrit_unknown good crl_usable=true covered=true TRUSTED-strict=true
+crs crit-unknown crit_unknown good crl_usable=false covered=false TRUSTED-strict=false
+crs crit-unknown-lists-bad crit_unknown_bad bad crl_usable=false revoked=false TRUSTED-strict=false
+crs entry-critical entry_crit good crl_usable=false covered=false TRUSTED-strict=false
+crs indirect indirect good crl_usable=false covered=false TRUSTED-strict=false
+crs delta delta good crl_usable=true crl_complete=false covered=false TRUSTED=true TRUSTED-strict=false
+crs delta-lists-bad delta_bad bad crl_usable=true revoked=true TRUSTED=false
+crs delta-remove delta_remove bad crl_usable=false TRUSTED-strict=false
+crs idp-partition idp_part good crl_usable=true crl_complete=false covered=false TRUSTED-strict=false
+crs idp-partition-lists-bad idp_part_bad bad revoked=true TRUSTED=false
+crs idp-reasons idp_reasons good crl_complete=false covered=false TRUSTED-strict=false
+crs idp-users-only idp_users good crl_complete=false covered=false TRUSTED-strict=false
 
 # PEM reading, checked through what it produces.
 probe "$F/root.pem" "$F/root.der" localhost
@@ -559,10 +641,15 @@ grep -q "^DIAL-OK alpn=$" "$W/client_noalpn.out" && ok \
 grep -q "^127.0.0.1 -> 4 bytes 7f000001$" "$W/ip.out" \
 && grep -q "^127.0.0.10 -> 4 bytes 7f00000a$" "$W/ip.out" \
 && grep -q "^:: -> 16 bytes 00000000000000000000000000000000$" "$W/ip.out" \
-&& grep -q "^2001:db8::1 -> 16 bytes 20010db8000100000000000000000000$" "$W/ip.out" \
+&& grep -q "^2001:db8::1 -> 16 bytes 20010db8000000000000000000000001$" "$W/ip.out" \
 && grep -q "^1:2:3:4:5:6:7:8 -> 16 bytes 00010002000300040005000600070008$" "$W/ip.out" \
 && [ "$(grep -cE '^(256\.1\.1\.1|1\.2\.3|cafe|1:2:3:4:5:6:7|localhost) -> 0 bytes $' "$W/ip.out")" = 5 ] && ok \
     || bad "address literals: $(tr '\n' ' ' < "$W/ip.out")"
+# IPv6 forms byte for byte: the `::` closes the zero run where it is
+# written, not at the end, so `::1` is the loopback and not `1::`. A
+# certificate for one of these must never be matched against the other.
+[ "$(grep -c '^IPV6 ok ' "$W/ip.out")" = 43 ] && [ "$(grep -c '^IPV6 BAD ' "$W/ip.out")" = 0 ] && ok \
+    || bad "IPv6 literals: $(grep '^IPV6 BAD' "$W/ip.out" | tr '\n' ' ')"
 
 # A trust store that does not contain the issuer is refused, and the
 # handshake says which name it could not verify rather than hanging up
