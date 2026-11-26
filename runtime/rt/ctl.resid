@@ -59,23 +59,186 @@ pub Int rt_abort_msg(Int msg) { return rt_fail(msg, 0); }
 pub Int rt_abort_msg_at(Int msg, Int at) { return rt_fail(msg, at); }
 
 // ─── Structured spawn (spec §19) ───────────────────────────────────────
-// A block {worker, captures, result}: the worker runs on a fresh thread and
-// is joined; an abort in it becomes Err(RegionError{message}).
+// A running region's block (sp_size bytes): 0 worker, 8 captures, 16 the
+// Result, 24 the parent's sandbox frames (cap_snapshot, the worker's to
+// free), 32 the done word, 40..352 the parent's known string lengths
+// (str_fast_save), 352..416 the child's region, detached (a region record),
+// 416 an abort's message or 0 (the buffer at 464 when it fits, else a
+// heap copy: a block freed on the parent's thread would go onto its free
+// lists, never back to the worker's), 424 its slot in this thread's
+// table of running regions plus one (0 once joined), 432 a scalar result's
+// kind (0 none, 1 Ok of a scalar, 2 no Result), 440 its type word, 448 its
+// payload, 456 whether the job runs in a region of its own, 464..976 the
+// message buffer.
+//
+// The block lives in the parent's current region (the heap at depth 0), as
+// any value made at the spawn does; at depth 0 the child's region is left
+// to the program when the join takes it (region_abandon: owned by no
+// region, as heap memory is). The worker runs in a region of its own,
+// pushed on its thread; when it ends the region is detached into the block,
+// and the parent takes it at the join (spawn_finish), pages and all, into
+// the block's region (no copy). A Result whose payload is a scalar needs
+// none of it: the child frees its region itself (its pages stay in its
+// thread's cache for the next job) and the join makes the Result again in
+// the block's region.
+// An abort frees the child's region at once and the join makes the
+// Err(RegionError) in the block's region. A spawn made while an arena is
+// active (the compiler's own bulk arenas, which only the heap depth
+// reaches) runs its job at depth 0 as before: its values are heap memory. Nothing of a job outlives the
+// region its spawn was made in, and only what its Result reaches lives that
+// long.
+//
+// A region is never freed while a region started from it may still write
+// its block: a pop or a loop's compaction first joins every running region
+// whose block lies in what it frees (spawn_join_from), so an abort that
+// unwinds past a spawn, or a scope left without a join, waits for it.
+Int sp_size() { return 976; }
 
 pub Int spawn_run(Int a) { return st64(a + 16, resid_raw_call2(ld64(a), ld64(a + 8), 0)); }
 
+// The child's side, on its own thread (or inline on the parent's).
 pub Int spawn_entry(Int a) {
-    if (!under_catch(resid_raw_fn("spawn_run"), a)) { return ld64(a + 16); }
-    Int m = ld64(catch_msg());
-    Int region = xmalloc(8);
-    _ = st64(region, cstr_dup(if (m != 0) { m } else { resid_raw_addr("child region aborted") }));
-    Int slots = resid_raw_tls("spawn_slot", 8);
-    _ = st64(slots, region);
-    return c_box_new(2, 1, slots, resid_raw_addr("Result"));
+    _ = st64(a + 416, 0) + st64(a + 432, 0) + rec_init(a + 352, 0);
+    if (ld64(a + 456) == 0) {
+        if (under_catch(resid_raw_fn("spawn_run"), a)) { return spawn_abort_heap(a); }
+        return 0;
+    }
+    Int d = rt_scope_push();
+    if (under_catch(resid_raw_fn("spawn_run"), a)) { return spawn_abort(a, d); }
+    // Regions this job started and left running are joined before its
+    // region leaves the thread (their blocks lie in it).
+    _ = spawn_join_from(d);
+    Int res = ld64(a + 16);
+    Int kind = if (res == 0) { 2 } else { if (ld32(res) == 1 && ld32(res + 4) == 1 && sp_scalar(ld64(res + 16))) { 1 } else { 0 } };
+    _ = st64(a + 432, kind) + rec_init(a + 352, 0);
+    if (kind != 0) {
+        _ = if (kind == 1) { st64(a + 440, ld64(res + 8)) + st64(a + 448, ld64(res + 16)) } else { 0 };
+        _ = st64(a + 16, 0);
+        return rt_scope_pop(d);
+    }
+    Int r = rec_at(d);
+    _ = if (cur_region() == r) { rec_save(r) } else { 0 };
+    _ = mcopy(a + 352, r, 64);
+    // Emptied, with the live bump words, so the pop frees none of it.
+    _ = rec_init(r, ld64(r)) + top_clear();
+    return rt_scope_pop(d);
+}
+
+// An abort: the message is copied out of the region (it may lie there),
+// the region freed (nothing in it survives: an out-of-memory job gives its
+// memory back before anything else is allocated), then the message copied
+// into the block (or to the heap when it does not fit) for the join.
+Int spawn_abort(Int a, Int d) {
+    Int m0 = ld64(catch_msg());
+    Int buf = resid_raw_tls("spawn_msg", 1024);
+    _ = cstr_copy_cap(buf, if (m0 != 0) { m0 } else { resid_raw_addr("child region aborted") }, 1024);
+    _ = st64(catch_msg(), buf);
+    _ = spawn_join_from(d);
+    _ = rt_scope_pop(d);
+    return spawn_abort_heap(a);
+}
+
+// The message (in the thread's buffer) into the block, or a heap copy
+// when it does not fit.
+Int spawn_abort_heap(Int a) {
+    Int buf = resid_raw_tls("spawn_msg", 1024);
+    Int m0 = ld64(catch_msg());
+    _ = if (m0 != buf) { cstr_copy_cap(buf, if (m0 != 0) { m0 } else { resid_raw_addr("child region aborted") }, 1024) } else { 0 };
+    _ = st64(a + 16, 0) + rec_init(a + 352, 0) + st64(a + 432, 2);
+    if (c_strlen(buf) < 512) { return cstr_copy_cap(a + 464, buf, 512) + st64(a + 416, a + 464); }
+    return st64(a + 416, cstr_dup(buf));
 }
 
 @export("resid_spawn", "ptr(ptr,ptr)")
 pub Int rt_spawn(Int worker, Int captures) { return rt_spawn_wait(rt_spawn_start(worker, captures)); }
+
+// The parent's side of a join, once: the child's region goes where the
+// block lives (spawn_finish's rule above).
+Int spawn_finish(Int a) {
+    _ = sp_unlist(a);
+    Int t = rec_of(region_of(a));
+    Int c = a + 352;
+    Int msg = ld64(a + 416);
+    if (msg != 0) {
+        _ = st64(a + 16, sp_err(t, msg)) + st64(a + 416, 0);
+        return if (msg != a + 464) { c_free(msg) } else { 0 };
+    }
+    Int kind = ld64(a + 432);
+    if (kind == 1) { return st64(a + 16, sp_box(t, 1, ld64(a + 440), ld64(a + 448))); }
+    if (kind == 2) { return 0; }
+    return if (t != 0) { region_adopt_detached(c, t) } else { region_abandon(c) };
+}
+
+// A payload word that points at nothing in the child's region.
+Bool sp_scalar(Int v) { return v == 0 || box_imm(v) || box_fimm(v) || ult(v - interned(), 65); }
+
+// n bytes in region t, or on the heap (t == 0: the block is there).
+Int sp_alloc(Int t, Int n) { return if (t != 0) { alloc_in(t, n) } else { xmalloc(n) }; }
+
+// A one-slot Result box {tag, 1, type, slot} in t.
+Int sp_box(Int t, Int tag, Int ty, Int slot) {
+    Int b = sp_alloc(t, 24);
+    _ = st32(b, tag) + st32(b + 4, 1) + st64(b + 8, ty);
+    return st64(b + 16, slot) * 0 + b;
+}
+
+// Err(RegionError{message}) in t.
+Int sp_err(Int t, Int msg) {
+    Int n = c_strlen(msg);
+    Int m = sp_alloc(t, n + 1);
+    _ = mcopy(m, msg, n + 1);
+    Int rec = sp_alloc(t, 8);
+    _ = st64(rec, m);
+    return sp_box(t, 2, resid_raw_addr("Result"), rec);
+}
+
+// This thread's running regions not yet joined: {array, capacity}, the
+// count in the allocator's word 12 (spawn_pending).
+Int sp_tab() { return resid_raw_tls("rt_spawn_tab", 16); }
+
+Int sp_list(Int a) {
+    Int t = sp_tab();
+    Int n = spawn_pending();
+    _ = if (n == ld64(t + 8)) { st64(t, xrealloc(ld64(t), max(16, n * 2) * 8)) + st64(t + 8, max(16, n * 2)) } else { 0 };
+    // Blocks come in the order of their regions' ids (a younger region is
+    // pushed later and popped, joining its spawns, sooner), which lets a
+    // join scan stop early; a block out of that order turns the stop off
+    // until the table empties.
+    _ = if (n > 0 && region_of(a) < region_of(ld64(ld64(t) + (n - 1) * 8))) { st64(sp_unsorted(), 1) } else { 0 };
+    _ = st64(ld64(t) + n * 8, a) + st64(a + 424, n + 1);
+    return spawn_pending_set(n + 1);
+}
+
+Int sp_unsorted() { return resid_raw_tls("rt_spawn_unsorted", 8); }
+
+// A joined block leaves a hole; holes at the end are dropped.
+Int sp_unlist(Int a) {
+    Int t = sp_tab();
+    _ = st64(ld64(t) + (ld64(a + 424) - 1) * 8, 0) + st64(a + 424, 0);
+    Int n = sp_trim(ld64(t), spawn_pending());
+    _ = if (n == 0) { st64(sp_unsorted(), 0) } else { 0 };
+    return spawn_pending_set(n);
+}
+
+Int sp_trim(Int arr, Int n) { return if (n > 0 && ld64(arr + (n - 1) * 8) == 0) { sp_trim(arr, n - 1) } else { n }; }
+
+// Join every running region whose block lies in a region at stack depth
+// index d or deeper on this thread (about to be freed): those whose id is
+// at least that region's, as ids grow with depth.
+pub Int spawn_join_from(Int d) {
+    if (spawn_pending() == 0) { return 0; }
+    return sp_join_scan(spawn_pending() - 1, ld64(rec_at(d)));
+}
+
+Int sp_join_scan(Int i, Int lo) {
+    if (i < 0) { return 0; }
+    Int a = ld64(ld64(sp_tab()) + i * 8);
+    Int id = if (a != 0) { region_of(a) } else { 0 };
+    if (a != 0 && id < lo && ld64(sp_unsorted()) == 0) { return 0; }
+    _ = if (a != 0 && id >= lo) { rt_spawn_wait(a) } else { 0 };
+    // A join may drop holes at the end: the scan goes on below i.
+    return sp_join_scan(min(i - 1, spawn_pending() - 1), lo);
+}
 
 // ─── Worker pool ───────────────────────────────────────────────────────
 // Regions run on pooled threads: a worker that finishes its region waits
@@ -113,36 +276,43 @@ Int futex_wait0(Int addr) {
     return futex_wait0(addr);
 }
 
-// Run region a: its Result at a + 16, then the done word a + 32. Only a
-// pooled worker loads the parent's string lengths (and resets them after):
-// a region run inline on the parent must not keep them.
+// Run region a (spawn_entry), with the parent's known string lengths. Only a
+// pooled worker loads them (and resets them after): a region run inline
+// on the parent must not keep them.
 Int run_job(Int a) {
     _ = id_block_reset();
     _ = str_fast_load(a + 40);
     // The starting thread's sandbox frames, under the spawn's own frame.
     _ = cap_install(ld64(a + 24));
     _ = c_free(ld64(a + 24));
-    _ = st64(a + 16, spawn_entry(a));
-    _ = str_index_reset();
+    _ = spawn_entry(a);
+    return str_index_reset();
+}
+
+// Done: the parent may go on (and free the block) from here; the wake
+// names the word's address only.
+Int job_done(Int a) {
     _ = resid_raw_fetch_add(a + 32, 1);
     return futex_wake(a + 32);
 }
 
 pub Int pool_main(Int w) {
-    _ = run_job(ld64(w + 8));
+    Int a = ld64(w + 8);
+    _ = run_job(a);
     _ = st64(w + 8, 0);
     _ = st64(w + 16, 0);
     // A new region starts outside any sandbox frame.
     _ = cap_depth_set(0);
+    // Idle again before the parent sees the result: its next spawn finds
+    // this worker rather than starting another thread.
     _ = pool_push(w);
+    _ = job_done(a);
     _ = futex_wait0(w + 16);
     return pool_main(w);
 }
 
-// A running region: {worker, captures, result, the parent's sandbox
-// frames (cap_snapshot), done, the parent's known string lengths
-// (str_fast_save)}. The child starts at once; the
-// parent waits for it on the result's first use and, at the latest, before
+// A running region: its block (Structured spawn, above). The child starts
+// at once; the parent waits for it on the result's first use and, at the latest, before
 // leaving the scope that bound it (spec §19: completion is structured).
 // A spawn region's thread stack in MB: 256 by default, RESID_SPAWN_STACK_MB
 // overrides (8 to 1048576). Fixed-capacity values live inline in their
@@ -163,15 +333,18 @@ Int spawn_stack_mb() {
 pub Int rt_spawn_start(Int worker, Int captures) {
     // Lazily loaded process state is loaded here, before any child can race.
     _ = args_load();
-    Int a = xmalloc(352);
+    Int a = if (ag_scope_depth() > 0) { ralloc(sp_size()) } else { xmalloc(sp_size()) };
     _ = st64(a, worker);
     _ = st64(a + 8, captures);
     _ = st64(a + 16, 0);
     _ = st64(a + 32, 0);
+    _ = st64(a + 416, 0);
+    _ = st64(a + 456, if (cur_arena() == 0 && bulk_depth() == 0) { 1 } else { 0 });
     _ = str_fast_save(a + 40);
     // A pooled worker starts with no frames; it runs the region under a
     // copy of this thread's, so a spawn inside a sandbox stays inside it.
     _ = st64(a + 24, cap_snapshot());
+    _ = sp_list(a);
     Int idle = pool_pop();
     if (idle != 0) {
         _ = st64(idle + 8, a);
@@ -184,14 +357,16 @@ pub Int rt_spawn_start(Int worker, Int captures) {
     Int t = thread_spawn(resid_raw_fn("pool_main"), w, spawn_stack_mb() * 1048576);
     // No thread (resources exhausted): run the region here, now, on this
     // thread's own frames.
-    _ = if (t == 0) { c_free(w) + c_free(ld64(a + 24)) + st64(a + 24, 0) + st64(a + 16, spawn_entry(a)) + st64(a + 32, 1) } else { 0 };
+    _ = if (t == 0) { c_free(w) + c_free(ld64(a + 24)) + st64(a + 24, 0) + spawn_entry(a) + st64(a + 32, 1) } else { 0 };
     return a;
 }
 
-// The region's Result, waiting for it the first time.
+// The region's Result, waiting for it the first time (and taking its
+// region then: spawn_finish).
 @export("resid_spawn_wait", "ptr(ptr)")
 pub Int rt_spawn_wait(Int a) {
     _ = futex_wait0(a + 32);
+    _ = if (ld64(a + 424) != 0) { spawn_finish(a) } else { 0 };
     return ld64(a + 16);
 }
 

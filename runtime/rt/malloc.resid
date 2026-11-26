@@ -191,7 +191,9 @@ pub Int rt_mem_limit_set(Int mb) {
 pub Int mem_take(Int n) {
     Int now = resid_raw_fetch_add(mem_used(), n) + n;
     Int lim = limit_bytes();
-    if (lim > 0 && now > lim && resident_bytes() > lim) { return over_budget(lim); }
+    // Refused: the bytes were never taken, so they are not counted (an
+    // abort caught by a spawned region leaves the budget as it was).
+    if (lim > 0 && now > lim && resident_bytes() > lim) { return mem_give(n) + over_budget(lim); }
     return 0;
 }
 

@@ -413,6 +413,18 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/str_repeat.resid -o "$W/str_repe
 else
     fail=$((fail + 1)); echo "FAIL str_repeat in a loop: $(tail -1 "$W/str_repeat.out" "$W/str_repeat.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# Spawned regions in a loop (ctl.resid, Structured spawn): control blocks,
+# each job's garbage and an aborted job's memory are given back at the
+# join, and a job past the memory budget fails alone. Measured: 66 MB, the
+# budget the memory bomb runs into; before, the first loop alone kept
+# 120 MB and the bomb aborted the process.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/spawn_jobs.resid -o "$W/spawn_jobs") > "$W/spawn_jobs.log" 2>&1 \
+    && RESID_MEM_LIMIT=64 timeout 120 "$W/spawn_jobs" > "$W/spawn_jobs.out" 2>&1 \
+    && [ "$(tr '\n' ' ' < "$W/spawn_jobs.out")" = "599997 -100000 40000780 4999950000 -2 3003 " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL spawned regions in a loop: $(tail -1 "$W/spawn_jobs.out" "$W/spawn_jobs.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # Volatile raw loads and stores (lower.resid): two processes pass a counter
 # through a shared page, each polling with resid_raw_loadv64; a plain load
 # is hoisted out of the loop and the program never ends. Built from its own

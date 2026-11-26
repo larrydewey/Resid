@@ -131,6 +131,9 @@ Int pages_take(Int k, Int id) {
 Int run_take(Int k) {
     Int base = rg_base();
     Int head = rg_g() + 32 + k * 8;
+    // Counted first: past the budget the abort (which a spawned region
+    // catches) leaves the free runs as they were.
+    _ = mem_take((1 << k) * rg_page());
     _ = rg_lock();
     Int p = ld64(head);
     _ = if (p != 0) { st64(head, ld64(p)) } else { 0 };
@@ -138,8 +141,7 @@ Int run_take(Int k) {
     Bool fresh = p == 0 && at + (1 << k) <= rg_pages();
     _ = if (fresh) { st64(rg_g() + 8, at + (1 << k)) } else { 0 };
     _ = rg_unlock();
-    if (p == 0 && !fresh) { return rt_abort("region address space exhausted"); }
-    _ = mem_take((1 << k) * rg_page());
+    if (p == 0 && !fresh) { return mem_give((1 << k) * rg_page()) + rt_abort("region address space exhausted"); }
     Int q = if (p != 0) { p } else { base + at * rg_page() };
     // Secret mode locks every run it hands out (a reused one was unlocked
     // when given back), on fault: mlock would make the whole run resident.
@@ -523,6 +525,11 @@ pub Int rt_loop_move(Int l, Int step) {
     // found carries no builder: see Generations).
     if (step > 10) { return gen_move(l, step - 10); }
     Int nr = resid_raw_tls("rg_next", 64);
+    if (step == 1) {
+        // A spawned region whose block lies in the loop's regions is joined
+        // before they are freed (ctl.resid, Structured spawn).
+        _ = spawn_join_from(l);
+    }
     Int r = rec_at(l);
     if (step == 1) {
         _ = rec_save(r);
@@ -547,6 +554,7 @@ Int gen_move(Int l, Int step) {
     Int y = rec_at(d - 1);
     Bool has_old = d == l + 2;
     if (step == 1) {
+        _ = spawn_join_from(l);
         _ = rec_save(y);
         // The carried values move now (list_move adopts transient lists).
         _ = st64(resid_raw_tls("rg_compact", 8), 1) + fwd_reset();
@@ -640,7 +648,7 @@ Int keep_from(Int l, Int i) {
     return keep_from(l, i - 1);
 }
 
-Int region_abandon(Int r) {
+pub Int region_abandon(Int r) {
     Int top = ld64(r + 8);
     _ = if (top != 0) { retag(top, 0) } else { 0 };
     _ = if (ld64(r + 56) != 0) { lg_retag(ld64(r + 56), 0, false) } else { 0 };
@@ -655,6 +663,29 @@ pub Int region_merge(Int r, Int p) {
     _ = if (top != 0) { st64(retag(top, ld64(p)), ld64(p + 8)) + st64(p + 8, top) } else { 0 };
     _ = st64(p + 32, ld64(p + 32) + ld64(r + 32));
     return st64(r + 8, 0) + st64(r + 16, 0) + st64(r + 24, 0) + st64(r + 32, 0);
+}
+
+// A child region detached by its spawn (ctl.resid) taken into live region
+// t: its pages go below t's top page (t's bump, and so the inline fast
+// path and young(), stay as they are), its large runs onto t's list. The
+// child's region is younger than t and points only into itself or into
+// what the spawn captured, which is no younger than t: nothing older than
+// t points into it.
+pub Int region_adopt_detached(Int c, Int t) {
+    Bool cur = ag_scope_depth() > 0 && cur_region() == t;
+    _ = if (cur) { rec_save(t) } else { 0 };
+    _ = lg_merge(c, t);
+    Int top = ld64(c + 8);
+    Int tt = ld64(t + 8);
+    Int oldest = if (top != 0) { retag(top, ld64(t)) } else { 0 };
+    // An empty t takes the child's top page and bump as its own.
+    _ = if (top != 0 && tt == 0) { st64(t + 8, top) + st64(t + 16, ld64(c + 16)) + st64(t + 24, ld64(c + 24)) } else { 0 };
+    _ = if (top != 0 && tt != 0) { st64(oldest, ld64(tt)) + st64(tt, top) } else { 0 };
+    _ = st64(t + 32, ld64(t + 32) + ld64(c + 32));
+    _ = rec_init(c, 0);
+    _ = if (cur) { rec_load(t) } else { 0 };
+    Int d = ag_scope_depth();
+    return if (d > 0 && t == rec_at(d - 1)) { due_sync(d) } else { 0 };
 }
 
 // Each page run from pg back owned by id; the oldest run.

@@ -15,7 +15,8 @@
 // 3 mark, 4 scope depth, 5 the innermost region's top page, 6 its bump
 // pointer, 7 its end, 8 region records, 9 their capacity, 10 the current
 // region's record (the innermost, or the one region_use made current),
-// 11 the region_use save stack, 12 spare, 13 the young id: the innermost
+// 11 the region_use save stack, 12 the spawned regions this thread has
+// started and not yet joined (ctl.resid, spawn_join_from), 13 the young id: the innermost
 // region's id while it is the current region, 0 at depth 0, else -1
 // (yid_sync, at every change of words 4 and 10). A thread's exit runs
 // scope_thread_exit (resid_start's thread_main).
@@ -79,6 +80,8 @@ Int arena_bump(Int a, Int size0) {
 pub Int cur_arena() { return ag(0); }
 pub Int arena_alloc(Int a, Int size) { return arena_bump(a, size); }
 pub Int ag_scope_depth() { return ag(4); }
+pub Int spawn_pending() { return ag(12); }
+pub Int spawn_pending_set(Int n) { return as_(12, n); }
 pub Int cur_region() { return ag(10); }
 
 // The current region's top page, bump and end, emptied.
@@ -234,6 +237,8 @@ pub Int rt_scope_pop(Int d) {
 
 @noinline
 Int scope_pop_slow(Int d) {
+    // A spawned region still writes its block: joined before its pages go.
+    _ = if (ag(12) != 0) { spawn_join_from(d) } else { 0 };
     _ = rec_save(rec_at(ag(4) - 1));
     Int freed = pop_regions(ag(4) - 1, d, 0);
     _ = as_(4, d);
