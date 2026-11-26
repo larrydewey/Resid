@@ -518,7 +518,6 @@ HsHead(T) hs_read_line_at(HsBuf(T) b, Int start, Int from, Int max) {
     return hs_read_line_at(hs_fill(b, b.data.len() + 1, start + max + 16384), start, next_from, max);
 }
 
-// Hex digits to a value; -1 on a non-digit or an empty string.
 // The size on a chunk-size line, or -1. The hex digits start the line;
 // only SP or HTAB (BWS) may follow them, before a `;` extension or the
 // end (RFC 9112 §7.1). Whitespace before the size is refused: a proxy
@@ -537,6 +536,7 @@ Int hs_bws_end(Str s, Int e) {
     return hs_bws_end(s, e - 1);
 }
 
+// Hex digits to a value; -1 on a non-digit or an empty string.
 Int hs_hex(Str s, Int i, Int acc) {
     if (i >= str_len(s)) { return if (i == 0) { -1 } else { acc }; }
     if (i >= 8) { return -1; }
