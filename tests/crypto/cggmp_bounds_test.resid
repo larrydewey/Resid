@@ -1,0 +1,118 @@
+// A peer's proof responses are bounded before the verifier exponentiates by
+// them. Before 2026-11-27 fac's w1, w2, sigma and v and the z3/z4 of enc,
+// log*, enc-elg, aff-g and aff-p went straight into exponentiations, whose
+// time grows with the exponent: a 20000-limb w1 took 13 s, a 1 MB field
+// about 85 s, per message (cgrng-normal-1). Honest proofs still pass; the
+// interop vectors from Taurus are in cggmp_zk_test.resid.
+
+import "../../lib/cggmp_harness.resid";
+import "../../lib/cose.resid";
+
+List(UInt(64)) nat(Str hex) { return bn_from_be(cose_hex_decode(hex)); }
+
+PaillierSec fixture_sec() {
+    PaillierSec sec = paillier_sec(nat("c7a0a26d66491aa191e208dacad5e78e23c25b4ba562ef4b3b221ff8145257be0fa8ed3d39a016c37525162e12a61ebadecb27eb243f3a34fc42d1d0b9166d8fdcb4e7811efe5f11ad35501c444f9d0675e9af4a0ceceadda6b85f5875aa5704ec6ec283301faa4bf44de4b5ec0fa15447042f413cf862f1978ffebc030cd8b3"), nat("c701021e91631cbcb4777dbcb122eae89fd1c3c3bff6621ecefd132929afbbdc64468d3fddfd3cb4c7a4f5c8c014916f8a3eb850e8d38089f9e5f58922ccbdd12912e610192914bd7d841f86e12a53d30a70f41290f85a11639f5c4f45d11ed12ea3d76ed22012dbe8b73a90fa3bea819dcc99b2a7378dc48019b415561cfe17")) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    return sec;
+}
+
+PaillierPub fixture_pub() { PaillierSec sec = fixture_sec(); return paillier_pub(bn_mul(sec.p, sec.q)); }
+Pedersen aux() { return Pedersen {.n = fixture_pub().n, .s = [8], .t = [3]}; }
+
+List(UInt(64)) ones(Int n, Int i, ListBuf(UInt(64)) acc) {
+    if (i >= n) { return acc.finish(); }
+    return ones(n, i + 1, acc.push(18446744073709551615));
+}
+
+// 100000 limbs (6.4 million bits): a verifier that exponentiated by it
+// would take over a minute; refused by its size, it takes no time.
+BnInt huge() { return zi_from_nat(ones(100000, 0, ListBuf())); }
+
+Transcript tr() { return tr_item(tr_new(), "T", [1, 2, 3]); }
+
+test "fac: an honest proof passes; a huge w1, w2, sigma, v, z1 or z2 is refused" {
+    PaillierSec sec = fixture_sec();
+    List(UInt(64)) n = bn_mul(sec.p, sec.q);
+    Option(FacProof) o = fac_prove(sec.p, sec.q, aux(), tr(), cg_rng([1], "fac", 4 * 4300));
+    FacProof pf = o else { FacProof {.p = [], .q = [], .a = [], .b = [], .t = [], .sigma = zi_zero(), .z1 = zi_zero(), .z2 = zi_zero(), .w1 = zi_zero(), .w2 = zi_zero(), .v = zi_zero()} };
+    expect(fac_verify(n, aux(), pf, tr())).toBeTrue();
+    BnInt h = huge();
+    expect(fac_verify(n, aux(), FacProof {.p = pf.p, .q = pf.q, .a = pf.a, .b = pf.b, .t = pf.t, .sigma = pf.sigma, .z1 = pf.z1, .z2 = pf.z2, .w1 = h, .w2 = pf.w2, .v = pf.v}, tr())).toBeFalse();
+    expect(fac_verify(n, aux(), FacProof {.p = pf.p, .q = pf.q, .a = pf.a, .b = pf.b, .t = pf.t, .sigma = pf.sigma, .z1 = pf.z1, .z2 = pf.z2, .w1 = pf.w1, .w2 = h, .v = pf.v}, tr())).toBeFalse();
+    expect(fac_verify(n, aux(), FacProof {.p = pf.p, .q = pf.q, .a = pf.a, .b = pf.b, .t = pf.t, .sigma = h, .z1 = pf.z1, .z2 = pf.z2, .w1 = pf.w1, .w2 = pf.w2, .v = pf.v}, tr())).toBeFalse();
+    expect(fac_verify(n, aux(), FacProof {.p = pf.p, .q = pf.q, .a = pf.a, .b = pf.b, .t = pf.t, .sigma = pf.sigma, .z1 = pf.z1, .z2 = pf.z2, .w1 = pf.w1, .w2 = pf.w2, .v = h}, tr())).toBeFalse();
+    expect(fac_verify(n, aux(), FacProof {.p = pf.p, .q = pf.q, .a = pf.a, .b = pf.b, .t = pf.t, .sigma = pf.sigma, .z1 = h, .z2 = pf.z2, .w1 = pf.w1, .w2 = pf.w2, .v = pf.v}, tr())).toBeFalse();
+    // One bit past a bound: refused before the exponentiations too.
+    BnInt over = zi_from_nat(bn_shl([1], 1 + zk_l() + zk_eps() + zk_bits_n()));
+    expect(fac_verify(n, aux(), FacProof {.p = pf.p, .q = pf.q, .a = pf.a, .b = pf.b, .t = pf.t, .sigma = pf.sigma, .z1 = pf.z1, .z2 = pf.z2, .w1 = over, .w2 = pf.w2, .v = pf.v}, tr())).toBeFalse();
+}
+
+test "fac: honest proofs from many streams stay within the bounds" {
+    PaillierSec sec = fixture_sec();
+    List(UInt(64)) n = bn_mul(sec.p, sec.q);
+    expect(fac_many(sec, n, 0, 6)).toEqual(6);
+}
+
+Int fac_many(PaillierSec sec, List(UInt(64)) n, Int i, Int k) {
+    if (i >= k) { return 0; }
+    Bool ok = match fac_prove(sec.p, sec.q, aux(), tr(), cg_rng([2, i], "fac", 4 * 4300)) { Some(pf) => fac_verify(n, aux(), pf, tr()), None => false };
+    return (if (ok) { 1 } else { 0 }) + fac_many(sec, n, i + 1, k);
+}
+
+test "enc: a huge z3 is refused" {
+    PaillierPub pk = fixture_pub();
+    BnInt k = zi_from_nat([12345]);
+    List(UInt(64)) rho = cg_unit([3], "rho", pk.n);
+    List(UInt(64)) kct = pa_enc(pk, k, rho);
+    Option(EncProof) o = enc_prove(aux(), pk, kct, k, rho, tr(), cg_rng([3], "enc", 4096 + cg_draw_bytes(2048, 1)));
+    EncProof pf = o else { EncProof {.s = [], .a = [], .c = [], .z1 = zi_zero(), .z2 = [], .z3 = zi_zero()} };
+    expect(enc_verify(aux(), pk, kct, pf, tr())).toBeTrue();
+    expect(enc_verify(aux(), pk, kct, EncProof {.s = pf.s, .a = pf.a, .c = pf.c, .z1 = pf.z1, .z2 = pf.z2, .z3 = huge()}, tr())).toBeFalse();
+}
+
+test "log*: a huge z3 is refused" {
+    PaillierPub pk = fixture_pub();
+    List(UInt(64)) x = [777];
+    List(UInt(64)) rho = cg_unit([4], "rho", pk.n);
+    LogstarPublic pub = LogstarPublic {.c = pa_enc(pk, sc_to_zi(x), rho), .x = cv_mul_base(x), .g = cv_g(), .prover = pk, .aux = aux()};
+    Option(LogstarProof) o = logstar_prove(pub, sc_to_zi(x), rho, tr(), cg_rng([4], "ls", 4 * 1500 + cg_draw_bytes(2048, 1)));
+    LogstarProof pf = o else { LogstarProof {.s = [], .a = [], .y = cv_inf(), .d = [], .z1 = zi_zero(), .z2 = [], .z3 = zi_zero()} };
+    expect(logstar_verify(pub, pf, tr())).toBeTrue();
+    expect(logstar_verify(pub, LogstarProof {.s = pf.s, .a = pf.a, .y = pf.y, .d = pf.d, .z1 = pf.z1, .z2 = pf.z2, .z3 = huge()}, tr())).toBeFalse();
+}
+
+test "enc-elg: a huge z3 is refused" {
+    PaillierPub pk = fixture_pub();
+    List(UInt(64)) k = [4242];
+    List(UInt(64)) en = [99];
+    CvPt elg = cv_mul_base([5]);
+    List(UInt(64)) rho = cg_unit([5], "rho", pk.n);
+    EncelgPublic pub = EncelgPublic {.c = pa_enc(pk, sc_to_zi(k), rho), .a = elg, .b = cv_mul_base(en), .x = cv_add(cv_mul_base(k), cv_mul(en, elg)), .prover = pk, .aux = aux()};
+    Option(EncelgProof) o = encelg_prove(pub, sc_to_zi(k), rho, en, tr(), cg_rng([5], "ee", 4 * 2400 + cg_draw_bytes(2048, 1)));
+    EncelgProof pf = o else { EncelgProof {.s = [], .d = [], .y = cv_inf(), .z = cv_inf(), .t = [], .z1 = zi_zero(), .w = [], .z2 = [], .z3 = zi_zero()} };
+    expect(encelg_verify(pub, pf, tr())).toBeTrue();
+    expect(encelg_verify(pub, EncelgProof {.s = pf.s, .d = pf.d, .y = pf.y, .z = pf.z, .t = pf.t, .z1 = pf.z1, .w = pf.w, .z2 = pf.z2, .z3 = huge()}, tr())).toBeFalse();
+}
+
+test "aff-g and aff-p: a huge z3 or z4 is refused" {
+    PaillierPub pk = fixture_pub();
+    List(UInt(64)) kn = cg_unit([6], "kn", pk.n);
+    List(UInt(64)) kct = pa_enc(pk, zi_from_nat([31337]), kn);
+    List(UInt(64)) x = [555];
+    CgMta xm = cg_mta(pk, pk, kct, sc_to_zi(x), [6], "mta-x");
+    AffgPublic gp = AffgPublic {.kv = kct, .dv = xm.d, .fp = xm.f, .xp = cv_mul_base(x), .prover = pk, .verifier = pk, .aux = aux()};
+    Option(AffgProof) og = affg_prove(gp, AffgSecret {.x = sc_to_zi(x), .y = xm.y, .s = xm.s, .r = xm.r}, tr(), cg_rng([6], "affg", 4 * 4300 + cg_draw_bytes(2048, 2)));
+    AffgProof g = og else { AffgProof {.a = [], .bx = cv_inf(), .by = [], .e = [], .s = [], .f = [], .t = [], .z1 = zi_zero(), .z2 = zi_zero(), .z3 = zi_zero(), .z4 = zi_zero(), .w = [], .wy = []} };
+    expect(affg_verify(gp, g, tr())).toBeTrue();
+    expect(affg_verify(gp, AffgProof {.a = g.a, .bx = g.bx, .by = g.by, .e = g.e, .s = g.s, .f = g.f, .t = g.t, .z1 = g.z1, .z2 = g.z2, .z3 = huge(), .z4 = g.z4, .w = g.w, .wy = g.wy}, tr())).toBeFalse();
+    expect(affg_verify(gp, AffgProof {.a = g.a, .bx = g.bx, .by = g.by, .e = g.e, .s = g.s, .f = g.f, .t = g.t, .z1 = g.z1, .z2 = g.z2, .z3 = g.z3, .z4 = huge(), .w = g.w, .wy = g.wy}, tr())).toBeFalse();
+
+    List(UInt(64)) gamma = [808];
+    List(UInt(64)) gn = cg_unit([7], "gn", pk.n);
+    CgMta dm = cg_mta(pk, pk, kct, sc_to_zi(gamma), [7], "mta-d");
+    AffpPublic pp = AffpPublic {.kv = kct, .dv = dm.d, .fp = dm.f, .xp = pa_enc(pk, sc_to_zi(gamma), gn), .prover = pk, .verifier = pk, .aux = aux()};
+    Option(AffpProof) op = affp_prove(pp, AffpSecret {.x = sc_to_zi(gamma), .y = dm.y, .s = dm.s, .rx = gn, .r = dm.r}, tr(), cg_rng([7], "affp", 4 * 4300 + cg_draw_bytes(2048, 3)));
+    AffpProof a = op else { AffpProof {.a = [], .bx = [], .by = [], .e = [], .s = [], .f = [], .t = [], .z1 = zi_zero(), .z2 = zi_zero(), .z3 = zi_zero(), .z4 = zi_zero(), .w = [], .wx = [], .wy = []} };
+    expect(affp_verify(pp, a, tr())).toBeTrue();
+    expect(affp_verify(pp, AffpProof {.a = a.a, .bx = a.bx, .by = a.by, .e = a.e, .s = a.s, .f = a.f, .t = a.t, .z1 = a.z1, .z2 = a.z2, .z3 = huge(), .z4 = a.z4, .w = a.w, .wx = a.wx, .wy = a.wy}, tr())).toBeFalse();
+    expect(affp_verify(pp, AffpProof {.a = a.a, .bx = a.bx, .by = a.by, .e = a.e, .s = a.s, .f = a.f, .t = a.t, .z1 = a.z1, .z2 = a.z2, .z3 = a.z3, .z4 = huge(), .w = a.w, .wx = a.wx, .wy = a.wy}, tr())).toBeFalse();
+}
