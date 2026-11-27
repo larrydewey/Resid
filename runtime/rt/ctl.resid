@@ -348,6 +348,9 @@ pub Int pool_main(Int w) {
     // this worker rather than starting another thread.
     _ = pool_push(w);
     _ = job_done(a);
+    // Under a memory budget an idle worker keeps no free pages charged
+    // (region.resid, rg_cache_flush): they would refuse other threads' work.
+    _ = if (mem_limited() && ld32(w + 16) == 0) { rg_cache_flush() } else { 0 };
     _ = futex_wait0(w + 16);
     return pool_main(w);
 }

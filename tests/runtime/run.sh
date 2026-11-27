@@ -481,6 +481,27 @@ sys.exit(0 if ok else 1)' "$W/big_alloc" > "$W/big_alloc.out" 2>&1; then
 else
     fail=$((fail + 1)); echo "FAIL large allocations under RESID_MEM_LIMIT: $(tail -1 "$W/big_alloc.out" "$W/big_alloc.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# RESID_MEM_LIMIT under concurrent spawns (malloc.resid mem_take,
+# region.resid page_charge): 100 jobs that each fill a fresh region page
+# after a sleep; the ones past the budget get Err(RegionError) and the
+# peak stays under the limit plus 8 MB of slack for what is not charged
+# (thread stacks, the runtime's tables): measured 37 MB. Then three
+# sequential 20 MB jobs must run: no idle worker keeps freed pages charged.
+# Before: every job ran, 83 MB resident under 50, and the three were
+# refused.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/spawn_budget.resid -o "$W/spawn_budget") > "$W/spawn_budget.log" 2>&1 \
+    && python3 -I -c '
+import re, resource, subprocess, sys, os
+r = subprocess.run([sys.argv[1]], capture_output=True, text=True, timeout=120, env=dict(os.environ, RESID_MEM_LIMIT="50"))
+peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+m = re.fullmatch(r"burst 100 ok (\d+) refused (\d+)\nafter ok 3 refused 0\n", r.stdout)
+ok = r.returncode == 0 and m is not None and int(m.group(1)) > 0 and int(m.group(2)) > 0 and int(m.group(1)) + int(m.group(2)) == 100 and peak < 58 * 1024
+print(f"rc {r.returncode} peak {peak} KB: {r.stdout.strip()} {r.stderr.strip()}")
+sys.exit(0 if ok else 1)' "$W/spawn_budget" > "$W/spawn_budget.out" 2>&1; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL concurrent spawns under RESID_MEM_LIMIT: $(tail -1 "$W/spawn_budget.out" "$W/spawn_budget.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # CBOR encoding appends packed bytes (lib/cbor.resid): 2 MB encoded in
 # 54 MB. The encoder that kept a cons cell per output byte took 486 MB.
 if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/cbor_bytes.resid -o "$W/cbor_bytes") > "$W/cbor_bytes.log" 2>&1 \
