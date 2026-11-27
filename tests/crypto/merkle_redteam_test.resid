@@ -99,3 +99,74 @@ test "dc3-merkle-1: a cosignature covers the checkpoint's extension lines" {
     expect(rt_cosigned(rt_cosig_three())).toBeFalse();
     expect(hex_encode(cosig_message(rt_ext_ckpt(), 5)) == hex_encode(bytes_of("cosignature/v1\ntime 5\n" + ckpt_text(rt_ext_ckpt())))).toBeTrue();
 }
+
+// dc3-merkle-2: several signature lines may carry one key name
+// (c2sp.org/tlog-checkpoint); what may not repeat is a name together with
+// a key ID. Two listed keys sharing a name, both signing, made the note
+// fail.
+List(Int) rt_seed_n(Int i) { return sha256_bytes(bytes_of(f"merkle redteam key {i}")); }
+
+NoteKey rt_key(Str name, Int kind, Int i) { return NoteKey {.name = name, .kind = kind, .pubk = pub_key(rt_seed_n(i))}; }
+
+Checkpoint rt_plain_ckpt() {
+    List(Str) none = [];
+    return Checkpoint {.origin = "log.example", .size = 7, .root = sha256_bytes([7]), .ext = none};
+}
+
+// The log's signature line under key i (same name, another key).
+Str rt_log_line(Int i) {
+    Str text = ckpt_text(rt_plain_ckpt());
+    return note_sig_line("log.example", note_key_id(rt_key("log.example", 1, i)), sign_msg_bytes(rt_seed_n(i), bytes_of(text)));
+}
+
+Int rt_verified(Str note, List(NoteKey) keys) {
+    return match note_parse(note) {
+        Some(n) => match note_verified(n, keys) { Some(names) => names.len(), None => 0 - 1 },
+        None => 0 - 2,
+    };
+}
+
+test "dc3-merkle-2: two keys of one name may both sign; one key may not sign twice" {
+    Str text = ckpt_text(rt_plain_ckpt());
+    List(NoteKey) both = [rt_key("log.example", 1, 1), rt_key("log.example", 1, 2)];
+    Str two = text + "\n" + rt_log_line(1) + rt_log_line(2);
+    // Both verify; they are one name.
+    expect(rt_verified(two, both)).toBe(1);
+    expect(rt_verified(two, [rt_key("log.example", 1, 1)])).toBe(1);
+    Bool opens = match ckpt_open(two, rt_key("log.example", 1, 2)) { Some(c) => true, None => false };
+    expect(opens).toBeTrue();
+    // The same key (name and ID) on two lines is still refused.
+    expect(rt_verified(text + "\n" + rt_log_line(1) + rt_log_line(1), both)).toBe(0 - 1);
+    expect(rt_verified(text + "\n" + rt_log_line(1) + rt_log_line(2) + rt_log_line(1), both)).toBe(0 - 1);
+    // And a listed key whose signature fails still spoils the note.
+    Str forged = note_sig_line("log.example", note_key_id(rt_key("log.example", 1, 2)), sign_msg_bytes(rt_seed_n(3), bytes_of(text)));
+    expect(rt_verified(text + "\n" + rt_log_line(1) + forged, both)).toBe(0 - 1);
+}
+
+Bool rt_cosigned_by(List(Int) signers, List(NoteKey) wit, Int threshold) {
+    Checkpoint c = rt_plain_ckpt();
+    Str note = ckpt_text(c) + "\n" + rt_log_line(1) + rt_cosig_lines(c, signers, 0, "");
+    return match ckpt_cosigned(note, rt_key("log.example", 1, 1), wit, threshold, 1800000000) { Some(x) => true, None => false };
+}
+
+// A cosignature line by key i, named "w<name>.example".
+Str rt_cosig_lines(Checkpoint c, List(Int) signers, Int j, Str acc) {
+    if (j >= signers.len()) { return acc; }
+    Int i = signers[j];
+    return rt_cosig_lines(c, signers, j + 1, acc + cosig_line(c, 1700000000, rt_wit_name(i), rt_seed_n(i)));
+}
+
+// Keys 10 and 11 share the name "wa.example"; key 12 is "wb.example".
+Str rt_wit_name(Int i) { return if (i == 12) { "wb.example" } else { "wa.example" }; }
+
+test "dc3-merkle-2: a threshold counts distinct witness names, not lines" {
+    List(NoteKey) wit = [rt_key("wa.example", 4, 10), rt_key("wa.example", 4, 11), rt_key("wb.example", 4, 12)];
+    // Two keys of one witness: accepted, and worth one.
+    expect(rt_cosigned_by([10, 11], wit, 1)).toBeTrue();
+    expect(rt_cosigned_by([10, 11], wit, 2)).toBeFalse();
+    expect(rt_cosigned_by([10, 11, 12], wit, 2)).toBeTrue();
+    expect(rt_cosigned_by([10, 11, 12], wit, 3)).toBeFalse();
+    expect(rt_cosigned_by([10, 12], wit, 2)).toBeTrue();
+    // One key on two lines is refused.
+    expect(rt_cosigned_by([10, 10, 12], wit, 1)).toBeFalse();
+}

@@ -469,24 +469,39 @@ Option(Int) sn_digits(List(Int) b, Int i, Int acc) {
     return sn_digits(b, i + 1, acc * 10 + d);
 }
 
-/// The names of the keys in `keys` whose signature on the note verifies.
-/// A signature line naming no key in `keys` (by both name and ID) is
-/// ignored, as the specification requires; a line from a known key that
-/// fails makes the whole note fail (None), and so does a key that signs
-/// twice. Only Ed25519 keys (kind 1) are checked here.
+/// The names of the keys in `keys` whose signature on the note verifies,
+/// each name once. A signature line naming no key in `keys` (by both name
+/// and ID) is ignored, as the specification requires; a line from a known
+/// key that fails makes the whole note fail (None), and so does a key on
+/// two lines. A key is a name and an ID: several keys may share a name
+/// and all sign (c2sp.org/tlog-checkpoint), and they count as that one
+/// name. Only Ed25519 keys (kind 1) are checked here.
 pub Option(List(Str)) note_verified(Note n, List(NoteKey) keys) {
     List(Str) none = [];
-    return sn_check(n, keys, 0, none);
+    List(Int) seen = [];
+    return sn_check(n, keys, 0, seen, none);
 }
 
-Option(List(Str)) sn_check(Note n, List(NoteKey) keys, Int i, List(Str) acc) {
+// `seen` holds the indexes of the keys already met, `acc` their names.
+Option(List(Str)) sn_check(Note n, List(NoteKey) keys, Int i, List(Int) seen, List(Str) acc) {
     if (i >= n.sigs.len()) { return Some(acc); }
     NoteSig s = n.sigs[i];
     Int k = sn_find_key(keys, s, 1, 0);
-    if (k < 0) { return sn_check(n, keys, i + 1, acc); }
-    if (sn_has(acc, s.name, 0)) { return None; }
+    if (k < 0) { return sn_check(n, keys, i + 1, seen, acc); }
+    if (sn_seen(seen, k, 0)) { return None; }
     if (!verify_sig_bytes(bytes_of(n.text), s.sig, keys[k].pubk)) { return None; }
-    return sn_check(n, keys, i + 1, acc.concat([s.name]));
+    return sn_check(n, keys, i + 1, seen.concat([k]), sn_add_name(acc, s.name));
+}
+
+Bool sn_seen(List(Int) xs, Int x, Int i) {
+    if (i >= xs.len()) { return false; }
+    if (xs[i] == x) { return true; }
+    return sn_seen(xs, x, i + 1);
+}
+
+List(Str) sn_add_name(List(Str) names, Str name) {
+    if (sn_has(names, name, 0)) { return names; }
+    return names.concat([name]);
 }
 
 // The index of the key of kind `kind` matching the line by name and ID.
@@ -571,7 +586,9 @@ Int cs_read_be64(List(Int) b, Int i, Int acc) {
 /// The checkpoint in `note` when the log signed it and at least
 /// `threshold` distinct witnesses of `witnesses` (kind 4 keys) cosigned
 /// it with a time no later than `now`. A cosignature from a listed
-/// witness that fails, or a witness that cosigns twice, rejects the note.
+/// witness key that fails, or one key (name and ID) on two lines, rejects
+/// the note. Witnesses are counted by name: a witness with several listed
+/// keys may cosign with each, and counts once.
 pub Option(Checkpoint) ckpt_cosigned(Str note, NoteKey log, List(NoteKey) witnesses, Int threshold, Int now) {
     return match note_parse(note) {
         Some(n) => ckpt_cosigned_n(n, log, witnesses, threshold, now),
@@ -589,12 +606,13 @@ pub Option(Checkpoint) ckpt_cosigned_bytes(List(Int) note, NoteKey log, List(Not
 
 Option(Checkpoint) ckpt_cosigned_n(Note n, NoteKey log, List(NoteKey) w, Int threshold, Int now) {
     return match ckpt_open_n(n, log) {
-        Some(cp) => cs_enough(cp, cs_check(n, cp, w, now, 0, cs_none()), threshold),
+        Some(cp) => cs_enough(cp, cs_check(n, cp, w, now, 0, cs_seen(), cs_none()), threshold),
         None => None,
     };
 }
 
 List(Str) cs_none() { List(Str) none = []; return none; }
+List(Int) cs_seen() { List(Int) none = []; return none; }
 
 Option(Checkpoint) cs_enough(Checkpoint cp, Option(List(Str)) got, Int threshold) {
     Bool ok = match got { Some(names) => names.len() >= threshold, None => false, };
@@ -602,14 +620,14 @@ Option(Checkpoint) cs_enough(Checkpoint cp, Option(List(Str)) got, Int threshold
     return None;
 }
 
-Option(List(Str)) cs_check(Note n, Checkpoint c, List(NoteKey) w, Int now, Int i, List(Str) acc) {
+Option(List(Str)) cs_check(Note n, Checkpoint c, List(NoteKey) w, Int now, Int i, List(Int) seen, List(Str) acc) {
     if (i >= n.sigs.len()) { return Some(acc); }
     NoteSig s = n.sigs[i];
     Int k = sn_find_key(w, s, 4, 0);
-    if (k < 0) { return cs_check(n, c, w, now, i + 1, acc); }
-    if (sn_has(acc, s.name, 0) || s.sig.len() != 72) { return None; }
+    if (k < 0) { return cs_check(n, c, w, now, i + 1, seen, acc); }
+    if (sn_seen(seen, k, 0) || s.sig.len() != 72) { return None; }
     Int t = cs_read_be64(s.sig, 0, 0);
     if (t < 0 || t > now) { return None; }
     if (!verify_sig_bytes(cosig_message(c, t), s.sig[8..72], w[k].pubk)) { return None; }
-    return cs_check(n, c, w, now, i + 1, acc.concat([s.name]));
+    return cs_check(n, c, w, now, i + 1, seen.concat([k]), sn_add_name(acc, s.name));
 }
