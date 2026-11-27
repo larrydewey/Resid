@@ -45,7 +45,7 @@ pub List(UInt(64)) cg_s_of(List(List(UInt(64))) shares, Int i, List(UInt(64)) ac
 /// Signature.Verify: s^-1 (m G + r X) = R).
 pub Bool cg_verify(CvPt x, List(Int) digest, CvPt rr, List(UInt(64)) s) {
     List(UInt(64)) r = cg_r(rr);
-    if (r.len() == 0 || s.len() == 0) { return false; }
+    if (r.len() == 0 || s.len() == 0 || !bn_is_normal(s)) { return false; }
     List(UInt(64)) m = cg_msg_scalar(digest);
     CvPt sum = cv_add(cv_mul_base(m), cv_mul(r, x));
     return cv_eq(cv_mul(sc_nat_inv(s), sum), rr);
@@ -63,7 +63,7 @@ CvPt cg_point_of(List(Int) ids, List(CvPt) pts, Int id, Int i) {
 pub Bool cg_share_ok(CgPresig p, Int id, List(UInt(64)) sigma, List(Int) digest) {
     CvPt rj = cg_point_of(p.ids, p.rbar, id, 0);
     CvPt sj = cg_point_of(p.ids, p.s, id, 0);
-    if (rj.inf || sj.inf || sigma.len() == 0) { return false; }
+    if (rj.inf || sj.inf || sigma.len() == 0 || !bn_is_normal(sigma)) { return false; }
     CvPt lhs = cv_mul(sigma, p.r);
     CvPt rhs = cv_add(cv_mul(cg_msg_scalar(digest), rj), cv_mul(cg_r(p.r), sj));
     return cv_eq(lhs, rhs);

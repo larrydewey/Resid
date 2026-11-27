@@ -38,7 +38,7 @@ def kvfile(name, **kw):
 
 def aux_for(vk, idx):
     """Pedersen parameters for the verifier's key, made by the Resid generator."""
-    path = kvfile(f'aux{idx}.kv', P=vk['P'], Q=vk['Q'], RND=os.urandom(2048).hex())
+    path = kvfile(f'aux{idx}.kv', P=vk['P'], Q=vk['Q'], RND=os.urandom(65536).hex())
     out = json.loads(run([os.path.join(W, 'resid_proofs'), 'aux', path]))
     return out['N'], out['S'], out['T']
 

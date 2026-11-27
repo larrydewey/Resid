@@ -29,7 +29,7 @@ def verify(kind, obj):
 ok = True
 for i, k in enumerate(keys):
     paths = []
-    for j, n in enumerate((4096, 80 * 256 * 4, 256 * 64)):
+    for j, n in enumerate((65536, 80 * 256 * 4, 256 * 64)):
         path = os.path.join(W, f'stream{j}.hex')
         open(path, 'w').write(os.urandom(n).hex())
         paths.append(path)

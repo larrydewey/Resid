@@ -282,9 +282,9 @@ pub type RshAnn = { Int id; PaillierPub pail; Pedersen ped; ModProof modp; PrmPr
 pub Option(RshAnn) rsh_announce(Int id, PaillierSec sec, Pedersen ped, List(UInt(64)) ped_lam, Transcript tr, List(Int) rnd) {
     PaillierPub pail = paillier_pub(bn_mul(sec.p, sec.q));
     Option(ModProof) closure(List(Int)) md_p = lambda(r) { mod_prove(sec.p, sec.q, tr, r) };
-    ModProof md = cg_retry(md_p, rnd, "rsh/mod", 256 * 96, 0)?;
+    ModProof md = cg_retry(md_p, rnd, "rsh/mod", cg_draw_bytes(zk_bits_n(), 1), 0)?;
     Option(PrmProof) closure(List(Int)) pr_p = lambda(r) { prm_prove(ped_lam, sec.phi, ped, tr, r) };
-    PrmProof pr = cg_retry(pr_p, rnd, "rsh/prm", 256 * 400, 0)?;
+    PrmProof pr = cg_retry(pr_p, rnd, "rsh/prm", cg_draw_bytes(zk_bits_n(), 4), 0)?;
     return Some(RshAnn {.id = id, .pail = pail, .ped = ped, .modp = md, .prm = pr});
 }
 
@@ -296,7 +296,7 @@ pub Option(RshAnn) rsh_announce(Int id, PaillierSec sec, Pedersen ped, List(UInt
 /// range proofs others prove to this party rest on an N no one proved.
 pub Bool rsh_announce_ok(RshAnn a, Transcript tr) {
     List(UInt(64)) n = a.pail.n;
-    if (bn_bit_len(n) != zk_bits_n() || !bn_is_odd(n)) { return false; }
+    if (!zk_n_size_ok(n) || !bn_is_odd(n)) { return false; }
     List(UInt(64)) n2 = bn_mul(n, n);
     if (bn_cmp(a.pail.n2, n2) != 0 || bn_cmp(a.pail.mont2.n, n2) != 0) { return false; }
     if (bn_cmp(a.ped.n, n) != 0 || !pedersen_valid(a.ped)) { return false; }

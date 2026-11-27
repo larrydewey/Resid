@@ -1,0 +1,166 @@
+// Rejection sampling from derived streams (RB-13). zk_draw_below keeps only
+// bit_len(n) bits of each chunk, so a chunk is accepted with probability at
+// least 1/2, and every stream is sized from its modulus (cg_draw_bytes,
+// cg_unit, kg_safe_prime) so running out is a negligible-probability event.
+// The seeds below were found offline with a Python copy of cg_rng: each
+// drives the code before the fix into "randomness exhausted" (or, for
+// cg_unit, into the nonce 1).
+
+import "../../lib/cggmp_keygen.resid";
+import "../../lib/cose.resid";
+
+List(UInt(64)) nat(Str hex) { return bn_from_be(cose_hex_decode(hex)); }
+
+// The 1024-bit primes P and Q of tests/crypto/cggmp_oracle/keys.json key 0
+// (N of 2048 bits, N / 2^2048 = 0.695).
+List(UInt(64)) key0_p() { return nat("c7392d049aa59d5af591da4d6c081b4fd36d2d9793c6b0112afd6db18f15f5c489ff3ac5a5b456cca240ec3bcfc3f427373f31b3b721506ff77b787c0781265d187b33b0076c147864d0ea1469df20fe49f4d6b08a395cdaa9304c1ccc131d4156b761b29907e4cf5ba40b05d00a33ef7578022d964171298d5d36e84a51844b"); }
+List(UInt(64)) key0_q() { return nat("e494d8c07ebcbbbee71eb936745c2e93765d1f0ff9393d0699781f124e478184955c8e37ddffe37b6d4599925a601975ae3bc3d06a2f1fbe523838e4cc0a03acb3a597f3c3064d343da02d5d97ceb1678ab16a4bb06347e6b4e2161e7ad69d55e6bb42710cebe547157bf4863e3d7bf9425a824993b06d00a932e91622cb2d6b"); }
+
+// Two primes just above 2^1023: N = p q has 2047 bits, N / 2^2047 just
+// above 1/2. Before the masking a 256-byte chunk fell below N with
+// probability 1/4.
+List(UInt(64)) p2047() { return bn_add(bn_shl([1], 1023), [1155]); }
+List(UInt(64)) q2047() { return bn_add(bn_shl([1], 1023), [1493]); }
+
+Bool ped_ok(Option(PedersenKey) k) {
+    return match k {
+        None => false,
+        Some(x) => pedersen_valid(x.ped) && bn_cmp(x.lam, x.phi) < 0 && bn_cmp(x.ped.n, bn_mul(p2047(), q2047())) == 0
+    };
+}
+
+// The chunks the draws take, read past the value.
+Int chunks_used(List(Int) rnd, List(UInt(64)) n, Int pos, Int left) {
+    if (left == 0) { return pos; }
+    return match zk_draw_below(rnd, pos, n) { None => -1, Some(d) => chunks_used(rnd, n, d.next, left - 1) };
+}
+
+// Whether `draws` values from `rnd` are all below `n`; counts those in the
+// lower half of [0, n) into the returned number (or -1 when one is not
+// below n or the stream ran out).
+Int lower_half(List(Int) rnd, List(UInt(64)) n, Int pos, Int left, Int acc) {
+    if (left == 0) { return acc; }
+    return match zk_draw_below(rnd, pos, n) {
+        None => -1,
+        Some(d) => if (bn_cmp(d.value, n) >= 0) { -1 } else {
+            lower_half(rnd, n, d.next, left - 1, acc + if (bn_cmp(bn_shl(d.value, 1), n) < 0) { 1 } else { 0 })
+        }
+    };
+}
+
+test "masking: a 2047-bit N's Pedersen parameters come from a stream that ran out before" {
+    expect(bn_bit_len(bn_mul(p2047(), q2047()))).toEqual(2047);
+    // [7, 0, 0]: eight 256-byte chunks held fewer than two below phi and N
+    // unmasked (a third of all seeds did); masked they hold both.
+    expect(ped_ok(pedersen_generate(p2047(), q2047(), cg_rng([7, 0, 0], "ped2047", 2048)))).toBeTrue();
+}
+
+test "budget: Pedersen parameters from cg_draw_bytes where 2048 bytes run out even masked" {
+    // [7, 0, 35]: masked, the first eight chunks still hold fewer than two draws.
+    expect(ped_ok(pedersen_generate(p2047(), q2047(), cg_rng([7, 0, 35], "ped2047", 2048)))).toBeFalse();
+    expect(ped_ok(pedersen_generate(p2047(), q2047(), cg_rng([7, 0, 35], "ped2047", cg_draw_bytes(2047, 2))))).toBeTrue();
+    expect(cg_draw_bytes(2048, 2)).toEqual(65536);
+}
+
+test "kg_start: the seed that ran out of Pedersen randomness now starts" {
+    // [2, 183] with key 0's primes: the old 2048-byte "kg/ped" stream held
+    // fewer than two draws (33 of 20000 seeds failed so, for this key).
+    expect(bn_bit_len(bn_mul(key0_p(), key0_q()))).toEqual(2048);
+    Bool old = match pedersen_generate(key0_p(), key0_q(), cg_rng([2, 183], "kg/ped", 2048)) { Some(_) => true, None => false };
+    expect(old).toBeFalse();
+    KgCtx c = KgCtx {.self = 1, .ids = [1, 2], .threshold = 1, .prev = [], .session_id = bytes_of("rb13"),
+                     .seed = [2, 183], .primes = [key0_p(), key0_q()]};
+    Bool started = match kg_start(c) {
+        Ok(s) => pedersen_valid(s.ped) && bn_cmp(s.ped.n, bn_mul(key0_p(), key0_q())) == 0,
+        Err(_) => false
+    };
+    expect(started).toBeTrue();
+}
+
+test "draws stay below n and look uniform, for a 17-bit n" {
+    // n = 0x13579: a 3-byte chunk has 24 bits, of which 7 are excess.
+    List(UInt(64)) n = [79225];
+    List(Int) rnd = cg_rng([1], "uniform17", 3 * 6000);
+    Int lower = lower_half(rnd, n, 0, 2000, 0);
+    expect(lower > 900 && lower < 1100).toBeTrue();
+    // Acceptance is n / 2^17 = 0.60 per chunk: 2000 values take about 3300
+    // chunks (unmasked, n / 2^24 = 0.005, they would take 400000).
+    Int used = chunks_used(rnd, n, 0, 2000) / 3;
+    expect(used > 2000 && used < 3800).toBeTrue();
+}
+
+test "draws stay below a 2047-bit n, about two chunks a value" {
+    List(UInt(64)) n = bn_mul(p2047(), q2047());
+    List(Int) rnd = cg_rng([2], "uniform2047", cg_draw_bytes(2047, 4));
+    Int lower = lower_half(rnd, n, 0, 100, 0);
+    expect(lower > 30 && lower < 70).toBeTrue();
+    // About 200 chunks; unmasked (acceptance 1/4) about 400.
+    Int used = chunks_used(rnd, n, 0, 100) / 256;
+    expect(used > 100 && used < 300).toBeTrue();
+}
+
+test "zk_draw_below: n of 0 has nothing below it, n of 1 gives 0" {
+    Bool none = match zk_draw_below([1, 2, 3], 0, []) { Some(_) => false, None => true };
+    expect(none).toBeTrue();
+    Int v = match zk_draw_below([254], 0, [1]) { Some(d) => bn_bit_len(d.value), None => -1 };
+    expect(v).toEqual(0);
+}
+
+test "a byte-aligned n draws exactly what it drew before" {
+    // N of key 0 has 2048 bits: masking keeps every chunk whole.
+    List(UInt(64)) n = bn_mul(key0_p(), key0_q());
+    List(Int) rnd = cg_rng([3], "aligned", 2048);
+    List(UInt(64)) first = bn_from_be(bn_slice_int(rnd, 0, 256));
+    List(UInt(64)) got = match zk_draw_below(rnd, 0, n) { Some(d) => d.value, None => [] };
+    // The first chunk is below N for this seed.
+    expect(bn_cmp(first, n) < 0).toBeTrue();
+    expect(bn_cmp(got, first) == 0).toBeTrue();
+}
+
+test "cg_unit: the old 8-chunk stream ran out and fell back to 1; now it reads on" {
+    // N just above 2^2047 (p, q the primes after sqrt(2^2047)): a chunk is
+    // below N with probability 1/2. For [9, 0, 121] the first eight chunks
+    // all are not; the unit comes from the tenth.
+    List(UInt(64)) n = bn_mul(
+        nat("b504f333f9de6484597d89b3754abe9f1d6f60ba893ba84ced17ac85833399154afc83043ab8a2c3a8b1fe6fdc83db390f74a85e439c7b4a780487363dfa2768d2202e8742af1f4e53059c6011bc337bcab1bc911688458a460abc722f7c4e33c6d5a8a38bb7e9dccb2a634331f3c84df52f120f836e582eeaa4a0899040ca6f"),
+        nat("b504f333f9de6484597d89b3754abe9f1d6f60ba893ba84ced17ac85833399154afc83043ab8a2c3a8b1fe6fdc83db390f74a85e439c7b4a780487363dfa2768d2202e8742af1f4e53059c6011bc337bcab1bc911688458a460abc722f7c4e33c6d5a8a38bb7e9dccb2a634331f3c84df52f120f836e582eeaa4a0899040cc79"));
+    expect(bn_bit_len(n)).toEqual(2048);
+    Bool old = match zk_draw_unit(cg_rng([9, 0, 121], "unit", 8 * 256), 0, n) { Some(_) => true, None => false };
+    expect(old).toBeFalse();
+    List(UInt(64)) u = cg_unit([9, 0, 121], "unit", n);
+    expect(zk_valid_mod_n(u, n)).toBeTrue();
+    expect(bn_cmp(u, [1]) != 0).toBeTrue();
+    ZkDraw want = zk_draw_unit(cg_rng([9, 0, 121], "unit", 16 * 256), 0, n) else { ZkDraw {.value = [], .next = 0} };
+    expect(want.next).toEqual(10 * 256);
+    expect(bn_cmp(u, want.value) == 0).toBeTrue();
+}
+
+test "cg_unit: a seed that worked before gives the same unit" {
+    List(UInt(64)) n = bn_mul(key0_p(), key0_q());
+    ZkDraw old = zk_draw_unit(cg_rng([4], "same", 8 * 256), 0, n) else { ZkDraw {.value = [], .next = 0} };
+    expect(old.value.len() > 0).toBeTrue();
+    expect(bn_cmp(cg_unit([4], "same", n), old.value) == 0).toBeTrue();
+}
+
+test "cg_unit: a modulus without units gives [], whose ciphertext is refused" {
+    expect(cg_unit([1], "x", [1]).len()).toEqual(0);
+    expect(cg_unit([1], "x", []).len()).toEqual(0);
+    PaillierPub pk = paillier_pub(bn_mul(key0_p(), key0_q()));
+    expect(pa_ct_ok(pk, pa_enc(pk, zi_from_nat([5]), []))).toBeFalse();
+}
+
+test "kg_safe_prime reads the pieces bn_safe_prime_stream read" {
+    // For [46] the prime is in the third 128-byte piece of "kg/p".
+    Option(List(UInt(64))) got = kg_safe_prime([46], "kg/p");
+    Option(List(UInt(64))) old = bn_safe_prime_stream(cg_rng([46], "kg/p", 128 * 600), 1024);
+    List(UInt(64)) want = nat("e9e840324f9940d70ab4246cd66d95c03567b4951c30e1329f595b8bad986100d38003a0b4ff3c9000161c8780da15d8e53de0bf1326542d42acb08ffb7d290303afe3ddc004093fd5fbf4ef3fd0e566a432ce20d6ff6eb185f3e93833e731f1626cd3e24bb379a56a33fea2a4d99b7c1fe6d8dfc3a27a2343335917037c9a13");
+    List(UInt(64)) g = got else { [] };
+    List(UInt(64)) o = old else { [] };
+    expect(bn_cmp(g, want) == 0).toBeTrue();
+    expect(bn_cmp(o, want) == 0).toBeTrue();
+}
+
+test "the failure messages say the event is negligible" {
+    expect(str_contains(cg_exhausted("mod").why, "negligible-probability")).toBeTrue();
+    expect(str_contains(cg_exhausted("mod").why, "randomness exhausted")).toBeTrue();
+}
