@@ -463,6 +463,24 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/list_grow.resid -o "$W/list_grow
 else
     fail=$((fail + 1)); echo "FAIL grow in a loop: $(tail -1 "$W/list_grow.out" "$W/list_grow.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# RESID_MEM_LIMIT charges memory as it is handed out (malloc.resid,
+# mem_charge): 1-1.2 GB allocations (str_repeat, str_replace, grow) are
+# refused before they are touched, as Err(RegionError) in a spawn and by
+# the budget's abort at the top level, and the peak stays under the limit:
+# 20 MB. Before, a large fresh mapping was not resident yet and went
+# through (1.1 GB resident under a 100 MB limit).
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/big_alloc.resid -o "$W/big_alloc") > "$W/big_alloc.log" 2>&1 \
+    && python3 -I -c '
+import resource, subprocess, sys, os
+r = subprocess.run([sys.argv[1]], capture_output=True, text=True, timeout=120, env=dict(os.environ, RESID_MEM_LIMIT="100"))
+peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+ok = r.returncode != 0 and r.stdout == "refused refused refused ok 20000000 ok 20000000\n" and "memory budget exceeded (100 MB)" in r.stdout + r.stderr and peak < 100 * 1024
+print(f"rc {r.returncode} peak {peak} KB: {r.stdout.strip()} {r.stderr.strip()}")
+sys.exit(0 if ok else 1)' "$W/big_alloc" > "$W/big_alloc.out" 2>&1; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL large allocations under RESID_MEM_LIMIT: $(tail -1 "$W/big_alloc.out" "$W/big_alloc.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # CBOR encoding appends packed bytes (lib/cbor.resid): 2 MB encoded in
 # 54 MB. The encoder that kept a cons cell per output byte took 486 MB.
 if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/cbor_bytes.resid -o "$W/cbor_bytes") > "$W/cbor_bytes.log" 2>&1 \
