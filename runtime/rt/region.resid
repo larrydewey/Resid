@@ -160,22 +160,24 @@ pub Int rg_cache_flush() {
 
 Int order_of(Int n) { return if (n <= rg_page()) { 0 } else { bitlen((n - 1) >> 20) }; }
 
-Int pages_take(Int k, Int id) {
+// A run of order k for region id; a run of more than one page is charged
+// np pages (lg_new: the pages its block covers).
+Int pages_take(Int k, Int id, Int np) {
     Int c = rg_cache();
     Int p = if (k == 0 && ld64(c) != 0) { ld64(c) } else { 0 };
     _ = if (p != 0) { st64(c, ld64(p)) + st64(c + 8, ld64(c + 8) - 1) } else { 0 };
-    Int q = if (p != 0) { p } else { run_take(k) };
+    Int q = if (p != 0) { p } else { run_take(k, np) };
     _ = own_set(q, 1 << k, id);
     _ = if (p == 0 && !secret_mode()) { rg_dump(q, k, true) } else { 0 };
     return q;
 }
 
-Int run_take(Int k) {
+Int run_take(Int k, Int np) {
     Int base = rg_base();
     Int head = rg_g() + 32 + k * 8;
     // Counted first: past the budget the abort (which a spawned region
     // catches) leaves the free runs as they were.
-    _ = if (k == 0) { 0 } else { mem_take((1 << k) * rg_page()) };
+    _ = if (k == 0) { 0 } else { mem_take(np * rg_page()) };
     _ = rg_lock();
     Int p = ld64(head);
     _ = if (p != 0) { st64(head, ld64(p)) } else { 0 };
@@ -183,16 +185,23 @@ Int run_take(Int k) {
     Bool fresh = p == 0 && at + (1 << k) <= rg_pages();
     _ = if (fresh) { st64(rg_g() + 8, at + (1 << k)) } else { 0 };
     _ = rg_unlock();
-    if (p == 0 && !fresh) { return mem_back(k) + rt_abort("region address space exhausted"); }
+    if (p == 0 && !fresh) { return mem_back(k, np) + rt_abort("region address space exhausted"); }
     Int q = if (p != 0) { p } else { base + at * rg_page() };
     // Secret mode locks every run it hands out (a reused one was unlocked
     // when given back), on fault: mlock would make the whole run resident.
     _ = if (secret_mode()) { sec_lock(q, (1 << k) * rg_page()) } else { 0 };
     return q; }
 
-// A run of order k given back to the budget: whole (run_take charged it),
-// or a single page's charged steps (page_charge).
-Int mem_back(Int k) { return if (k == 0) { 0 } else { mem_give((1 << k) * rg_page()) }; }
+// A run of order k given back to the budget: the np pages run_take
+// charged; a single page's charged steps go back by page_uncharge.
+Int mem_back(Int k, Int np) { return if (k == 0) { 0 } else { mem_give(np * rg_page()) }; }
+
+// The pages a large run was charged (lg_new keeps them in its spare word,
+// pg + 24, which no block reaches: the block starts at pg + lg_hdr()).
+Int lg_charged(Int pg, Int k) {
+    Int np = ld64(pg + 24);
+    return if (np >= 1 && np <= (1 << k)) { np } else { 1 << k };
+}
 
 pub Int step_size() { return 65536; }
 Int step_byte(Int p) { return ld64(rg_g() + 208) + ((p - ld64(rg_g())) >> 20); }
@@ -238,11 +247,15 @@ Int page_release(Int p, Int k, Int bump) {
     // A cached page was wiped when it was cached (pages_give), but for its
     // first words, which held the cache's link: its flush passes p + 16.
     Int size = (1 << k) * rg_page();
-    _ = if (secret_wipe()) { resid_raw_fill(p, 0, if (bump > p && bump <= p + size) { bump - p } else { size }) } else { 0 };
+    // Read before the wipe: a large run's charge, and the part of it its
+    // block could have written (the rest was never touched).
+    Int np = if (k == 0) { 1 } else { lg_charged(p, k) };
+    Int used = if (bump > p && bump <= p + size) { bump - p } else { np * rg_page() };
+    _ = if (secret_wipe()) { resid_raw_fill(p, 0, used) } else { 0 };
     _ = if (secret_mode()) { resid_raw_syscall(150, p, size, 0, 0, 0, 0) } else { 0 };   // munlock
     _ = resid_raw_syscall(28, p, size, 4, 0, 0, 0);   // MADV_DONTNEED
     _ = rg_dump(p, k, false);
-    _ = if (k == 0) { page_uncharge(p) } else { mem_back(k) };
+    _ = if (k == 0) { page_uncharge(p) } else { mem_back(k, np) };
     Int head = rg_g() + 32 + k * 8;
     _ = rg_lock();
     _ = st64(p, ld64(head)) + st64(head, p);
@@ -322,7 +335,7 @@ pub Int region_grow(Int r, Int n) {
     }
     // Below lg_size, a block always fits one page.
     Int k = 0;
-    Int pg = pages_take(k, ld64(r));
+    Int pg = pages_take(k, ld64(r), 1);
     _ = st64(pg, ld64(r + 8)) + st64(pg + 8, k);
     _ = st64(r + 8, pg) + st64(r + 32, ld64(r + 32) + (1 << k));
     _ = st64(r + 24, page_charge(pg, 16 + n)) + st64(r + 16, pg + 16 + n);
@@ -338,7 +351,8 @@ pub Int region_grow(Int r, Int n) {
 // retags its pages and links it into the new region) instead of copying
 // the block, so carrying a large value through a loop costs nothing per
 // compaction, and a region never holds a second copy of a large value.
-// A run is {next, order, prev, spare} then the block (lg_hdr bytes in).
+// A run is {next, order, prev, charged pages} then the block (lg_hdr bytes
+// in).
 // Which pages start one is kept in a table of its own (a byte a page,
 // word 25 of rg_g), never in the run, so no stored value can pass for one.
 
@@ -358,12 +372,18 @@ pub Bool lg_is(Int p) {
 
 Int lg_new(Int r, Int n) {
     Int k = order_of(n + lg_hdr());
-    Int pg = pages_take(k, ld64(r));
+    // Charged by the pages the block covers, not the whole power-of-two
+    // run: nothing else is ever allocated in the run, and a block never
+    // grows in place, so the run's tail is never touched (charging all of
+    // it took up to twice the memory in use: a list buffer just over 16
+    // MB was charged 32). A single page is charged by its steps.
+    Int np = (n + lg_hdr() + rg_page() - 1) / rg_page();
+    Int pg = pages_take(k, ld64(r), np);
     // Linked before it is charged, as region_grow's pages are: a charge the
     // budget refuses unwinds to the region's owner, whose pop then frees
     // the page with the region (unlinked, it was lost for good).
-    _ = lg_link(r, pg, k) + st64(r + 32, ld64(r + 32) + (1 << k));
-    _ = if (k == 0) { page_charge(pg, rg_page()) } else { 0 };
+    _ = lg_link(r, pg, k) + st64(pg + 24, np) + st64(r + 32, ld64(r + 32) + (1 << k));
+    _ = if (k == 0) { page_charge(pg, n + lg_hdr()) } else { 0 };
     Int d = ag_scope_depth();
     _ = if (d > 0 && r == rec_at(d - 1)) { due_sync(d) } else { 0 };
     return pg + lg_hdr();
@@ -371,7 +391,9 @@ Int lg_new(Int r, Int n) {
 
 Int lg_link(Int r, Int pg, Int k) {
     Int head = ld64(r + 56);
-    _ = st64(pg, head) + st64(pg + 8, k) + st64(pg + 16, 0) + st64(pg + 24, 0);
+    // The spare word (pg + 24, the run's charge) stays as lg_new set it,
+    // so a run that a compaction adopts (lg_adopt) gives back what it took.
+    _ = st64(pg, head) + st64(pg + 8, k) + st64(pg + 16, 0);
     _ = if (head != 0) { st64(head + 16, pg) } else { 0 };
     return st64(r + 56, pg) + lg_mark(pg, 1);
 }
