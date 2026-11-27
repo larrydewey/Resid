@@ -431,9 +431,11 @@ fi
 # block. 300k string results, 20k lists and 20k records: 35 MB; before,
 # each join kept the job's region page (the budget ran out after about
 # 12k spawns; without one, the region range ran out at 262k, 1.6 GB).
+# 5k options and 5k lists of closures too: a container of closures was
+# moved as a closure (a list crashed; an option kept the job's region).
 if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/spawn_depth0.resid -o "$W/spawn_depth0") > "$W/spawn_depth0.log" 2>&1 \
     && RESID_MEM_LIMIT=48 timeout 300 "$W/spawn_depth0" > "$W/spawn_depth0.out" 2>&1 \
-    && [ "$(cat "$W/spawn_depth0.out")" = "ok ok ok" ]; then
+    && [ "$(cat "$W/spawn_depth0.out")" = "ok ok ok ok ok" ]; then
     pass=$((pass + 1))
 else
     fail=$((fail + 1)); echo "FAIL depth-0 spawns returning region values: $(tail -1 "$W/spawn_depth0.out" "$W/spawn_depth0.log" 2>/dev/null | tr '\n' ' ')"

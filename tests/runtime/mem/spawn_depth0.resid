@@ -47,7 +47,37 @@ Str run_pairs(Int i, Int n, Str acc) {
     return run_pairs(i + 1, n, first(acc, p.name == f"p{i}" && p.xs.len() == 2 && p.xs[0] + p.xs[1] == 0, "pair", i));
 }
 
+// Results that hold closures move by their container's mover, which
+// moves each closure. Before, they were moved as a closure: the word
+// before the list or the option's box was called as a mover (a crash),
+// or, where that word was 0, the join kept the job's region.
+Str closure(Int) mk(Int i) { return lambda(n) { f"<{i + n}>" }; }
+
+Option(Str closure(Int)) opt_fn(Int i) {
+    Result(Option(Str closure(Int)), RegionError) r = spawn () { return Some(mk(i)); };
+    Option(Str closure(Int)) none = None;
+    return r else { none };
+}
+
+List(Str closure(Int)) list_fn(Int i) {
+    Result(List(Str closure(Int)), RegionError) r = spawn () { return [mk(i), mk(i * 2)]; };
+    return r else { [] };
+}
+
+Str run_opts(Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    Option(Str closure(Int)) o = opt_fn(i);
+    Str s = match (o) { Some(f) => f(1), None => "" };
+    return run_opts(i + 1, n, first(acc, s == f"<{i + 1}>", "option of a closure", i));
+}
+
+Str run_lists(Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    List(Str closure(Int)) l = list_fn(i);
+    return run_lists(i + 1, n, first(acc, l.len() == 2 && l[1](0) == f"<{i * 2}>", "list of closures", i));
+}
+
 Int main() {
-    println(f"{run_text(0, 300000, "ok")} {run_ints(0, 20000, "ok")} {run_pairs(0, 20000, "ok")}");
+    println(f"{run_text(0, 300000, "ok")} {run_ints(0, 20000, "ok")} {run_pairs(0, 20000, "ok")} {run_opts(0, 5000, "ok")} {run_lists(0, 5000, "ok")}");
     return 0;
 }

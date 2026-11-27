@@ -7742,15 +7742,42 @@ Bool lr_sized_int(Str t0) {
     return n > 0 && n <= 32;
 }
 
-Bool lr_list_word(Str t) { return str_has_prefix(t, "List(") && lr_word_ty(str_slice(t, 5, str_len(t) - 1)); }
+Bool lr_list_word(Str t) { return lr_wraps(t, "List(") && lr_word_ty(str_slice(t, 5, str_len(t) - 1)); }
+
+// Whether t is itself a closure, `<ret> closure(<params>)`: a " closure("
+// outside every bracket, and t ends with its parameters' ")". A type that
+// only holds one (List(Str closure(Int)), Option(..), Map(Str, ..)) is
+// not. is_fn_type only asks whether " closure(" is anywhere in t.
+Bool lr_is_clo(Str t) { return str_ends_with(t, ")") && lr_clo_at(t, 0, 0); }
+
+Bool lr_clo_at(Str t, Int i, Int d) {
+    if (i + 9 > str_len(t)) { return false; }
+    Int c = str_char_at(t, i);
+    if (d == 0 && c == 32 && str_slice(t, i, i + 9) == " closure(") { return true; }
+    return lr_clo_at(t, i + 1, if (c == 40) { d + 1 } else { if (c == 41) { d - 1 } else { d } });
+}
+
+// Whether t is the type `pre`...`)` itself: the bracket that `pre` opens
+// closes at t's last character. `List(Int) closure(Int)` begins as a list
+// does but is a closure (its bracket closes before " closure(").
+Bool lr_wraps(Str t, Str pre) { return str_has_prefix(t, pre) && str_ends_with(t, ")") && lr_close_at(t, str_len(pre), 1) == str_len(t) - 1; }
+
+// The index of the ")" that closes depth d's bracket, from i; -1 if none.
+Int lr_close_at(Str t, Int i, Int d) {
+    if (i >= str_len(t)) { return 0 - 1; }
+    Int c = str_char_at(t, i);
+    Int d2 = if (c == 40) { d + 1 } else { if (c == 41) { d - 1 } else { d } };
+    if (d2 == 0) { return i; }
+    return lr_close_at(t, i + 1, d2);
+}
 
 // A word's kind for resid_map_evac: 4 a string, 5 a list, 0 plain.
 Int lr_kind(Str t) { return if (t == "Str") { 4 } else { if (lr_list_word(t)) { 5 } else { 0 } }; }
 
 // The call that moves a carried value of type `ty` to the heap, or "".
 Str lr_evac_fn(Str ty) {
-    if (str_has_prefix(ty, "Set(") && lr_word_ty(set_elem_type_cg(ty))) { return f"@resid_mv_map(ptr %V, i8 {lr_kind(set_elem_type_cg(ty))}, i8 0, ptr %C)"; }
-    if (str_has_prefix(ty, "Map(") && lr_word_ty(map_key_type_cg(ty)) && (lr_word_ty(map_val_type_cg(ty)) || lr_list_word(map_val_type_cg(ty)))) {
+    if (lr_wraps(ty, "Set(") && lr_word_ty(set_elem_type_cg(ty))) { return f"@resid_mv_map(ptr %V, i8 {lr_kind(set_elem_type_cg(ty))}, i8 0, ptr %C)"; }
+    if (lr_wraps(ty, "Map(") && lr_word_ty(map_key_type_cg(ty)) && (lr_word_ty(map_val_type_cg(ty)) || lr_list_word(map_val_type_cg(ty)))) {
         return f"@resid_mv_map(ptr %V, i8 {lr_kind(map_key_type_cg(ty))}, i8 {lr_kind(map_val_type_cg(ty))}, ptr %C)";
     }
     if (lr_list_word(ty)) { return "@resid_mv_list(ptr %V, ptr %C)"; }
@@ -7796,6 +7823,12 @@ pub Str lr_ret_evac(Funcs fs, Str rty) {
 // How a value of type t leaves a region: "-" nothing to do (no pointer),
 // a call template on %V, or "" when it cannot.
 pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
+    // A closure itself (its " closure(" outside every bracket) moves by
+    // the mover before its environment. Asked first: a closure's text may
+    // begin as a container's or a fixed value's does (List(Int)
+    // closure(Int)). A container that only holds closures moves by its
+    // own mover below, which moves each one; one with none is refused ("").
+    if (lr_is_clo(t)) { return "@resid_mv_clo(ptr %V, ptr %C)"; }
     // A fixed-capacity value is in a frame (a loop parameter's own slot):
     // nothing to move unless it holds pointers.
     if (lw_fx_size(t) > 0) { return if (lr_fx_flat(t)) { "-" } else { "" }; }
@@ -7808,9 +7841,8 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
     // list it will be does (its buffer copied with its capacity, so the
     // next pushes still fit; rt_listbuf_new_k). A loop that pushes and
     // allocates nothing else gets no region anyway (lr_allocates).
-    if (str_has_prefix(t, "ListBuf(") && str_ends_with(t, ")")) { return lr_move(fs, "List(" + str_slice(t, 8, str_len(t) - 1) + ")", seen); }
+    if (lr_wraps(t, "ListBuf(")) { return lr_move(fs, "List(" + str_slice(t, 8, str_len(t) - 1) + ")", seen); }
     if (struct_index(fs, t) >= 0 && lr_rec_ok(fs, t, seen)) { return "@" + lr_rec_fn(t) + "(ptr %V, ptr %C)"; }
-    if (is_fn_type(t)) { return "@resid_mv_clo(ptr %V, ptr %C)"; }
     if (lr_is_sum(fs, t) && lr_sum_ok(fs, t, seen)) { return "@" + lr_sum_fn(t) + "(ptr %V, ptr %C)"; }
     // A map of word keys whose values are records, sums, maps or lists of
     // records: each value moves by the compiled `resid.mv.V` (lr_mv_fns).
@@ -7818,12 +7850,12 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
     // regions with bulk arenas, and a region on one of them (own.resid's
     // ow_sweep_scc, under spawn) corrupted a map; they keep the regions
     // they had until that is understood.
-    if (str_has_prefix(t, "Map(") && lr_word_ty(map_key_type_cg(t)) && !resid_internals()) {
+    if (lr_wraps(t, "Map(") && lr_word_ty(map_key_type_cg(t)) && !resid_internals()) {
         Str vt = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(map_val_type_cg(t)));
         Str vm = if (ll_ty(vt) == "ptr" && !lr_word_ty(vt)) { lr_move(fs, vt, seen.concat([t])) } else { "" };
         if (vm != "" && vm != "-") { return f"@resid_mv_map_f(ptr %V, i8 {lr_kind(map_key_type_cg(t))}, ptr @" + lr_mv_fn(vt) + ", ptr %C)"; }
     }
-    if (str_has_prefix(t, "List(") && !is_list_fixed(t)) {
+    if (lr_wraps(t, "List(") && !is_list_fixed(t)) {
         Str et = ct_base_of(fs.ctn, fs.ctb, elem_type(t));
         if (struct_index(fs, et) >= 0 && lr_rec_ok(fs, et, seen)) { return "@resid_mv_list_f(ptr %V, ptr @" + lr_rec_fn(et) + ", ptr %C)"; }
         // A list of lists of words: each element moves as a list of words
@@ -7835,13 +7867,13 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
         // A list of any other lists that move: each element by a small
         // function that calls its list's move (lr_list_def, emitted with
         // the sum movers and named as one).
-        if (str_has_prefix(et, "List(") && !is_list_fixed(et) && !seen.contains(et)) {
+        if (lr_wraps(et, "List(") && !is_list_fixed(et) && !seen.contains(et)) {
             Str em = lr_move(fs, et, seen.concat([et]));
             if (em != "" && em != "-") { return "@resid_mv_list_f(ptr %V, ptr @" + lr_sum_fn(et) + ", ptr %C)"; }
         }
         // A list of closures or maps: each element by its compiled
         // `resid.mv.E` (outside the compiler's own build, as for maps above).
-        Str em2 = if (!resid_internals() && ll_ty(et) == "ptr" && !lr_word_ty(et) && et != "Str" && !str_has_prefix(et, "List(")) { lr_move(fs, et, seen.concat([t])) } else { "" };
+        Str em2 = if (!resid_internals() && ll_ty(et) == "ptr" && !lr_word_ty(et) && et != "Str" && !lr_wraps(et, "List(")) { lr_move(fs, et, seen.concat([t])) } else { "" };
         if (em2 != "" && em2 != "-") { return "@resid_mv_list_f(ptr %V, ptr @" + lr_mv_fn(et) + ", ptr %C)"; }
     }
     return "";
@@ -7858,7 +7890,7 @@ List(Str) lr_list_def(Funcs fs, Str t) {
 // (E0258 keeps those out of lists). Only the moves ask this: lr_list_word
 // also chooses map kinds and fused pushes, which stay as they were.
 Bool lr_list_wide(Str t) {
-    if (!str_has_prefix(t, "List(") || is_list_fixed(t)) { return false; }
+    if (!lr_wraps(t, "List(") || is_list_fixed(t)) { return false; }
     Str e = str_slice(t, 5, str_len(t) - 1);
     return !str_starts_with(e, "Secret(") && !lr_word_ty(e) && lst_raw(e) == 1;
 }
@@ -7931,7 +7963,7 @@ List(Str) lr_mv_sum_at(Funcs fs, List(Str) ls, Map(Str, Int) mdone, Map(Str, Int
 Str lr_sum_fn(Str t) { return "\"resid.sum.evac." + t + "\""; }
 
 Bool lr_is_sum(Funcs fs, Str t) {
-    return str_has_prefix(t, "Option(") || str_has_prefix(t, "Result(") || (struct_index(fs, t) < 0 && sumtype_index_cg(fs, t) >= 0);
+    return lr_wraps(t, "Option(") || lr_wraps(t, "Result(") || (struct_index(fs, t) < 0 && !lr_is_clo(t) && sumtype_index_cg(fs, t) >= 0);
 }
 
 // The variants as "tag|inline fields|raw kinds|payload types" lines.
@@ -8080,7 +8112,7 @@ Map(Str, Int) lr_set_add(Map(Str, Int) s, List(Str) xs, Int i) {
 
 List(Str) lr_sum_defs(Funcs fs, List(Str) ts, Int i, List(Str) acc) {
     if (i >= ts.len()) { return acc; }
-    return lr_sum_defs(fs, ts, i + 1, acc.concat(if (str_has_prefix(ts[i], "List(")) { lr_list_def(fs, ts[i]) } else { lr_sum_def(fs, ts[i]) }));
+    return lr_sum_defs(fs, ts, i + 1, acc.concat(if (lr_wraps(ts[i], "List(")) { lr_list_def(fs, ts[i]) } else { lr_sum_def(fs, ts[i]) }));
 }
 
 // Every `@"resid.sum.evac.T"` in the lines: its T.

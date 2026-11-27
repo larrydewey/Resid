@@ -1,0 +1,153 @@
+// Results of spawns made at scope depth 0 that hold closures without
+// being one: lists, maps, options and results of closures, records and
+// generic records with a list of closures, a sum and a generic sum with a
+// closure payload, a list of lists of closures, and a closure that
+// captures a list of closures. The job's return moves each by its
+// container's own mover, which moves every closure in it (lr_move asks
+// lr_is_clo, not is_fn_type). Before, any type whose text held
+// " closure(" was moved as a closure itself: the word before the
+// container was called as its environment's mover (a crash; an option
+// whose word was 0 left the job's region behind instead). Every closure is called after later jobs
+// have reused the freed pages. (A Set cannot hold a closure, E0302.)
+type Bag = { Str name; List(Str closure(Int)) fs; };
+type Box(T) = { T v; Int n; };
+type Act = Run(Str closure(Int)) | Idle;
+type Ch(T) = Got(T) | Nothing;
+
+Str closure(Int) mk(Str s) { return lambda(n) { s + f"{n}" }; }
+
+// A closure whose text begins as a list's does: it is a closure.
+List(Int) closure(Int) counter(Int base) { return lambda(n) { [base, base + n] }; }
+
+List(Str closure(Int)) list_of(Int k) {
+    Result(List(Str closure(Int)), RegionError) r = spawn () {
+        List(Int) pad = [k, 4702111234474983745, 4702111234474983745];
+        List(Str closure(Int)) out = [mk(f"a{k}"), mk(f"b{k}")];
+        return if (pad.len() > 0) { out } else { [] };
+    };
+    return r else { [] };
+}
+
+Map(Str, Str closure(Int)) map_of(Int k) {
+    Result(Map(Str, Str closure(Int)), RegionError) r = spawn () {
+        Map(Str, Str closure(Int)) m = {};
+        return m.insert(f"x{k}", mk(f"mx{k}")).insert(f"y{k}", mk(f"my{k}"));
+    };
+    return r else { {} };
+}
+
+Option(Str closure(Int)) opt_of(Int k) {
+    Result(Option(Str closure(Int)), RegionError) r = spawn () { return Some(mk(f"o{k}")); };
+    Option(Str closure(Int)) none = None;
+    return r else { none };
+}
+
+Result(Str closure(Int), Str) res_of(Int k) {
+    Result(Result(Str closure(Int), Str), RegionError) r = spawn () {
+        Result(Str closure(Int), Str) v = Ok(mk(f"r{k}"));
+        return v;
+    };
+    Result(Str closure(Int), Str) bad = Err("ERR");
+    return r else { bad };
+}
+
+Bag bag_of(Int k) {
+    Result(Bag, RegionError) r = spawn () { return Bag {.name = f"bag{k}", .fs = [mk(f"g{k}")]}; };
+    return r else { Bag {.name = "ERR", .fs = []} };
+}
+
+Box(List(Str closure(Int))) box_of(Int k) {
+    Result(Box(List(Str closure(Int))), RegionError) r = spawn () {
+        Box(List(Str closure(Int))) b = Box {.v = [mk(f"bx{k}")], .n = k};
+        return b;
+    };
+    Box(List(Str closure(Int))) e = Box {.v = [], .n = 0};
+    return r else { e };
+}
+
+Act act_of(Int k) {
+    Result(Act, RegionError) r = spawn () { return Run(mk(f"act{k}")); };
+    return r else { Idle };
+}
+
+Ch(Str closure(Int)) ch_of(Int k) {
+    Result(Ch(Str closure(Int)), RegionError) r = spawn () {
+        Ch(Str closure(Int)) c = Got(mk(f"ch{k}"));
+        return c;
+    };
+    Ch(Str closure(Int)) n = Nothing;
+    return r else { n };
+}
+
+List(List(Str closure(Int))) nested_of(Int k) {
+    Result(List(List(Str closure(Int))), RegionError) r = spawn () { return [[mk(f"n{k}")], [mk(f"m{k}"), mk(f"p{k}")]]; };
+    return r else { [] };
+}
+
+Str closure(Int) holder_of(Int k) {
+    Result(Str closure(Int), RegionError) r = spawn () {
+        List(Str closure(Int)) fs = [mk(f"h{k}"), mk(f"i{k}")];
+        Str closure(Int) both = lambda(n) { fs[0](n) + fs[1](n + 1) };
+        return both;
+    };
+    return r else { mk("ERR") };
+}
+
+List(Int) closure(Int) counter_of(Int k) {
+    Result(List(Int) closure(Int), RegionError) r = spawn () { return counter(k * 100); };
+    return r else { counter(0 - 1) };
+}
+
+// Garbage and more jobs after the joins, so freed pages are reused.
+Str text(Int k) {
+    Result(Str, RegionError) r = spawn () { return f"t{k}-" + str_repeat("x", k % 50); };
+    return r else { "ERR" };
+}
+
+Str churn(Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    Str s = text(i);
+    return churn(i + 1, n, if (i == n - 1) { s } else { acc });
+}
+
+// Many joins of each kind: a result left in the job's region would show
+// as a wrong value once its pages are reused.
+Str many(Int i, Int n, Str acc) {
+    if (i >= n || acc != "ok") { return acc; }
+    List(Str closure(Int)) l = list_of(i);
+    Option(Str closure(Int)) o = opt_of(i);
+    Str os = match (o) { Some(f) => f(1), None => "none" };
+    Bool good = l.len() == 2 && l[1](2) == f"b{i}2" && os == f"o{i}1";
+    return many(i + 1, n, if (good) { acc } else { f"bad at {i}" });
+}
+
+@requires(args)
+Int main() {
+    Int k = args.count();
+    List(Str closure(Int)) l = list_of(k);
+    Map(Str, Str closure(Int)) m = map_of(k);
+    Option(Str closure(Int)) o = opt_of(k);
+    Result(Str closure(Int), Str) rs = res_of(k);
+    Bag bg = bag_of(k);
+    Box(List(Str closure(Int))) bx = box_of(k);
+    Act a = act_of(k);
+    Ch(Str closure(Int)) ch = ch_of(k);
+    List(List(Str closure(Int))) ns = nested_of(k);
+    Str closure(Int) h = holder_of(k);
+    List(Int) closure(Int) cn = counter_of(k);
+    Str last = churn(0, 2000, "");
+    println(f"{l.len()} {l[0](3)} {l[1](4)} {last.len()}");
+    Str closure(Int) mx = m.get(f"x{k}") else { mk("none") };
+    Str closure(Int) my = m.get(f"y{k}") else { mk("none") };
+    println(f"{m.len()} {mx(5)} {my(6)}");
+    Str os = match (o) { Some(f) => f(7), None => "none" };
+    Str rss = match (rs) { Ok(f) => f(8), Err(e) => e };
+    println(f"{os} {rss}");
+    println(f"{bg.name} {bg.fs[0](9)} {bx.n} {bx.v[0](10)}");
+    Str as = match (a) { Run(f) => f(11), Idle => "idle" };
+    Str chs = match (ch) { Got(f) => f(12), Nothing => "nothing" };
+    println(f"{as} {chs}");
+    println(f"{ns[0][0](13)} {ns[1][0](14)} {ns[1][1](15)} {h(16)} {cn(5)}");
+    println(many(0, 3000, "ok"));
+    return 0;
+}
