@@ -1,0 +1,4 @@
+// SourceLoc, the other built-in record, may only be declared as it is.
+type SourceLoc = { Str file; Int line; };
+
+Int main() { return 0; }
