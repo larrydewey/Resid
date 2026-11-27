@@ -169,8 +169,10 @@ func main() {
 
 	// Cosignatures (cosignature/v1, type 0x04).
 	cos := func(text string, t uint64, priv ed25519.PrivateKey, pub ed25519.PublicKey, name string) string {
-		lines := strings.SplitN(text, "\n", 4)
-		msg := "cosignature/v1\ntime " + fmt.Sprint(t) + "\n" + lines[0] + "\n" + lines[1] + "\n" + lines[2] + "\n"
+		// The whole checkpoint body, extension lines included
+		// (c2sp.org/tlog-cosignature). Every body cosigned below has none;
+		// gen_cosig_ext.py holds the known answers with extension lines.
+		msg := "cosignature/v1\ntime " + fmt.Sprint(t) + "\n" + text
 		sig := ed25519.Sign(priv, []byte(msg))
 		var tb [8]byte
 		binary.BigEndian.PutUint64(tb[:], t)

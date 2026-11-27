@@ -538,11 +538,13 @@ Option(Checkpoint) ckpt_origin_is(Checkpoint c, Str name) {
 
 // ─── Witness cosignatures (c2sp.org/tlog-cosignature) ───────────────
 
-/// The message a witness signs for cosignature/v1: the header lines
-/// "cosignature/v1" and "time <t>", then the checkpoint's origin, size
-/// and root (extension lines are not covered).
+/// The message a witness signs for cosignature/v1 (Ed25519): the header
+/// lines "cosignature/v1" and "time <t>", then the whole checkpoint as its
+/// note text has it -- origin, size, root and every extension line, in
+/// order. (c2sp.org/tlog-cosignature; a cosigner makes no statement about
+/// what the extension lines mean, but its signature covers them.)
 pub List(Int) cosig_message(Checkpoint c, Int t) {
-    Str m = "cosignature/v1\ntime " + f"{t}" + "\n" + c.origin + "\n" + f"{c.size}" + "\n" + base64_encode(c.root) + "\n";
+    Str m = "cosignature/v1\ntime " + f"{t}" + "\n" + ckpt_text(c);
     return bytes_of(m);
 }
 

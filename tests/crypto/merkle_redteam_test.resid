@@ -70,3 +70,32 @@ test "dc2-merkle-2: a line from an unlisted key named with DEL or a C1 control d
     expect(rt_opens_with("log.example", "other" + str_from_code(160) + "log")).toBeFalse();
     expect(rt_opens_with("log.example", "other" + str_from_code(8232) + "log")).toBeFalse();
 }
+
+// dc3-merkle-1: cosignature/v1 signs the checkpoint's extension lines too
+// (c2sp.org/tlog-cosignature: the header lines, origin, size, root hash,
+// then "zero or more lines, each containing one extension line"). The
+// lines below are pyca/cryptography's (merkle_ref/gen_cosig_ext.py).
+Str rt_cosig_ext() { return "— witness.example +98TggAAAABlU/EAuUItODLpixjNnPJk1hI0LAkgucREL/snMK6zhvvg2q5S9Qw/Kqlp+qZ08d6UinNwGp3NECaxnMB2c4VrpKhPAw==\n"; }
+Str rt_cosig_three() { return "— witness.example +98TggAAAABlU/EAb+RTxBBMGLMQVe0r3nIr+mOVbIUllzFnKBbko20KRAV99XyIhKiXqkoxWOMttRdT2YWcZIKODYxH65O9cjvGAg==\n"; }
+
+List(Int) rt_wit_seed() { return sha256_bytes(bytes_of("merkle redteam witness")); }
+
+Checkpoint rt_ext_ckpt() {
+    List(Str) ext = ["extension one", "x=2"];
+    return Checkpoint {.origin = "log.example", .size = 7, .root = sha256_bytes([7]), .ext = ext};
+}
+
+Bool rt_cosigned(Str cosig) {
+    NoteKey wit = NoteKey {.name = "witness.example", .kind = 4, .pubk = pub_key(rt_wit_seed())};
+    Str note = note_sign(ckpt_text(rt_ext_ckpt()), "log.example", rt_log_seed()) + cosig;
+    return match ckpt_cosigned(note, rt_log("log.example"), [wit], 1, 1800000000) { Some(c) => c.ext.len() == 2, None => false };
+}
+
+test "dc3-merkle-1: a cosignature covers the checkpoint's extension lines" {
+    expect(cosig_line(rt_ext_ckpt(), 1700000000, "witness.example", rt_wit_seed()) == rt_cosig_ext()).toBeTrue();
+    expect(rt_cosigned(rt_cosig_ext())).toBeTrue();
+    // A cosignature over origin, size and root alone is not one of this
+    // checkpoint.
+    expect(rt_cosigned(rt_cosig_three())).toBeFalse();
+    expect(hex_encode(cosig_message(rt_ext_ckpt(), 5)) == hex_encode(bytes_of("cosignature/v1\ntime 5\n" + ckpt_text(rt_ext_ckpt())))).toBeTrue();
+}
