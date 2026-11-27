@@ -80,7 +80,11 @@ pub List(Int) msg_bytes(Str msg, Int i, List(Int) acc) {
 }
 
 /// The UTF-8 encoding of `msg` as a list of bytes (RFC 3629): one byte per
-/// ASCII character, two to four for the others. Exact for any text.
+/// ASCII character, two to four for the others. Each code point is encoded
+/// again in its shortest form, so the result is the text's bytes only when
+/// they are well-formed UTF-8 with no embedded NUL: an overlong form comes
+/// back shortened, and a NUL is not kept as it was. Use the bytes
+/// themselves where they must match exactly.
 pub List(Int) bytes_of(Str msg) {
     return utf8_run(msg, 0, ListBuf());
 }
