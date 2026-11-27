@@ -4345,8 +4345,9 @@ List(Str) lw_fx_ret(Str v, Str t, Str r) {
     return [r + " = " + fx_copy("%fx.ret", v, lw_fx_size(t), lw_fx_text(t)), "ret ptr " + r];
 }
 
-// Fixed allocas moved to the front of `ls` (the entry block): a loop
-// then reuses one slot instead of growing the frame.
+// Fixed allocas, and those a loop tagged (lw_iter_hoist), moved to the
+// front of `ls` (the entry block): a loop then reuses one slot instead of
+// growing the frame.
 List(Str) lw_fx_hoist(List(Str) ls, Int at) {
     List(Str) fx = lw_fx_allocas(ls, 0, ListBuf());
     if (fx.len() == 0) { return ls; }
@@ -4355,12 +4356,14 @@ List(Str) lw_fx_hoist(List(Str) ls, Int at) {
 
 List(Str) lw_fx_allocas(List(Str) ls, Int i, ListBuf(Str) acc) {
     if (i >= ls.len()) { return acc.finish(); }
-    return lw_fx_allocas(ls, i + 1, if (tco_is_fixed(ls[i])) { acc.push(ls[i]) } else { acc });
+    return lw_fx_allocas(ls, i + 1, if (lw_fx_moved(ls[i])) { acc.push(ls[i]) } else { acc });
 }
+
+Bool lw_fx_moved(Str l) { return tco_is_fixed(l) || str_ends_with(l, " ; hoist"); }
 
 List(Str) lw_fx_rest(List(Str) ls, Int i, ListBuf(Str) acc) {
     if (i >= ls.len()) { return acc.finish(); }
-    return lw_fx_rest(ls, i + 1, if (tco_is_fixed(ls[i])) { acc } else { acc.push(ls[i]) });
+    return lw_fx_rest(ls, i + 1, if (lw_fx_moved(ls[i])) { acc } else { acc.push(ls[i]) });
 }
 
 // cg_some_con / cg_ok_con / cg_err_con: a one-slot tagged box.
@@ -4901,7 +4904,8 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
 // stays a jump).
 type LIT = { List(Str) lines; Bool on; };
 
-LIT lw_iter(LW w, Int id, List(Str) ls, Int st, List(Int) nodes, Str rety, Str tag, Str what, Str pre) {
+LIT lw_iter(LW w, Int id, List(Str) ls0, Int st, List(Int) nodes, Str rety, Str tag, Str what, Str pre) {
+    List(Str) ls = ls0[0..st].concat(lw_iter_hoist(ls0, st, ListBuf()));
     Str rev = lr_ret_evac(w.fs, rety);
     Str why0 = lw_iter_why(w, ls, st, nodes, rety, rev);
     Str why = if (pre != "" && why0 == "") { pre } else { why0 };
@@ -4911,6 +4915,19 @@ LIT lw_iter(LW w, Int id, List(Str) ls, Int st, List(Int) nodes, Str rety, Str t
     Str reg = "%is." + tag;
     List(Str) head = ls[0..st].concat([reg + " = call i64 @resid_loop_enter()"]);
     return LIT {.lines = head.concat(lw_iter_rets(ls, st, reg, rev, tag, ListBuf()).finish()), .on = true};
+}
+
+// The loop's argument arrays (a list literal's or a box's staging array,
+// copied by the runtime before the call returns) and the counters of the
+// loops nested in it (set again on every entry), tagged for the entry
+// block (lw_fx_hoist): left in the body, each step would take a new one
+// and the stack would grow until the process dies, with or without a
+// region. A tail loop's are moved the same way (tco_alloca_ok).
+List(Str) lw_iter_hoist(List(Str) ls, Int i, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Str l = ls[i];
+    Bool mv = tco_is_alloca(l) && tco_alloca_ok(l) && !lw_fx_moved(l);
+    return lw_iter_hoist(ls, i + 1, acc.push(if (mv) { l + " ; hoist" } else { l }));
 }
 
 // Why a loop gets no region: "" it gets one, "-" it allocates nothing

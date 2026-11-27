@@ -5029,9 +5029,10 @@ Bool tco_is_alloca(Str line) {
 }
 
 // Argument arrays handed to the runtime (copied out before any call
-// returns) and for-loop counters (re-initialized on every loop entry).
+// returns) and for-loop counters (re-initialized on every loop entry);
+// " ; hoist" marks one a for or while loop tagged (lw_iter_hoist).
 Bool tco_alloca_ok(Str line) {
-    if (str_starts_with(line, "%lia.") || str_starts_with(line, "%k.a") || tco_is_fixed(line)) { return true; }
+    if (str_starts_with(line, "%lia.") || str_starts_with(line, "%k.a") || tco_is_fixed(line) || str_ends_with(line, " ; hoist")) { return true; }
     return str_contains(line, " = alloca [") && str_ends_with(line, " x ptr]");
 }
 

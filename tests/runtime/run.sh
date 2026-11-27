@@ -419,7 +419,10 @@ fi
 # bodies allocate and carry nothing, each run at n and at 10 n steps (the
 # while-let shape over a file of n and 10 n pieces). Measured: 8 MB at
 # both sizes; the compiler before kept every step's garbage: 13 to 47 MB
-# at 200,000 steps, 140 to 469 MB at 2 million.
+# at 200,000 steps, 140 to 469 MB at 2 million. The list-literal shapes
+# (lit, wlit) run on an 8 MB stack: each literal's staging array is one
+# slot in the entry block; the compiler before took a new one each step
+# and died of SIGSEGV within 200,000 steps.
 if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/iter_loops.resid -o "$W/iter_loops") > "$W/iter_loops.log" 2>&1; then
     il_ok=1; il_why=""
     il_exp() { # il_exp SHAPE N: the expected output, lines joined by |
@@ -430,16 +433,19 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/iter_loops.resid -o "$W/iter_loo
             list) echo "0 1:one:10|$q 3:three:$(((q - 2) / 3 + 30))|$((2 * q)) 2:two:$(((2 * q - 1) / 3 + 20))|$((3 * q)) 1:one:$((3 * q / 3 + 10))|done 0|" ;;
             nested) echo "0 row 0 col 0|$q row $((q / 100)) col 0|$((2 * q)) row $((2 * q / 100)) col 0|$((3 * q)) row $((3 * q / 100)) col 0|done 0|" ;;
             brk) echo "0 200 /p/0 x: 0|$q 200 /p/0 x: $q|$((3 * q)) 200 /p/0 x: $((3 * q))|$2 200 /p/0 x: $2|done 0|" ;;
+            lit) local k o=""; for k in 0 $q $((2 * q)) $((3 * q)); do o="$o$k $((k + 11)) $((k % 10)):$((k + 3)) 5 $(case $((k % 3)) in 0) echo 7 ;; 1) echo 8 ;; *) echo 0 ;; esac)|"; done; echo "${o}done 0|" ;;
         esac
     }
     for il_n in 200000 2000000; do
-        for il_s in bind expr list nested brk; do
-            il_out="$(RESID_MEM_LIMIT=40 timeout 120 "$W/iter_loops" "$il_s" "$il_n" 2>&1 | tr '\n' '|')"
+        for il_s in bind expr list nested brk lit; do
+            il_out="$(RESID_STACK_MB=8 RESID_MEM_LIMIT=40 timeout 120 "$W/iter_loops" "$il_s" "$il_n" 2>&1 | tr '\n' '|')"
             [ "$il_out" = "$(il_exp "$il_s" "$il_n")" ] || { il_ok=0; il_why="$il_why $il_s/$il_n: $il_out"; }
         done
         { echo F; yes 'y 2 abc' | head -n $((il_n - 1)); } | head -c $((il_n * 16)) > "$W/iter_loops_$il_n.txt"
         il_out="$(RESID_MEM_LIMIT=40 timeout 120 "$W/iter_loops" while "$W/iter_loops_$il_n.txt" 2>&1 | tr '\n' '|')"
         [ "$il_out" = "0 200 /p/6 x: 86|done 0|" ] || { il_ok=0; il_why="$il_why while/$il_n: $il_out"; }
+        il_out="$(RESID_STACK_MB=8 RESID_MEM_LIMIT=40 timeout 120 "$W/iter_loops" wlit "$W/iter_loops_$il_n.txt" 2>&1 | tr '\n' '|')"
+        [ "$il_out" = "0 97 6:89 5 0|done 0|" ] || { il_ok=0; il_why="$il_why wlit/$il_n: $il_out"; }
     done
     if [ "$il_ok" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL for and while loop regions:$il_why" | cut -c1-600; fi
 else
