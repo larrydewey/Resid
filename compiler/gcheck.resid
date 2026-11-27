@@ -3299,6 +3299,12 @@ GKT gk_void(GK k, Int id) { return gt(k, "Void", id); }
 
 GKT gk_expect_method(GK k, Int id, Str bt, Str m, Int na) {
     Str et = expect_elem(bt);
+    // A matcher on a value holding a secret would compare it (a branch on
+    // it) and print it when it fails: only a length is public (E0255).
+    // Every secret counts, even under a type with its own Show: the
+    // comparison would be of that text, not of the value.
+    Str shp = if (m == "toHaveLength") { "" } else { sec_path(k, "Expect", et, et) };
+    if (shp != "") { return gterr(k, "E0255: expect(...)." + m + " on " + (if (shp == et) { "a secret (" + et + ")" } else { et + ", which holds a secret at " + shp }) + " would compare it and print it on failure; compare with ct_eq and expect the Bool, or declassify it", id); }
     if (m == "toEqual" || m == "toBe" || m == "toNotEqual") {
         GKT a = gk_marg(k, id, 0);
         if (a.err != "") { return a; }
@@ -3342,6 +3348,9 @@ GKT gk_expect_method(GK k, Int id, Str bt, Str m, Int na) {
         Bool cset = is_set_type(et);
         if (!(str_has_prefix(et, "List(") && !is_list_fixed(et)) && !cset) { return gterr(k, "toContain expects Expect(List(T)) or Expect(Set(T)), got " + bt, id); }
         Str cet = if (cset) { set_elem_type(et) } else { inner_of(et) };
+        // A list is searched as `.contains` searches it, by element
+        // representation; another element type has no search to use.
+        if (!cset && list_rep(cet) == "") { return gterr(k, "toContain on a list needs integer, Float or Str elements (as .contains does), got " + bt + "; use toSatisfy with a predicate", id); }
         GKT a = gk_marg(k, id, 0);
         if (a.err != "") { return a; }
         if (!params_accept(cet, a.ty, 1)) { return gterr(a.k, "toContain expects (" + cet + "), got (" + a.ty + ")", id); }

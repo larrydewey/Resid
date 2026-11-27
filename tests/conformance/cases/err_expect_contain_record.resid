@@ -1,0 +1,8 @@
+// toContain on a list searches as .contains does: integer, Float or Str
+// elements. A list of records was searched by pointer word.
+type Pt = { Int x; };
+Int main() {
+    List(Pt) a = [Pt {.x = 1}];
+    expect(a).toContain(Pt {.x = 1});
+    return 0;
+}

@@ -1,0 +1,34 @@
+// Every test here must PASS: the matching cases of fail_test.resid.
+type Pt = { Int x; Str y; };
+type Shape = Circle(Int) | Square(Int) | Empty;
+
+test "list" { List(Int) a = [1, 2, 3]; expect(a).toEqual([1, 2, 3]); }
+test "empty list" { List(Int) a = []; expect(a).toEqual([]); }
+test "list bindings" { List(Int) a = [9, 9]; List(Int) b = [9, 9]; expect(a).toEqual(b); }
+test "list of UInt(64)" { List(UInt(64)) a = [18446744073709551615]; List(UInt(64)) b = [18446744073709551615]; expect(a).toEqual(b); }
+test "list of Str" { List(Str) a = ["a", "b"]; expect(a).toEqual(["a", "b"]); }
+test "list of records" { List(Pt) a = [Pt {.x = 1, .y = "a"}]; expect(a).toEqual([Pt {.x = 1, .y = "a"}]); }
+test "nested lists" { List(List(Int)) a = [[1], [2]]; expect(a).toEqual([[1], [2]]); }
+test "list of Float" { List(Float) a = [1.5]; expect(a).toEqual([1.5]); }
+test "list of Bool" { List(Bool) a = [true, false]; expect(a).toEqual([true, false]); }
+test "map" { Map(Int, Str) e = {}; Map(Int, Str) a = e.insert(1, "a").insert(2, "b"); Map(Int, Str) b = e.insert(2, "b").insert(1, "a"); expect(a).toEqual(b); }
+test "set" { Set(Str) e = {}; Set(Str) a = e.insert("x").insert("y"); Set(Str) b = e.insert("y").insert("x"); expect(a).toEqual(b); }
+test "option some" { Option(Int) o = Some(1); expect(o).toEqual(Some(1)); }
+test "option none" { Option(Int) o = None; expect(o).toEqual(None); }
+test "result" { Result(Int, Str) r = Err("x"); expect(r).toEqual(Err("x")); }
+test "record" { Pt p = Pt {.x = 1, .y = "a"}; expect(p).toEqual(Pt {.x = 1, .y = "a"}); }
+test "sum" { Shape s = Circle(1); expect(s).toEqual(Circle(1)); }
+test "sum unit" { Shape s = Empty; expect(s).toEqual(Empty); }
+test "dec" { Dec(2) a = d2(1.50m); expect(a).toEqual(d2(1.5m)); }
+test "float" { expect(2.5).toEqual(2.5); }
+test "int128" { Int(128) a = 170141183460469231731687303715884105727; expect(a).toEqual(170141183460469231731687303715884105727); }
+test "uint256" { UInt(256) a = 115792089237316195423570985008687907853269984665640564039457584007913129639935; expect(a).toEqual(115792089237316195423570985008687907853269984665640564039457584007913129639935); }
+test "bytes" { Bytes a = b"ab"; expect(a).toEqual(b"ab"); }
+test "byte list" { List(UInt(8)) a = [1, 2]; List(UInt(8)) b = [1, 2]; expect(a).toEqual(b); }
+test "toNotEqual on lists" { List(Int) a = [1, 2]; expect(a).toNotEqual([1, 3]); }
+test "toNotEqual on records" { Pt p = Pt {.x = 1, .y = "a"}; expect(p).toNotEqual(Pt {.x = 1, .y = "b"}); }
+test "toNotEqual on options" { Option(Int) o = Some(1); expect(o).toNotEqual(None); }
+test "toContain" { List(Int) a = [1, 2]; expect(a).toContain(2); }
+test "toContain on a byte list" { List(UInt(8)) a = [1, 2]; UInt(8) x = 2; expect(a).toContain(x); }
+test "toBeNull" { Option(List(Int)) o = None; expect(o).toBeNull(); }
+test "toSatisfy on a list" { List(Int) a = [1, 2]; expect(a).toSatisfy(lambda(xs) { xs.len() == 2 }); }
