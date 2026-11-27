@@ -1,7 +1,27 @@
 # Plan: cryptography for the security-first datastore
 
-**Status: DRAFT (2026-11-27).** Coordination: issue #7. Branch:
-`claude/datastore-crypto`.
+**Status: D1-D4 IMPLEMENTED (2026-11-27)**, on branch
+`claude/datastore-crypto` (PR #8, coordination in issue #7). Where the code
+differs from the plan below:
+
+- **D1:** following signed-note, a signature line from an unknown key is
+  ignored, not refused. The API is `note_sign`, `note_parse`,
+  `note_verified`, `ckpt_open`, `ckpt_cosigned` and `cosig_line`.
+- **D3:** scalar functions are named `r255_sc_*` (`sc_*` collided with
+  `lib/p256ops.resid`). `pc_commit_vec` takes its values as concatenated
+  32-byte encodings, because a wide secret may not sit in a list (E0258).
+  The vectors come from libsodium (`gen_ristretto.py`) rather than
+  RFC 9496's appendix, which could not be fetched here. libsodium 1.0.18
+  accepts encodings with bit 255 set, which RFC 9496 refuses and
+  `r255_decode` refuses too.
+- **D4:** one implementation generic over `MdCoef(C, B)` covers both the
+  public verifier and the secret signer. The rejection-verdict reveals
+  and SampleInBall's masked writes are as SECURITY.md describes. The ACVP
+  subset is the 4 shortest-message tests of each group (1.9 MB), plus
+  OpenSSL interop. HashML-DSA is not implemented.
+- The ct coverage gate reports 17 `lib/dev/device*.resid` functions on
+  master as well as on this branch. They predate this work; every
+  function added here is covered.
 
 ## Why
 
