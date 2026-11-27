@@ -230,7 +230,7 @@ Str ckpt_ext_text(List(Str) e, Int i, Str acc) {
 /// The checkpoint in a note text, or None unless it is canonical: a
 /// non-empty origin, a decimal size without sign or leading zeros (below
 /// 2^63), a canonical base64 SHA-256 root, extension lines that are
-/// non-empty, and a final newline with no control characters. The text
+/// non-empty, and a final newline with no ASCII control characters. The text
 /// must be exact UTF-8 (sn_exact).
 pub Option(Checkpoint) ckpt_parse(Str text) {
     if (!sn_exact(text) || !sn_text_ok(text)) { return None; }
@@ -292,7 +292,7 @@ pub Str note_sign(Str text, Str name, List(Int) seed) {
 }
 
 /// The note in `s`, split at its last blank line, or None unless the text
-/// is well formed (ends in a newline, no control characters but newline)
+/// is well formed (ends in a newline, no ASCII control character but newline)
 /// and every signature line parses (em dash, a name without white space
 /// or '+', canonical base64 of at least five bytes). At most 64
 /// signatures.
@@ -333,17 +333,10 @@ pub Option(Note) note_parse(Str s) {
 /// the rest), then as note_parse. Every byte is accounted for: the text
 /// made of them encodes back to as many.
 pub Option(Note) note_parse_bytes(List(Int) b) {
-    if (!sn_utf8_ok(b, 0) || !sn_no_c0(b, 0)) { return None; }
+    if (!sn_utf8_ok(b, 0) || !sn_text_bytes(b, 0)) { return None; }
     Str text = sn_utf8_text(b, 0, StrBuf());
     if (bytes_of(text).len() != b.len()) { return None; }
     return note_parse(text);
-}
-
-// No ASCII control character (below U+0020) but newline.
-Bool sn_no_c0(List(Int) b, Int i) {
-    if (i >= b.len()) { return true; }
-    if (b[i] < 32 && b[i] != 10) { return false; }
-    return sn_no_c0(b, i + 1);
 }
 
 /// Whether the stored bytes of `s` are exactly the strict UTF-8 encoding
@@ -410,11 +403,12 @@ Option(List(NoteSig)) sn_sig_lines(List(Str) l, Int i, Int end, List(NoteSig) ac
     return sn_sig_lines(l, i + 1, end, acc.concat([sig]));
 }
 
-// A key name: non-empty, with no white space, no control character and
-// no '+'. White space is Unicode's White_Space property, as the
-// signed-note format says (Go's note package: unicode.IsSpace); the
-// ASCII ones could not occur in one field of a line split on spaces, the
-// others could.
+// A key name: non-empty, with no white space and no '+', as the
+// signed-note format says. White space is Unicode's White_Space property
+// (Go's note package: unicode.IsSpace); the ASCII ones could not occur in
+// one field of a line split on spaces, the others could. Nothing else is
+// refused: a name the format allows on a line from a key nobody lists
+// must not make the note unreadable.
 Bool sn_name_ok(Str name) {
     if (name == "") { return false; }
     return sn_name_cps(name, 0);
@@ -423,15 +417,13 @@ Bool sn_name_ok(Str name) {
 Bool sn_name_cps(Str name, Int i) {
     if (i >= str_len(name)) { return true; }
     Int c = str_char_at(name, i);
-    if (c <= 32 || c == 43 || sn_space_or_control(c)) { return false; }
+    if (c <= 32 || c == 43 || sn_space(c)) { return false; }
     return sn_name_cps(name, i + 1);
 }
 
-// DEL, the C1 controls (U+0085 NEL among them) and the White_Space code
-// points above U+0020.
-Bool sn_space_or_control(Int c) {
-    if (c >= 127 && c <= 160) { return true; }
-    if (c == 5760 || (c >= 8192 && c <= 8202)) { return true; }
+// The White_Space code points above U+0020: NEL, NBSP, and the rest.
+Bool sn_space(Int c) {
+    if (c == 133 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202)) { return true; }
     return c == 8232 || c == 8233 || c == 8239 || c == 8287 || c == 12288;
 }
 
@@ -445,8 +437,9 @@ List(Int) sn_b64(Str s) {
     return b;
 }
 
-// Note text: non-empty, ends with a newline, no control character but
-// newline.
+// Note text: non-empty, ends with a newline, no ASCII control character
+// (below U+0020) but newline, which is the format's rule for a whole
+// note. DEL and the C1 controls are not among them.
 Bool sn_text_ok(Str t) {
     List(Int) b = bytes_of(t);
     if (b.len() == 0 || b[b.len() - 1] != 10) { return false; }
@@ -455,7 +448,7 @@ Bool sn_text_ok(Str t) {
 
 Bool sn_text_bytes(List(Int) b, Int i) {
     if (i >= b.len()) { return true; }
-    if ((b[i] < 32 && b[i] != 10) || b[i] == 127) { return false; }
+    if (b[i] < 32 && b[i] != 10) { return false; }
     return sn_text_bytes(b, i + 1);
 }
 

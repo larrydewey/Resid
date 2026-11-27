@@ -30,9 +30,8 @@ test "dc-merkle-2: a key name holds no Unicode white space" {
     expect(rt_name_parses("log" + str_from_code(12288) + "name")).toBeFalse();
 }
 
-test "dc-merkle-2: a key name holds no control character or '+', and may be non-ASCII" {
-    // C1 controls (U+0080..U+009F) with the C0 ones, DEL and '+'.
-    List(Int) ctl = [128, 144, 159, 127, 43, 9, 11, 12, 13, 31];
+test "dc-merkle-2: a key name holds no ASCII control or '+', and may be non-ASCII" {
+    List(Int) ctl = [43, 9, 11, 12, 13, 31];
     expect(rt_any_parses(ctl, 0)).toBeFalse();
     expect(rt_name_parses("")).toBeFalse();
     // Letters outside ASCII, and characters next to the refused ranges.
@@ -40,4 +39,34 @@ test "dc-merkle-2: a key name holds no control character or '+', and may be non-
     expect(rt_name_parses("log" + str_from_code(161) + "name")).toBeTrue();
     expect(rt_name_parses("log" + str_from_code(8203) + "name")).toBeTrue();
     expect(rt_name_parses("log" + str_from_code(12289) + "name")).toBeTrue();
+}
+
+List(Int) rt_log_seed() { return sha256_bytes(bytes_of("merkle redteam log")); }
+
+NoteKey rt_log(Str name) { return NoteKey {.name = name, .kind = 1, .pubk = pub_key(rt_log_seed())}; }
+
+// A checkpoint signed by the log `name`, then a line from a key nobody
+// lists, named `other`.
+Bool rt_opens_with(Str name, Str other) {
+    List(Str) none = [];
+    Checkpoint c = Checkpoint {.origin = name, .size = 7, .root = sha256_bytes([7]), .ext = none};
+    Str note = note_sign(ckpt_text(c), name, rt_log_seed()) + note_sig_line(other, 9, sha256_bytes([3]).concat(sha256_bytes([4])));
+    return match ckpt_open(note, rt_log(name)) { Some(x) => x.size == 7, None => false };
+}
+
+// dc2-merkle-2: DEL and the C1 controls are neither white space nor '+',
+// so the format allows them in a name (Go's note package too); refusing
+// them let anyone's stray signature line make a good note unreadable.
+// Of U+007F..U+00A0 only NEL (U+0085) and NBSP (U+00A0) are white space.
+test "dc2-merkle-2: a line from an unlisted key named with DEL or a C1 control does not spoil a note" {
+    expect(rt_opens_with("log.example", "other.example")).toBeTrue();
+    expect(rt_opens_with("log.example", "other" + str_from_code(127) + "log")).toBeTrue();
+    expect(rt_opens_with("log.example", "other" + str_from_code(128) + "log")).toBeTrue();
+    expect(rt_opens_with("log.example", "other" + str_from_code(159) + "log")).toBeTrue();
+    // The log's own name may hold them as well.
+    expect(rt_opens_with("log" + str_from_code(127) + "x", "other.example")).toBeTrue();
+    // White space stays refused, whoever the line is from.
+    expect(rt_opens_with("log.example", "other" + str_from_code(133) + "log")).toBeFalse();
+    expect(rt_opens_with("log.example", "other" + str_from_code(160) + "log")).toBeFalse();
+    expect(rt_opens_with("log.example", "other" + str_from_code(8232) + "log")).toBeFalse();
 }
