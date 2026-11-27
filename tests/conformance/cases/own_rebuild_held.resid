@@ -1,0 +1,126 @@
+// A record literal rebuilt in place (own.resid's ow_struct) must not take
+// the record of a binder the literal itself holds (RB-26): `T { .xs =
+// [e], .. }` rebuilt e's record, which then held a list holding itself (a
+// wrong length, and a loop region's move following the cycle until the
+// stack ran out). Held through a list literal, a concat, a record field,
+// an Option, a binder of another type; a map insert, a closure and a
+// spawn are kept here too.
+type N1 = { Int n; List(N1) xs; };
+type N3 = { Int n; Map(Str, N3) m; };
+type W4 = { Int k; N4 nd; };
+type N4 = { Int n; List(W4) ws; };
+type N5 = { Int n; Option(N5) o; };
+type N6 = { Int n; Int closure(Int) f; };
+type N7 = { Int n; Int got; };
+type N8 = { Int n; W8 w; };
+type W8 = { Int k; Option(N8) back; };
+
+N1 r1(N1 t, Int i, Int n) {
+    if (i >= n) { return t; }
+    List(N1) none = [];
+    N1 e = N1 { .n = i * 10, .xs = none };
+    return r1(N1 { .n = i, .xs = [e] }, i + 1, n);
+}
+
+N1 r2(N1 t, Int i, Int n) {
+    if (i >= n) { return t; }
+    List(N1) none = [];
+    N1 e = N1 { .n = i * 10, .xs = none };
+    List(N1) base = if (t.xs.len() > 3) { none } else { t.xs };
+    return r2(N1 { .n = i, .xs = base.concat([e]) }, i + 1, n);
+}
+
+N3 r3(N3 t, Int i, Int n) {
+    if (i >= n) { return t; }
+    Map(Str, N3) none = {};
+    N3 e = N3 { .n = i * 10, .m = none };
+    return r3(N3 { .n = i, .m = t.m.insert(f"k{i % 2}", e) }, i + 1, n);
+}
+
+N4 r4(N4 t, Int i, Int n) {
+    if (i >= n) { return t; }
+    List(W4) none = [];
+    N4 e = N4 { .n = i * 10, .ws = none };
+    return r4(N4 { .n = i, .ws = [W4 { .k = i, .nd = e }] }, i + 1, n);
+}
+
+N5 r5(N5 t, Int i, Int n) {
+    if (i >= n) { return t; }
+    N5 e = N5 { .n = i * 10, .o = None };
+    return r5(N5 { .n = i, .o = Some(e) }, i + 1, n);
+}
+
+N6 r6(N6 t, Int i, Int n) {
+    if (i >= n) { return t; }
+    N6 e = N6 { .n = i * 10, .f = lambda(k) { k } };
+    return r6(N6 { .n = i, .f = lambda(k) { e.n + k } }, i + 1, n);
+}
+
+N7 r7(N7 t, Int i, Int n) {
+    if (i >= n) { return t; }
+    N7 e = N7 { .n = i * 10, .got = 0 };
+    Result(Int, RegionError) s = spawn () { return e.n + 1; };
+    Int g = match s { Ok(v) => v, Err(_) => -1 };
+    return r7(N7 { .n = i, .got = g }, i + 1, n);
+}
+
+// Held through a binder of another type built from it.
+N8 r8(N8 t, Int i, Int n) {
+    if (i >= n) { return t; }
+    N8 e = N8 { .n = i * 10, .w = W8 { .k = 0, .back = None } };
+    W8 h = W8 { .k = i, .back = Some(e) };
+    return r8(N8 { .n = e.n + 1, .w = h }, i + 1, n);
+}
+
+// The same in a loop region that moves its values: C2's mover follows
+// pend into each L2's record.
+type L2 = { Int id; C2 c; };
+type C2 = { Int n; List(List(L2)) pend; };
+
+List(Str) junk(Int i, Int n, List(Str) acc) {
+    if (i >= n) { return acc; }
+    return junk(i + 1, n, acc.concat([f"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz{i}"]));
+}
+
+Int s2(List(List(L2)) p) { return if (p.len() == 0) { 0 } else { p[p.len() - 1][0].id + p[p.len() - 1][0].c.pend.len() + p.len() }; }
+
+C2 rl(C2 c, Int i, Int n, Int acc) {
+    if (i >= n) { return C2 { .n = acc, .pend = c.pend }; }
+    Int s = s2(c.pend) + junk(0, 3000, []).len();
+    List(List(L2)) none = [];
+    C2 e = C2 { .n = i, .pend = none };
+    List(List(L2)) p = if (c.pend.len() > 8) { none } else { c.pend };
+    return rl(C2 { .n = i, .pend = p.concat([[L2 { .id = i, .c = e }]]) }, i + 1, n, acc + s);
+}
+
+Int o5in(Option(N5) o) { return match o { Some(_) => 1, None => 0 }; }
+Int o5(Option(N5) o) { return match o { Some(v) => v.n * 100 + o5in(v.o), None => -1 }; }
+Int o8(Option(N8) o) { return match o { Some(v) => v.n, None => -1 }; }
+
+Int main() {
+    Int n = rt 3;
+    List(N1) e1 = [];
+    N1 a = r1(N1 { .n = 0, .xs = e1 }, 0, n);
+    println(f"list-literal {a.n} {a.xs.len()} {a.xs[0].n} {a.xs[0].xs.len()}");
+    N1 b = r2(N1 { .n = 0, .xs = e1 }, 0, n);
+    println(f"concat {b.n} {b.xs.len()} {b.xs[0].n} {b.xs[0].xs.len()} {b.xs[2].xs.len()}");
+    Map(Str, N3) e3 = {};
+    N3 c = r3(N3 { .n = 0, .m = e3 }, 0, n);
+    N3 c0 = c.m.get("k0") else { c };
+    println(f"map-insert {c.n} {c.m.len()} {c0.n} {c0.m.len()}");
+    List(W4) e4 = [];
+    N4 d = r4(N4 { .n = 0, .ws = e4 }, 0, n);
+    println(f"record-field {d.n} {d.ws.len()} {d.ws[0].nd.n} {d.ws[0].nd.ws.len()}");
+    N5 f5 = r5(N5 { .n = 0, .o = None }, 0, n);
+    println(f"option {f5.n} {o5(f5.o)}");
+    N6 g = r6(N6 { .n = 0, .f = lambda(k) { k } }, 0, n);
+    println(f"closure {g.n} {g.f(1)}");
+    N7 h = r7(N7 { .n = 0, .got = 0 }, 0, n);
+    println(f"spawn {h.n} {h.got}");
+    N8 k = r8(N8 { .n = 0, .w = W8 { .k = 0, .back = None } }, 0, n);
+    println(f"via-binder {k.n} {k.w.k} {o8(k.w.back)}");
+    List(List(L2)) e2 = [];
+    C2 m = rl(C2 { .n = 0, .pend = e2 }, 0, rt 1500, 0);
+    println(f"region {m.n} {s2(m.pend)}");
+    return 0;
+}
