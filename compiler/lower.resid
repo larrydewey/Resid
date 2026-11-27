@@ -4345,6 +4345,13 @@ List(Str) lw_fx_ret(Str v, Str t, Str r) {
     return [r + " = " + fx_copy("%fx.ret", v, lw_fx_size(t), lw_fx_text(t)), "ret ptr " + r];
 }
 
+// Whether a type in ns is named Str or Bytes (user_fixed_word).
+Bool lw_names_fixed(List(Str) ns, Int i) {
+    if (i >= ns.len()) { return false; }
+    Str h = ty_head_cg(ns[i]);
+    return h == "Str" || h == "Bytes" || lw_names_fixed(ns, i + 1);
+}
+
 // Fixed allocas, and those a loop tagged (lw_iter_hoist), moved to the
 // front of `ls` (the entry block): a loop then reuses one slot instead of
 // growing the frame.
@@ -7946,7 +7953,7 @@ Str lr_evac_fn(Str ty) {
 List(Str) lr_evac_tys(Funcs fs, List(Str) tyl, Int i, List(Str) acc) {
     if (i >= tyl.len()) { return acc; }
     Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(tyl[i]));
-    Str e = if (t == "Str") { "" } else { lr_move(fs, t, []) };
+    Str e = if (t == "Str" && !lr_user_ty(fs, t)) { "" } else { lr_move(fs, t, []) };
     return lr_evac_tys(fs, tyl, i + 1, acc.concat([if (e == "-") { "" } else { e }]));
 }
 
@@ -7954,7 +7961,7 @@ List(Str) lr_evac_tys(Funcs fs, List(Str) tyl, Int i, List(Str) acc) {
 pub Str lr_ret_evac(Funcs fs, Str rty) {
     Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(rty));
     if (ll_ty(t) != "ptr") { return ""; }
-    if (t == "Str") { return "@resid_mv_str(ptr %V, ptr %C)"; }
+    if (t == "Str" && !lr_user_ty(fs, t)) { return "@resid_mv_str(ptr %V, ptr %C)"; }
     Str e = lr_move(fs, t, []);
     return if (e == "-") { "" } else { e };
 }
@@ -7968,6 +7975,12 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
     // closure(Int)). A container that only holds closures moves by its
     // own mover below, which moves each one; one with none is refused ("").
     if (lr_is_clo(t)) { return "@resid_mv_clo(ptr %V, ptr %C)"; }
+    // A record or sum the program declared moves by its own mover, asked
+    // before the built-in types' movers, which go by name: a record named
+    // Dec, Set(T), Map(K, V) or List(T) was moved as a decimal, set, map or
+    // list, and the fields it held were left in the freed region. (E0222
+    // refuses such names; this holds without it.)
+    if (lr_user_ty(fs, t)) { return lr_move_user(fs, t, seen); }
     // A fixed-capacity value is in a frame (a loop parameter's own slot):
     // nothing to move unless it holds pointers.
     if (lw_fx_size(t) > 0) { return if (lr_fx_flat(t)) { "-" } else { "" }; }
@@ -8016,6 +8029,18 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
         if (em2 != "" && em2 != "-") { return "@resid_mv_list_f(ptr %V, ptr @" + lr_mv_fn(et) + ", ptr %C)"; }
     }
     return "";
+}
+
+// Whether t is a record or a sum the program declared (not Option or
+// Result), whatever its name.
+Bool lr_user_ty(Funcs fs, Str t) {
+    if (struct_index(fs, t) >= 0) { return true; }
+    return !lr_wraps(t, "Option(") && !lr_wraps(t, "Result(") && !lr_is_clo(t) && sumtype_index_cg(fs, t) >= 0;
+}
+
+Str lr_move_user(Funcs fs, Str t, List(Str) seen) {
+    if (struct_index(fs, t) >= 0) { return if (lr_rec_ok(fs, t, seen)) { "@" + lr_rec_fn(t) + "(ptr %V, ptr %C)" } else { "" }; }
+    return if (lr_sum_ok(fs, t, seen)) { "@" + lr_sum_fn(t) + "(ptr %V, ptr %C)" } else { "" };
 }
 
 // The element mover of a list of lists of type t (a List): t's own move.
@@ -8276,7 +8301,7 @@ Map(Str, Int) lr_sum_refs_in(Str l, Int from, Map(Str, Int) acc) {
 Bool lr_new_kind(Funcs fs, Str t0, List(Str) seen) {
     Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(t0));
     if (is_fn_type(t) || lr_is_sum(fs, t)) { return true; }
-    if (str_has_prefix(t, "Map(") && lr_evac_fn(t) == "" && !resid_internals()) { return true; }
+    if (str_has_prefix(t, "Map(") && !lr_user_ty(fs, t) && lr_evac_fn(t) == "" && !resid_internals()) { return true; }
     if (seen.contains(t)) { return false; }
     Int si = struct_index(fs, t);
     if (si >= 0) { return lr_fields_new(fs, fs.stf[si], 0, seen.concat([t])); }
@@ -11620,6 +11645,7 @@ Map(Int, Str) lw_own_ro_n(Map(Int, Str) ow, List(Int) ks, Int i, Map(Str, Int) d
 // Lower the reducer's residual graph, already through lw_inlined; own:
 // the ownership verdicts (empty with --no-ownership).
 pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts, Map(Int, Map(Int, Str)) own, Bool reuse) {
+    Int _uf = resid_raw_store64(user_fixed_word(), if (lw_names_fixed(fs.stn, 0) || lw_names_fixed(fs.sun, 0)) { 1 } else { 0 });
     LOP lo0 = lo_program(g, unit, fs, reuse);
     // Copies of functions with more SU parameters (W2, stage 1b).
     SPX sx = su_clones(g, unit, fs, lo0, lo0.su.spec.keys(), 0, SPX {.g = g, .fs = fs, .lo = lo0, .ids = []});

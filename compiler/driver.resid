@@ -2001,10 +2001,23 @@ Bool can_i64_store(Str ty) {
 }
 
 Bool is_str_fixed(Str t) {
-    return str_has_prefix_cg(t, "Str(");
+    return str_has_prefix_cg(t, "Str(") && fixed_cap_named(t, 4);
 }
 Bool is_bytes_fixed(Str t) {
-    return str_has_prefix_cg(t, "Bytes(");
+    return str_has_prefix_cg(t, "Bytes(") && fixed_cap_named(t, 6);
+}
+
+// Set (lw_program) while lowering a program that declares a record or a
+// sum whose name is Str or Bytes: then only a number in the brackets
+// makes Str(N) or Bytes(N) fixed-capacity, and `Str(Row)` is the
+// program's own type, not a fixed string to be copied into a frame slot.
+// (E0222 refuses such names; this holds without it. The checker, which
+// sees Str(N) for a generic N, runs before it is set.)
+pub Int user_fixed_word() { return resid_raw_global("resid_user_fixed", 8); }
+
+Bool fixed_cap_named(Str t, Int open) {
+    if (resid_raw_load64(user_fixed_word()) == 0) { return true; }
+    return str_ends_with(t, ")") && _all_digits(str_trim(str_slice(t, open, str_len(t) - 1)), 0);
 }
 
 // Recursive helper: is substring [i,n) all digits?
