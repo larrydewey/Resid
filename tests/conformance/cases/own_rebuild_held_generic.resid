@@ -1,0 +1,90 @@
+// RB-26's held-rebuild guard (a literal must not rebuild in place the
+// record of a binder it holds) for records that reach themselves through
+// generic types. A generic record's instance is named `Tree(Int)`: the
+// guard must see that name whole, and follow generic records and sums
+// (instantiated, or with their parameters) to find the cycle (SWMG-1).
+type Tree(T) = { T n; List(Tree(T)) xs; };
+
+Tree(Int) r1(Tree(Int) t, Int i, Int n) {
+    if (i >= n) { return t; }
+    List(Tree(Int)) none = [];
+    Tree(Int) e = Tree { .n = i * 10, .xs = none };
+    return r1(Tree { .n = i, .xs = [e] }, i + 1, n);
+}
+
+// A plain record that reaches itself only through a generic record.
+type Nn = { Int n; Wrap(Int) w; };
+type Wrap(T) = { T k; List(Nn) back; };
+
+Nn r2(Nn t, Int i, Int n) {
+    if (i >= n) { return t; }
+    List(Nn) none = [];
+    Nn e = Nn { .n = i * 10, .w = Wrap { .k = 0, .back = none } };
+    return r2(Nn { .n = i, .w = Wrap { .k = i, .back = [e] } }, i + 1, n);
+}
+
+// A generic record holding itself through a generic sum.
+type Gopt(T) = Gnone | Gsome(T);
+type Box(T) = { T v; Gopt(Box(T)) nx; };
+Int bn(Gopt(Box(Int)) o) { return match (o) { Gsome(x) => x.v, Gnone => -1 }; }
+Int bdeep(Gopt(Box(Int)) o) { return match (o) { Gsome(x) => bn(x.nx), Gnone => -2 }; }
+
+Box(Int) r3(Box(Int) t, Int i, Int n) {
+    if (i >= n) { return t; }
+    Box(Int) e = Box { .v = i * 10, .nx = Gnone };
+    return r3(Box { .v = i, .nx = Gsome(e) }, i + 1, n);
+}
+
+// Two parameters, the record in a list of itself.
+type Pair(A, B) = { A a; B b; List(Pair(A, B)) ps; };
+
+Pair(Int, Str) r4(Pair(Int, Str) t, Int i, Int n) {
+    if (i >= n) { return t; }
+    List(Pair(Int, Str)) none = [];
+    Pair(Int, Str) e = Pair { .a = i * 10, .b = "e", .ps = none };
+    return r4(Pair { .a = i, .b = "t", .ps = [e] }, i + 1, n);
+}
+
+// A recursive generic sum holding a generic record.
+type Chain(T) = End | Link(T, Chain(T));
+type Cn(T) = { T n; Chain(Cn(T)) c; };
+Int clen(Chain(Cn(Int)) c) { return match (c) { Link(h, t) => 1 + clen(t), End => 0 }; }
+Int chead(Chain(Cn(Int)) c) { return match (c) { Link(h, t) => h.n, End => -1 }; }
+Int cdeep(Chain(Cn(Int)) c) { return match (c) { Link(h, t) => clen(h.c), End => -1 }; }
+
+Cn(Int) r5(Cn(Int) t, Int i, Int n) {
+    if (i >= n) { return t; }
+    Cn(Int) e = Cn { .n = i * 10, .c = End };
+    return r5(Cn { .n = i, .c = Link(e, End) }, i + 1, n);
+}
+
+// A generic record holding itself in an Option.
+type On(T) = { T n; Option(On(T)) o; };
+Int on(Option(On(Int)) o) { return match (o) { Some(x) => x.n, None => -1 }; }
+Int odeep(Option(On(Int)) o) { return match (o) { Some(x) => on(x.o), None => -2 }; }
+
+On(Int) r6(On(Int) t, Int i, Int n) {
+    if (i >= n) { return t; }
+    On(Int) e = On { .n = i * 10, .o = None };
+    return r6(On { .n = i, .o = Some(e) }, i + 1, n);
+}
+
+Int main() {
+    Int n = rt 3;
+    List(Tree(Int)) e1 = [];
+    Tree(Int) a = r1(Tree { .n = 0, .xs = e1 }, 0, n);
+    println(f"tree {a.n} {a.xs.len()} {a.xs[0].n} {a.xs[0].xs.len()}");
+    List(Nn) e2 = [];
+    Nn b = r2(Nn { .n = 0, .w = Wrap { .k = 0, .back = e2 } }, 0, n);
+    println(f"wrap {b.n} {b.w.back.len()} {b.w.back[0].n} {b.w.back[0].w.back.len()}");
+    Box(Int) c = r3(Box { .v = 0, .nx = Gnone }, 0, n);
+    println(f"box {c.v} {bn(c.nx)} {bdeep(c.nx)}");
+    List(Pair(Int, Str)) e4 = [];
+    Pair(Int, Str) d = r4(Pair { .a = 0, .b = "s", .ps = e4 }, 0, n);
+    println(f"pair {d.a} {d.ps.len()} {d.ps[0].a} {d.ps[0].ps.len()}");
+    Cn(Int) f = r5(Cn { .n = 0, .c = End }, 0, n);
+    println(f"chain {f.n} {clen(f.c)} {chead(f.c)} {cdeep(f.c)}");
+    On(Int) h = r6(On { .n = 0, .o = None }, 0, n);
+    println(f"option {h.n} {on(h.o)} {odeep(h.o)}");
+    return 0;
+}
