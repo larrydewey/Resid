@@ -4016,11 +4016,25 @@ LS lin_stmt(GK k, Int id, LS l) {
         LS b = if (n > 2) { lin_stmt(k, kg_kid(g, id, 2), c) } else { c };
         return lin_merge(k, c, a, b, id);
     }
-    if (kd == "while" || kd == "for") {
-        Int ci = kg_kid(g, id, if (kd == "for") { 1 } else { 0 });
+    // A for loop's iterable (a list, a range's bounds) is made once, before
+    // the loop: outside its fence. A while's condition runs on every step,
+    // in the loop's region (lower.resid lw_iter), so it is inside the
+    // fence with the body: a builder bound outside the loop and pushed in
+    // the condition would hold the region's pages after they are freed.
+    if (kd == "for") {
+        Int ci = kg_kid(g, id, 1);
         LS c = if (g.ns[ci].kind == "pat") { lin_expr(k, kg_kid(g, ci, 0), l) } else { lin_expr(k, ci, l) };
         if (c.err != "") { return c; }
         return lin_fenced(k, kg_kid(g, id, n - 1), c, true);
+    }
+    if (kd == "while") {
+        Int ci = kg_kid(g, id, 0);
+        LS inner = ls_frame(l, l.locked.concat(l.live), l.live.len());
+        LS c = if (g.ns[ci].kind == "pat") { lin_expr(k, kg_kid(g, ci, 0), inner) } else { lin_expr(k, ci, inner) };
+        if (c.err != "") { return c; }
+        LS r = lin_stmt(k, kg_kid(g, id, n - 1), c);
+        if (r.err != "") { return r; }
+        return l;
     }
     return lin_kids(k, id, 0, l);
 }

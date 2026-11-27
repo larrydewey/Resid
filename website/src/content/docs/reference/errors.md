@@ -81,7 +81,7 @@ network]`.
 | `E0301` | a known value violates its constraint type |
 | `E0401` | a builder is not consumed on some path |
 | `E0402` | a builder is used twice |
-| `E0403` | a builder is used inside a loop or lambda it was not created in |
+| `E0403` | a builder is used inside a loop (its body or a `while` condition) or lambda it was not created in |
 | `E0404` | a builder type nested inside another type |
 | `E0410` | a vector's lane type or lane count is not allowed |
 | `E0411` | a vector type nested inside another type, or a vector captured by a lambda or `spawn` |

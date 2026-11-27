@@ -1,0 +1,8 @@
+// Linear builders (spec §45.1): E0403 for a builder bound outside a while
+// loop and used in its (plain Bool) condition, which runs on every step.
+Int main() {
+    StrBuf s = StrBuf();
+    Int i = rt 0;
+    while (str_len(s.push("x").finish()) < i) { return 1; }
+    return 0;
+}

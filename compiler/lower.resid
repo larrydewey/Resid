@@ -4797,7 +4797,12 @@ ST lw_while(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     ST body = lw_body(w, lw_kid(w, id, 1), benv, in_main, g3);
     if (body.err != "") { return body; }
     List(Str) b1 = if (!body.dead) { body.lines.concat(["br label %" + lbl_c]) } else { body.lines };
-    LIT itr = lw_iter(w, id, b1, g.lines.len(), [ci, lw_kid(w, id, 1)], g.rety, "w" + lbs, "while loop");
+    // A builder bound outside the loop and used in its condition (E0403
+    // refuses it; this keeps the region off should one get through): the
+    // condition's pushes would store the region's values in an older
+    // builder, which no region test sees.
+    Str cb = lw_outer_builder(w, ci, env);
+    LIT itr = lw_iter(w, id, b1, g.lines.len(), [ci, lw_kid(w, id, 1)], g.rety, "w" + lbs, "while loop", if (cb == "") { "" } else { "its condition uses builder `" + cb + "`, bound outside the loop" });
     List(Str) b2 = itr.lines.concat([lbl_c + ":"]).concat(lw_iter_back(itr.on, "w" + lbs)).concat(["br label %" + lbl_b]).concat(lw_iter_exit(itr.on, "w" + lbs, lbl_d));
     return ST {.pos = 0, .dead = g.dead, .err = "", .env = env, .glines = body.glines, .hlines = body.hlines, .lines = b2, .tmp = body.tmp, .lbl = body.lbl, .rety = g.rety};
 }
@@ -4843,7 +4848,7 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
         ST body2 = lw_body(w, bodyn, envl, in_main, gb2);
         if (body2.err != "") { return body2; }
         List(Str) b20c = if (!body2.dead) { body2.lines.concat(["br label %" + lbl_c2]) } else { body2.lines };
-        LIT it2 = lw_iter(w, id, b20c, f9.len(), [bodyn], g.rety, "f" + n2s, "for loop over " + vname);
+        LIT it2 = lw_iter(w, id, b20c, f9.len(), [bodyn], g.rety, "f" + n2s, "for loop over " + vname, "");
         List(Str) b24 = it2.lines.concat([lbl_c2 + ":"]).concat(lw_iter_back(it2.on, "f" + n2s)).concat([iv2 + " = add i64 " + iv + ", 1", "store i64 " + iv2 + ", ptr " + ixa, "br label %" + lbl_b2]).concat(lw_iter_exit(it2.on, "f" + n2s, lbl_d2));
         return ST {.pos = 0, .dead = g.dead, .err = "", .env = env, .glines = body2.glines, .hlines = body2.hlines, .lines = b24, .tmp = body2.tmp, .lbl = nlbl2, .rety = g.rety};
     }
@@ -4868,7 +4873,7 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     ST body = lw_body(w, bodyn, env2, in_main, gb);
     if (body.err != "") { return body; }
     List(Str) bo1 = if (!body.dead) { body.lines.concat(["br label %" + lbl_c]) } else { body.lines };
-    LIT itr = lw_iter(w, id, bo1, p7.len(), [bodyn], g.rety, "f" + lbs, "for loop over " + vname);
+    LIT itr = lw_iter(w, id, bo1, p7.len(), [bodyn], g.rety, "f" + lbs, "for loop over " + vname, "");
     List(Str) t4 = itr.lines.concat([lbl_c + ":"]).concat(lw_iter_back(itr.on, "f" + lbs)).concat([k2 + " = add i64 " + kreg + ", 1", "store i64 " + k2 + ", ptr " + kaddr, "br label %" + lbl_b]).concat(lw_iter_exit(itr.on, "f" + lbs, lbl_d));
     return ST {.pos = 0, .dead = g.dead, .err = "", .env = env, .glines = body.glines, .hlines = body.hlines, .lines = t4, .tmp = body.tmp, .lbl = imax(newlbl, body.lbl), .rety = g.rety};
 }
@@ -4896,9 +4901,10 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
 // stays a jump).
 type LIT = { List(Str) lines; Bool on; };
 
-LIT lw_iter(LW w, Int id, List(Str) ls, Int st, List(Int) nodes, Str rety, Str tag, Str what) {
+LIT lw_iter(LW w, Int id, List(Str) ls, Int st, List(Int) nodes, Str rety, Str tag, Str what, Str pre) {
     Str rev = lr_ret_evac(w.fs, rety);
-    Str why = lw_iter_why(w, ls, st, nodes, rety, rev);
+    Str why0 = lw_iter_why(w, ls, st, nodes, rety, rev);
+    Str why = if (pre != "" && why0 == "") { pre } else { why0 };
     Bool rep = why != "" && why != "-" && resid_raw_load64(loop_report_word()) == 1;
     Bool _r = if (rep) { println("note: loop: " + w.fname + " keeps each step's garbage of its " + what + " until it returns: " + why) } else { false };
     if (why != "") { return LIT {.lines = ls, .on = false}; }
@@ -4913,6 +4919,21 @@ Str lw_iter_why(LW w, List(Str) ls, Int st, List(Int) nodes, Str rety, Str rev) 
     if (resid_rtmod() || !lw_iter_allocs(w, ls, st)) { return "-"; }
     if (lw_iter_spawns(w.g, nodes, 0)) { return "its body spawns"; }
     return lw_iter_rets_why(w, ls, st, rety, rev);
+}
+
+// The first name in node id's subtree that env (the bindings outside a
+// loop) binds to a builder, or "".
+Str lw_outer_builder(LW w, Int id, List(Str) env) {
+    Bool ref = lw_kind(w, id) == "ref" && lw_bkind(ct_base_of(w.fs.ctn, w.fs.ctb, strip_owned_cg(cg_env_ty(env_lookup(env, lw_text(w, id)))))) != "";
+    if (ref) { return lw_text(w, id); }
+    return lw_outer_builder_kids(w, id, 0, env);
+}
+
+Str lw_outer_builder_kids(LW w, Int id, Int i, List(Str) env) {
+    if (i >= w.g.ns[id].nk) { return ""; }
+    Str b = lw_outer_builder(w, lw_kid(w, id, i), env);
+    if (b != "") { return b; }
+    return lw_outer_builder_kids(w, id, i + 1, env);
 }
 
 Bool lw_iter_spawns(Kg g, List(Int) nodes, Int i) {

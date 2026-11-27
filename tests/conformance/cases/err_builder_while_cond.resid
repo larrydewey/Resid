@@ -1,0 +1,15 @@
+// Linear builders (spec §45.1): E0403. A while loop's condition runs on
+// every step, inside the loop (and its region), so a builder bound outside
+// the loop may not be used there either: each step's pushes would store
+// that step's values in the older builder.
+Option(List(Str)) upto(List(Str) xs, Int n) { return if (xs.len() <= n) { Some(xs) } else { None }; }
+
+List(Str) build(Int n) {
+    ListBuf(Str) b = ListBuf();
+    while (Some(xs) = upto(b.push(f"item-{n}").finish(), n)) {
+        if (xs.len() == n) { return xs; }
+    }
+    return [];
+}
+
+Int main() { return build(rt 3).len(); }
