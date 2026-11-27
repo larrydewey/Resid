@@ -1,0 +1,1048 @@
+// mldsa.resid — ML-DSA (FIPS 204): the module-lattice signature scheme at
+// all three parameter sets (ML-DSA-44, -65, -87), key generation, signing
+// (hedged or deterministic, pure ML-DSA with a context string, and the
+// internal and external-mu interfaces for known-answer tests) and
+// verification.
+//
+// The arithmetic follows the Dilithium reference implementation exactly
+// (Montgomery reduction with R = 2^32, the NTT and its inverse over
+// zeta = 1753, reduce32, caddq, power2round, decompose, make_hint and
+// use_hint), so intermediate values match it step by step. It is written
+// once, generic over the behavior MdCoef(C, B): coefficients C and bytes B
+// are Int at public types (verification, which needs no grant) and
+// Secret(Int(32)) / Secret(UInt(8)) at secret types (key generation and
+// signing, whose copy the compiler checks, spec §48). Generic code never
+// branches on, indexes by or compares a coefficient: masks come from
+// arithmetic shifts.
+//
+// What becomes public, through MdCoef's reveal (a declassification at
+// secret types, so key generation and signing need @requires(declassify)):
+// the public key, the accepted signature, and one verdict bit per
+// rejection test. FIPS 204 lets the rejection loop's iteration count be
+// public; the values of a rejected iteration (z, the hint, w1, c~) are
+// never revealed. Rejection sampling of the secret vectors s1 and s2
+// (RejBoundedPoly, key generation only) reveals which nibbles were
+// rejected, never an accepted value, as the reference implementation's
+// timing does. SampleInBall at secret types reveals only whether each
+// SHAKE byte was beyond the current position; the challenge itself is
+// built with masked writes over all 256 coefficients, so the positions it
+// touches stay secret until c~ is published with an accepted signature.
+//
+// Decoding is total: a public key, secret key or signature of the wrong
+// length, or a hint whose counts are out of order, exceed omega or leave
+// non-zero padding, is refused. HashML-DSA (pre-hash) is not implemented.
+
+import "word.resid";
+import "keccakg.resid";
+import "random.resid";
+
+/// An ML-DSA parameter set (FIPS 204 Table 1).
+pub type MldsaParams = { Int k; Int l; Int eta; Int tau; Int lambda; Int gamma1; Int gamma2; Int beta; Int omega; };
+
+/// ML-DSA-44 (NIST security category 2).
+pub MldsaParams mldsa44() { return MldsaParams {.k = 4, .l = 4, .eta = 2, .tau = 39, .lambda = 128, .gamma1 = 131072, .gamma2 = 95232, .beta = 78, .omega = 80}; }
+/// ML-DSA-65 (NIST security category 3).
+pub MldsaParams mldsa65() { return MldsaParams {.k = 6, .l = 5, .eta = 4, .tau = 49, .lambda = 192, .gamma1 = 524288, .gamma2 = 261888, .beta = 196, .omega = 55}; }
+/// ML-DSA-87 (NIST security category 5).
+pub MldsaParams mldsa87() { return MldsaParams {.k = 8, .l = 7, .eta = 2, .tau = 60, .lambda = 256, .gamma1 = 524288, .gamma2 = 261888, .beta = 120, .omega = 75}; }
+
+/// The parameter set named "ML-DSA-44", "ML-DSA-65" or "ML-DSA-87".
+pub Option(MldsaParams) mldsa_named(Str name) {
+    if (name == "ML-DSA-44") { return Some(mldsa44()); }
+    if (name == "ML-DSA-65") { return Some(mldsa65()); }
+    if (name == "ML-DSA-87") { return Some(mldsa87()); }
+    return None;
+}
+
+/// An ML-DSA key pair: the public key and the secret key bytes.
+pub type MldsaKeys = { List(Int) pk; List(Secret(UInt(8))) sk; };
+
+Int md_q() { return 8380417; }
+
+// Bits per packed coefficient of s1/s2 (eta), of z (gamma1), of w1.
+Int md_eta_bits(MldsaParams p) { return if (p.eta == 2) { 3 } else { 4 }; }
+Int md_z_bits(MldsaParams p) { return if (p.gamma1 == 131072) { 18 } else { 20 }; }
+Int md_w1_bits(MldsaParams p) { return if (p.gamma2 == 95232) { 6 } else { 4 }; }
+
+/// The public key length in bytes: 32 + 320 k.
+pub Int mldsa_pk_len(MldsaParams p) { return 32 + 320 * p.k; }
+/// The secret key length in bytes.
+pub Int mldsa_sk_len(MldsaParams p) { return 128 + 32 * ((p.k + p.l) * md_eta_bits(p) + 13 * p.k); }
+/// The signature length in bytes.
+pub Int mldsa_sig_len(MldsaParams p) { return p.lambda / 4 + p.l * 32 * md_z_bits(p) + p.omega + p.k; }
+
+// ─── Coefficients: the behavior and its two instances ───────────────
+
+/// Coefficient arithmetic for ML-DSA: C holds a value of the 32-bit
+/// reference implementation's int32_t, B a byte. Every operation is
+/// branch-free; mc_reveal publishes a value (a declassification at
+/// secret types).
+behavior MdCoef(C, B) {
+    C mc_lift(Int v);              // a public constant taking part
+    C mc_add(C a, C b);
+    C mc_sub(C a, C b);
+    C mc_mul(C a, C b);            // low 32 bits of the product
+    C mc_mont(C a, C b);           // montgomery_reduce((int64) a * b)
+    C mc_shr(C a, Int n);          // arithmetic
+    C mc_shl(C a, Int n);
+    C mc_and(C a, C b);
+    C mc_or(C a, C b);
+    C mc_xor(C a, C b);
+    C mc_of_byte(B b);
+    B mc_byte(C c);                // the low 8 bits
+    B mc_lift_byte(Int v);         // a public byte taking part
+    Int mc_reveal(C a);            // publish
+    C mc_hide(C a);                // a mask the optimizer may not turn back into a branch or cmov
+}
+
+Int mi_wrap32(Int x) { return ((x + 2147483648) & 4294967295) - 2147483648; }
+Int mi_lift(Int v) { return v; }
+Int mi_add(Int a, Int b) { return mi_wrap32(a + b); }
+Int mi_sub(Int a, Int b) { return mi_wrap32(a - b); }
+Int mi_mul(Int a, Int b) { return mi_wrap32(a * b); }
+Int mi_mont(Int a, Int b) {
+    Int p = a * b;
+    Int t = mi_wrap32(mi_wrap32(p) * 58728449);
+    return (p - t * 8380417) >> 32;
+}
+Int mi_shr(Int a, Int n) { return a >> n; }
+Int mi_shl(Int a, Int n) { return mi_wrap32(a << n); }
+Int mi_and(Int a, Int b) { return a & b; }
+Int mi_or(Int a, Int b) { return a | b; }
+Int mi_xor(Int a, Int b) { return a ^ b; }
+Int mi_of_byte(Int b) { return b & 255; }
+Int mi_byte(Int c) { return c & 255; }
+Int mi_reveal(Int a) { return a; }
+Int mi_hide(Int a) { return a; }
+
+MdCoef(Int, Int) = { .mc_lift = mi_lift, .mc_add = mi_add, .mc_sub = mi_sub, .mc_mul = mi_mul, .mc_mont = mi_mont, .mc_shr = mi_shr, .mc_shl = mi_shl, .mc_and = mi_and, .mc_or = mi_or, .mc_xor = mi_xor, .mc_of_byte = mi_of_byte, .mc_byte = mi_byte, .mc_lift_byte = mi_byte, .mc_reveal = mi_reveal, .mc_hide = mi_hide };
+
+Secret(Int(32)) ms_lift(Int v) { return classify(wrapping_i32(v)); }
+Secret(Int(32)) ms_add(Secret(Int(32)) a, Secret(Int(32)) b) { return wrapping_add(a, b); }
+Secret(Int(32)) ms_sub(Secret(Int(32)) a, Secret(Int(32)) b) { return wrapping_sub(a, b); }
+Secret(Int(32)) ms_mul(Secret(Int(32)) a, Secret(Int(32)) b) { return wrapping_mul(a, b); }
+Secret(Int(32)) ms_mont(Secret(Int(32)) a, Secret(Int(32)) b) {
+    Secret(Int(64)) p = wrapping_mul((Int(64)) a, (Int(64)) b);
+    Secret(Int(32)) t = wrapping_mul(wrapping_i32(p), (Int(32)) 58728449);
+    return wrapping_i32(wrapping_sub(p, wrapping_mul((Int(64)) t, (Int(64)) 8380417)) >> (Int(64)) 32);
+}
+Secret(Int(32)) ms_shr(Secret(Int(32)) a, Int n) { return a >> wrapping_i32(n); }
+Secret(Int(32)) ms_shl(Secret(Int(32)) a, Int n) { return a << wrapping_i32(n); }
+Secret(Int(32)) ms_and(Secret(Int(32)) a, Secret(Int(32)) b) { return a & b; }
+Secret(Int(32)) ms_or(Secret(Int(32)) a, Secret(Int(32)) b) { return a | b; }
+Secret(Int(32)) ms_xor(Secret(Int(32)) a, Secret(Int(32)) b) { return a ^ b; }
+Secret(Int(32)) ms_of_byte(Secret(UInt(8)) b) { return (Int(32)) b; }
+Secret(UInt(8)) ms_byte(Secret(Int(32)) c) { return wrapping_u8(c); }
+Secret(UInt(8)) ms_lift_byte(Int v) { return classify(wrapping_u8(v)); }
+// Published: a rejection verdict, or a value of the public key or of the
+// accepted signature. Defined again for tests/ct's valgrind run.
+@requires(declassify)
+Int ms_reveal(Secret(Int(32)) a) { return ct_public((Int) declassify(a, "ML-DSA: a rejection verdict, or the public key or accepted signature")); }
+
+// ct_hide: the masks built from a secret stay arithmetic (LLVM turned the
+// masked selects of SampleInBall into a cmov on the secret position).
+Secret(Int(32)) ms_hide(Secret(Int(32)) a) { return ct_hide(a); }
+
+MdCoef(Secret(Int(32)), Secret(UInt(8))) = { .mc_lift = ms_lift, .mc_add = ms_add, .mc_sub = ms_sub, .mc_mul = ms_mul, .mc_mont = ms_mont, .mc_shr = ms_shr, .mc_shl = ms_shl, .mc_and = ms_and, .mc_or = ms_or, .mc_xor = ms_xor, .mc_of_byte = ms_of_byte, .mc_byte = ms_byte, .mc_lift_byte = ms_lift_byte, .mc_reveal = ms_reveal, .mc_hide = ms_hide };
+
+// ─── Reductions (reference reduce.c, rounding.c) ────────────────────
+
+List(Int) md_zetas() { return [0, 25847, -2608894, -518909, 237124, -777960, -876248, 466468, 1826347, 2353451, -359251, -2091905, 3119733, -2884855, 3111497, 2680103, 2725464, 1024112, -1079900, 3585928, -549488, -1119584, 2619752, -2108549, -2118186, -3859737, -1399561, -3277672, 1757237, -19422, 4010497, 280005, 2706023, 95776, 3077325, 3530437, -1661693, -3592148, -2537516, 3915439, -3861115, -3043716, 3574422, -2867647, 3539968, -300467, 2348700, -539299, -1699267, -1643818, 3505694, -3821735, 3507263, -2140649, -1600420, 3699596, 811944, 531354, 954230, 3881043, 3900724, -2556880, 2071892, -2797779, -3930395, -1528703, -3677745, -3041255, -1452451, 3475950, 2176455, -1585221, -1257611, 1939314, -4083598, -1000202, -3190144, -3157330, -3632928, 126922, 3412210, -983419, 2147896, 2715295, -2967645, -3693493, -411027, -2477047, -671102, -1228525, -22981, -1308169, -381987, 1349076, 1852771, -1430430, -3343383, 264944, 508951, 3097992, 44288, -1100098, 904516, 3958618, -3724342, -8578, 1653064, -3249728, 2389356, -210977, 759969, -1316856, 189548, -3553272, 3159746, -1851402, -2409325, -177440, 1315589, 1341330, 1285669, -1584928, -812732, -1439742, -3019102, -3881060, -3628969, 3839961, 2091667, 3407706, 2316500, 3817976, -3342478, 2244091, -2446433, -3562462, 266997, 2434439, -1235728, 3513181, -3520352, -3759364, -1197226, -3193378, 900702, 1859098, 909542, 819034, 495491, -1613174, -43260, -522500, -655327, -3122442, 2031748, 3207046, -3556995, -525098, -768622, -3595838, 342297, 286988, -2437823, 4108315, 3437287, -3342277, 1735879, 203044, 2842341, 2691481, -2590150, 1265009, 4055324, 1247620, 2486353, 1595974, -3767016, 1250494, 2635921, -3548272, -2994039, 1869119, 1903435, -1050970, -1333058, 1237275, -3318210, -1430225, -451100, 1312455, 3306115, -1962642, -1279661, 1917081, -2546312, -1374803, 1500165, 777191, 2235880, 3406031, -542412, -2831860, -1671176, -1846953, -2584293, -3724270, 594136, -3776993, -2013608, 2432395, 2454455, -164721, 1957272, 3369112, 185531, -1207385, -3183426, 162844, 1616392, 3014001, 810149, 1652634, -3694233, -1799107, -3038916, 3523897, 3866901, 269760, 2213111, -975884, 1717735, 472078, -426683, 1723600, -1803090, 1910376, -1667432, -1104333, -260646, -3833893, -2939036, -2235985, -420899, -2286327, 183443, -976891, 1612842, -3545687, -554416, 3919660, -48306, -1362209, 3937738, 1400424, -846154, 1976782]; }
+
+// a - round(a / q) * q for a <= 2^31 - 2^22 - 1: a centred representative.
+@needs(MdCoef(C, B))
+C md_reduce32(C a) {
+    C t = mc_shr(mc_add(a, mc_lift(4194304)), 23);
+    return mc_sub(a, mc_mul(t, mc_lift(8380417)));
+}
+
+// a + q when a is negative.
+@needs(MdCoef(C, B))
+C md_caddq(C a) { return mc_add(a, mc_and(mc_shr(a, 31), mc_lift(8380417))); }
+
+@needs(MdCoef(C, B))
+List(C) md_map_reduce(List(C) a, Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    return md_map_reduce(a, i + 1, out.push(md_reduce32(a[i])));
+}
+
+@needs(MdCoef(C, B))
+List(C) md_map_caddq(List(C) a, Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    return md_map_caddq(a, i + 1, out.push(md_caddq(a[i])));
+}
+
+@needs(MdCoef(C, B))
+List(C) md_add(List(C) a, List(C) b, Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    return md_add(a, b, i + 1, out.push(mc_add(a[i], b[i])));
+}
+
+@needs(MdCoef(C, B))
+List(C) md_sub(List(C) a, List(C) b, Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    return md_sub(a, b, i + 1, out.push(mc_sub(a[i], b[i])));
+}
+
+@needs(MdCoef(C, B))
+List(C) md_shl_poly(List(C) a, Int n, Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    return md_shl_poly(a, n, i + 1, out.push(mc_shl(a[i], n)));
+}
+
+// ─── NTT (reference ntt.c) ──────────────────────────────────────────
+
+// One forward layer: blocks of 2 len, zeta index 128 / len + block.
+@needs(MdCoef(C, B))
+List(C) md_ntt_layer(List(C) r, Int len, List(Int) z, Int j, ListBuf(C) out) {
+    if (j >= 256) { return out.finish(); }
+    C zeta = mc_lift(z[128 / len + j / (2 * len)]);
+    Bool low = j % (2 * len) < len;
+    C v = if (low) { mc_add(r[j], mc_mont(zeta, r[j + len])) } else { mc_sub(r[j - len], mc_mont(zeta, r[j])) };
+    return md_ntt_layer(r, len, z, j + 1, out.push(v));
+}
+
+@needs(MdCoef(C, B))
+List(C) md_ntt_from(List(C) r, Int len, List(Int) z) {
+    if (len < 1) { return r; }
+    ListBuf(C) lb1 = ListBuf();
+    return md_ntt_from(md_ntt_layer(r, len, z, 0, lb1), len / 2, z);
+}
+
+/// The forward NTT of a polynomial (reference ntt: no reduction).
+@needs(MdCoef(C, B))
+pub List(C) md_ntt(List(C) r) { return md_ntt_from(r, 128, md_zetas()); }
+
+// One inverse layer: zeta = -zetas[256 / len - 1 - block].
+@needs(MdCoef(C, B))
+List(C) md_inv_layer(List(C) r, Int len, List(Int) z, Int j, ListBuf(C) out) {
+    if (j >= 256) { return out.finish(); }
+    C zeta = mc_lift(0 - z[256 / len - 1 - j / (2 * len)]);
+    Bool low = j % (2 * len) < len;
+    C v = if (low) { mc_add(r[j], r[j + len]) } else { mc_mont(zeta, mc_sub(r[j - len], r[j])) };
+    return md_inv_layer(r, len, z, j + 1, out.push(v));
+}
+
+@needs(MdCoef(C, B))
+List(C) md_inv_from(List(C) r, Int len, List(Int) z) {
+    if (len > 128) { return r; }
+    ListBuf(C) lb2 = ListBuf();
+    return md_inv_from(md_inv_layer(r, len, z, 0, lb2), len * 2, z);
+}
+
+@needs(MdCoef(C, B))
+List(C) md_scale(List(C) a, C f, Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    return md_scale(a, f, i + 1, out.push(mc_mont(a[i], f)));
+}
+
+/// The inverse NTT times the Montgomery factor (reference
+/// invntt_tomont, f = mont^2 / 256).
+@needs(MdCoef(C, B))
+pub List(C) md_invntt(List(C) r) {
+    ListBuf(C) out = ListBuf();
+    C f = mc_lift(41978);
+    return md_scale(md_inv_from(r, 1, md_zetas()), f, 0, out);
+}
+
+@needs(MdCoef(C, B))
+List(C) md_pw(List(C) a, List(C) b, Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    return md_pw(a, b, i + 1, out.push(mc_mont(a[i], b[i])));
+}
+
+// Sum over j of a[j] * v[j], pointwise in the NTT domain.
+@needs(MdCoef(C, B))
+List(C) md_dot(List(List(C)) a, List(List(C)) v, Int j, List(C) acc) {
+    if (j >= v.len()) { return acc; }
+    ListBuf(C) lb3 = ListBuf();
+    ListBuf(C) lb4 = ListBuf();
+    return md_dot(a, v, j + 1, md_add(acc, md_pw(a[j], v[j], 0, lb3), 0, lb4));
+}
+
+@needs(MdCoef(C, B))
+List(C) md_zero() {
+    ListBuf(C) out = ListBuf();
+    return md_zero_at(0, out);
+}
+
+@needs(MdCoef(C, B))
+List(C) md_zero_at(Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    C z = mc_lift(0);
+    return md_zero_at(i + 1, out.push(z));
+}
+
+// A-hat times v (NTT domain), each row reduced: k polynomials.
+@needs(MdCoef(C, B))
+List(List(C)) md_matvec(List(List(List(C))) a, List(List(C)) v, Int i, ListBuf(List(C)) out) {
+    if (i >= a.len()) { return out.finish(); }
+    List(C) z = md_zero();
+    ListBuf(C) lb5 = ListBuf();
+    return md_matvec(a, v, i + 1, out.push(md_map_reduce(md_dot(a[i], v, 0, z), 0, lb5)));
+}
+
+@needs(MdCoef(C, B))
+List(List(C)) md_vntt(List(List(C)) v, Int i, ListBuf(List(C)) out) {
+    if (i >= v.len()) { return out.finish(); }
+    return md_vntt(v, i + 1, out.push(md_ntt(v[i])));
+}
+
+@needs(MdCoef(C, B))
+List(List(C)) md_vinvntt(List(List(C)) v, Int i, ListBuf(List(C)) out) {
+    if (i >= v.len()) { return out.finish(); }
+    return md_vinvntt(v, i + 1, out.push(md_invntt(v[i])));
+}
+
+// c (NTT domain) times each polynomial of v, then back from the NTT.
+@needs(MdCoef(C, B))
+List(List(C)) md_cmul(List(C) c, List(List(C)) v, Int i, ListBuf(List(C)) out) {
+    if (i >= v.len()) { return out.finish(); }
+    ListBuf(C) lb6 = ListBuf();
+    return md_cmul(c, v, i + 1, out.push(md_invntt(md_pw(c, v[i], 0, lb6))));
+}
+
+// ─── Rounding (reference rounding.c) ────────────────────────────────
+
+// (a + 2^12 - 1) >> 13: the high part of power2round, a in [0, q).
+@needs(MdCoef(C, B))
+C md_p2r_hi(C a) { return mc_shr(mc_add(a, mc_lift(4095)), 13); }
+
+// decompose's a1 for a in [0, q) (gamma2 public).
+@needs(MdCoef(C, B))
+C md_hi(C a, Int gamma2) {
+    C a1 = mc_shr(mc_add(a, mc_lift(127)), 7);
+    if (gamma2 == 261888) {
+        return mc_and(mc_shr(mc_add(mc_mul(a1, mc_lift(1025)), mc_lift(2097152)), 22), mc_lift(15));
+    }
+    C b1 = mc_shr(mc_add(mc_mul(a1, mc_lift(11275)), mc_lift(8388608)), 24);
+    return mc_xor(b1, mc_and(mc_shr(mc_sub(mc_lift(43), b1), 31), b1));
+}
+
+// decompose's a0 given a1.
+@needs(MdCoef(C, B))
+C md_lo(C a, C a1, Int gamma2) {
+    C a0 = mc_sub(a, mc_mul(a1, mc_lift(2 * gamma2)));
+    return mc_sub(a0, mc_and(mc_shr(mc_sub(mc_lift(4190208), a0), 31), mc_lift(8380417)));
+}
+
+@needs(MdCoef(C, B))
+List(C) md_hi_poly(List(C) a, Int gamma2, Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    return md_hi_poly(a, gamma2, i + 1, out.push(md_hi(a[i], gamma2)));
+}
+
+@needs(MdCoef(C, B))
+List(C) md_lo_poly(List(C) a, List(C) a1, Int gamma2, Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    return md_lo_poly(a, a1, gamma2, i + 1, out.push(md_lo(a[i], a1[i], gamma2)));
+}
+
+// acc | (all ones when |a| >= bound), for a centred value.
+@needs(MdCoef(C, B))
+C md_norm_mask(List(C) a, Int bound, Int i, C acc) {
+    if (i >= 256) { return acc; }
+    C t = mc_shr(a[i], 31);
+    C abs = mc_sub(a[i], mc_and(t, mc_add(a[i], a[i])));
+    return md_norm_mask(a, bound, i + 1, mc_or(acc, mc_shr(mc_sub(mc_lift(bound - 1), abs), 31)));
+}
+
+@needs(MdCoef(C, B))
+C md_vnorm_mask(List(List(C)) v, Int bound, Int i, C acc) {
+    if (i >= v.len()) { return acc; }
+    return md_vnorm_mask(v, bound, i + 1, md_norm_mask(v[i], bound, 0, acc));
+}
+
+// All ones when a == b, else 0.
+@needs(MdCoef(C, B))
+C md_eqm(C a, C b) {
+    C d = mc_sub(a, b);
+    return mc_hide(mc_xor(mc_shr(mc_or(d, mc_sub(mc_lift(0), d)), 31), mc_lift(0 - 1)));
+}
+
+// make_hint(a0, a1): 1 when a0 > gamma2, a0 < -gamma2, or a0 == -gamma2
+// and a1 != 0; branch-free.
+@needs(MdCoef(C, B))
+C md_hint(C a0, C a1, Int gamma2) {
+    C one = mc_lift(1);
+    C gt = mc_and(mc_shr(mc_sub(mc_lift(gamma2), a0), 31), one);
+    C lt = mc_and(mc_shr(mc_add(a0, mc_lift(gamma2)), 31), one);
+    C eq = mc_and(md_eqm(a0, mc_lift(0 - gamma2)), one);
+    C nz = mc_and(mc_shr(mc_or(a1, mc_sub(mc_lift(0), a1)), 31), one);
+    return mc_or(mc_or(gt, lt), mc_and(eq, nz));
+}
+
+@needs(MdCoef(C, B))
+List(C) md_hint_poly(List(C) a0, List(C) a1, Int gamma2, Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    return md_hint_poly(a0, a1, gamma2, i + 1, out.push(md_hint(a0[i], a1[i], gamma2)));
+}
+
+@needs(MdCoef(C, B))
+C md_sum(List(C) a, Int i, C acc) {
+    if (i >= a.len()) { return acc; }
+    return md_sum(a, i + 1, mc_add(acc, a[i]));
+}
+
+// ─── Bit packing (FIPS 204 §7.1, little-endian bit order) ───────────
+
+// The values of vs from i on, packed at w bits each; every
+// value is in [0, 2^w).
+@needs(MdCoef(C, B))
+ListBuf(B) md_pack(List(C) vs, Int w, Int i, C acc, Int nbits, ListBuf(B) out) {
+    if (nbits >= 8) { return md_pack(vs, w, i, mc_shr(acc, 8), nbits - 8, out.push(mc_byte(acc))); }
+    if (i >= vs.len()) { return out; }
+    return md_pack(vs, w, i + 1, mc_or(acc, mc_shl(vs[i], nbits)), nbits + w, out);
+}
+
+// count values of w bits each from the bytes at off.
+@needs(MdCoef(C, B))
+List(C) md_unpack(List(B) b, Int off, Int w, Int count, Int i, C acc, Int nbits, ListBuf(C) out) {
+    if (i >= count) { return out.finish(); }
+    if (nbits >= w) {
+        C mask = mc_lift((1 << w) - 1);
+        return md_unpack(b, off, w, count, i + 1, mc_shr(acc, w), nbits - w, out.push(mc_and(acc, mask)));
+    }
+    return md_unpack(b, off + 1, w, count, i, mc_or(acc, mc_shl(mc_of_byte(b[off]), nbits)), nbits + 8, out);
+}
+
+// x -> k - x over a polynomial (BitPack's b - w, and its inverse).
+@needs(MdCoef(C, B))
+List(C) md_from_k(List(C) a, Int k, Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    return md_from_k(a, k, i + 1, out.push(mc_sub(mc_lift(k), a[i])));
+}
+
+// k - x over a polynomial, or the polynomial itself when k is 0.
+@needs(MdCoef(C, B))
+List(C) md_maybe_from_k(List(C) a, Int k) {
+    if (k == 0) { return a; }
+    ListBuf(C) out = ListBuf();
+    return md_from_k(a, k, 0, out);
+}
+
+// reduce32 (op 0) or caddq (op 1) over a polynomial.
+@needs(MdCoef(C, B))
+List(C) md_red_or_caddq(List(C) a, Int op) {
+    ListBuf(C) out = ListBuf();
+    if (op == 0) { return md_map_reduce(a, 0, out); }
+    return md_map_caddq(a, 0, out);
+}
+
+@needs(MdCoef(C, B))
+ListBuf(B) md_pack_v(List(List(C)) v, Int w, Int k, Int i, ListBuf(B) out) {
+    if (i >= v.len()) { return out; }
+    List(C) vals = md_maybe_from_k(v[i], k);
+    C z = mc_lift(0);
+    return md_pack_v(v, w, k, i + 1, md_pack(vals, w, 0, z, 0, out));
+}
+
+@needs(MdCoef(C, B))
+List(List(C)) md_unpack_v(List(B) b, Int off, Int n, Int w, Int k, Int i, ListBuf(List(C)) out) {
+    if (i >= n) { return out.finish(); }
+    C z = mc_lift(0);
+    ListBuf(C) lb8 = ListBuf();
+    List(C) raw = md_unpack(b, off + 32 * w * i, w, 256, 0, z, 0, lb8);
+    List(C) vals = md_maybe_from_k(raw, k);
+    return md_unpack_v(b, off, n, w, k, i + 1, out.push(vals));
+}
+
+// ─── Sampling (FIPS 204 §7.3) ───────────────────────────────────────
+
+@needs(MdCoef(C, B))
+List(B) md_lift_bytes(List(Int) bs, Int i, ListBuf(B) out) {
+    if (i >= bs.len()) { return out.finish(); }
+    return md_lift_bytes(bs, i + 1, out.push(mc_lift_byte(bs[i])));
+}
+
+@needs(MdCoef(C, B))
+List(C) md_lift_poly(List(Int) p, Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    return md_lift_poly(p, i + 1, out.push(mc_lift(p[i])));
+}
+
+// RejNTTPoly(rho || s || r): public, from SHAKE128.
+List(Int) md_rej_ntt(List(Int) seed, Int n) {
+    List(Int) s = shake128g(seed, n);
+    ListBuf(Int) lb10 = ListBuf();
+    List(Int) r = md_rej_ntt_at(s, 0, lb10, 0);
+    if (r.len() >= 256) { return r; }
+    return md_rej_ntt(seed, n * 2);
+}
+
+List(Int) md_rej_ntt_at(List(Int) s, Int i, ListBuf(Int) acc, Int got) {
+    if (got >= 256 || i + 3 > s.len()) { return acc.finish(); }
+    Int z = s[i] + 256 * s[i + 1] + 65536 * (s[i + 2] & 127);
+    if (z < 8380417) { return md_rej_ntt_at(s, i + 3, acc.push(z), got + 1); }
+    return md_rej_ntt_at(s, i + 3, acc, got);
+}
+
+/// ExpandA(rho): the k x l matrix A-hat (NTT domain), public.
+pub List(List(List(Int))) md_expand_a(MldsaParams p, List(Int) rho) {
+    ListBuf(List(List(Int))) out = ListBuf();
+    return md_expand_rows(p, rho, 0, out);
+}
+
+List(List(List(Int))) md_expand_rows(MldsaParams p, List(Int) rho, Int r, ListBuf(List(List(Int))) out) {
+    if (r >= p.k) { return out.finish(); }
+    ListBuf(List(Int)) lb11 = ListBuf();
+    return md_expand_rows(p, rho, r + 1, out.push(md_expand_row(p, rho, r, 0, lb11)));
+}
+
+List(List(Int)) md_expand_row(MldsaParams p, List(Int) rho, Int r, Int s, ListBuf(List(Int)) out) {
+    if (s >= p.l) { return out.finish(); }
+    List(Int) suffix = [s, r];
+    return md_expand_row(p, rho, r, s + 1, out.push(md_rej_ntt(rho.concat(suffix), 1008)));
+}
+
+@needs(MdCoef(C, B))
+List(List(List(C))) md_lift_matrix(List(List(List(Int))) a, Int i, ListBuf(List(List(C))) out) {
+    if (i >= a.len()) { return out.finish(); }
+    ListBuf(List(C)) lb12 = ListBuf();
+    return md_lift_matrix(a, i + 1, out.push(md_lift_row(a[i], 0, lb12)));
+}
+
+@needs(MdCoef(C, B))
+List(List(C)) md_lift_row(List(List(Int)) r, Int j, ListBuf(List(C)) out) {
+    if (j >= r.len()) { return out.finish(); }
+    ListBuf(C) lb13 = ListBuf();
+    return md_lift_row(r, j + 1, out.push(md_lift_poly(r[j], 0, lb13)));
+}
+
+// RejBoundedPoly(rho' || le16(r)): reveals only whether each nibble was
+// rejected.
+@needs(MdCoef(C, B), Word64(W, B))
+List(C) md_rej_eta(List(B) seed, Int eta, Int n) {
+    List(B) s = shake256g(seed, n);
+    ListBuf(C) lb14 = ListBuf();
+    List(C) r = md_rej_eta_at(s, eta, 0, 0, lb14, 0);
+    if (r.len() >= 256) { return r; }
+    return md_rej_eta(seed, eta, n * 2);
+}
+
+@needs(MdCoef(C, B))
+List(C) md_rej_eta_at(List(B) s, Int eta, Int i, Int half, ListBuf(C) acc, Int got) {
+    if (got >= 256 || i >= s.len()) { return acc.finish(); }
+    C byte = mc_of_byte(s[i]);
+    C z = if (half == 0) { mc_and(byte, mc_lift(15)) } else { mc_shr(byte, 4) };
+    Int ni = if (half == 0) { i } else { i + 1 };
+    Int nh = 1 - half;
+    // All ones when the nibble is accepted (z < 15 for eta 2, z < 9 for 4).
+    C ok = mc_shr(mc_sub(z, mc_lift(if (eta == 2) { 15 } else { 9 })), 31);
+    if (mc_reveal(ok) == 0) { return md_rej_eta_at(s, eta, ni, nh, acc, got); }
+    C v = if (eta == 2) {
+        mc_sub(mc_lift(2), mc_sub(z, mc_mul(mc_lift(5), mc_shr(mc_mul(z, mc_lift(13)), 6))))
+    } else {
+        mc_sub(mc_lift(4), z)
+    };
+    return md_rej_eta_at(s, eta, ni, nh, acc.push(v), got + 1);
+}
+
+@needs(MdCoef(C, B), Word64(W, B))
+List(List(C)) md_expand_s(List(B) rhop, Int eta, Int from, Int n, Int i, ListBuf(List(C)) out) {
+    if (i >= n) { return out.finish(); }
+    Int r = from + i;
+    List(B) seed = rhop.concat([mc_lift_byte(r & 255), mc_lift_byte(r >> 8)]);
+    return md_expand_s(rhop, eta, from, n, i + 1, out.push(md_rej_eta(seed, eta, 272)));
+}
+
+// ExpandMask(rho'', kappa): l polynomials with coefficients in
+// (-gamma1, gamma1].
+@needs(MdCoef(C, B), Word64(W, B))
+List(List(C)) md_expand_mask(MldsaParams p, List(B) rhopp, Int kappa, Int i, ListBuf(List(C)) out) {
+    if (i >= p.l) { return out.finish(); }
+    Int r = kappa + i;
+    List(B) seed = rhopp.concat([mc_lift_byte(r & 255), mc_lift_byte(r >> 8)]);
+    Int w = md_z_bits(p);
+    List(B) buf = shake256g(seed, 32 * w);
+    C z = mc_lift(0);
+    ListBuf(C) lb15 = ListBuf();
+    List(C) raw = md_unpack(buf, 0, w, 256, 0, z, 0, lb15);
+    ListBuf(C) lb16 = ListBuf();
+    return md_expand_mask(p, rhopp, kappa, i + 1, out.push(md_from_k(raw, p.gamma1, 0, lb16)));
+}
+
+/// SampleInBall(c~): the challenge polynomial with tau coefficients +-1.
+/// At secret types only whether each stream byte was beyond the current
+/// position is revealed; the writes are masked over all 256 positions.
+@needs(MdCoef(C, B), Word64(W, B))
+pub List(C) md_challenge(List(B) ct, Int tau) { return md_challenge_n(ct, tau, 8 + 136 * 4); }
+
+@needs(MdCoef(C, B), Word64(W, B))
+List(C) md_challenge_n(List(B) ct, Int tau, Int n) {
+    List(B) s = shake256g(ct, n);
+    MdBall(C) b = md_ball(s, tau, 256 - tau, 8, md_zero());
+    if (b.ok) { return b.c; }
+    return md_challenge_n(ct, tau, n * 2);
+}
+
+/// SampleInBall's state: the coefficients so far, and false when the
+/// stream ran out (the caller asks for a longer one).
+type MdBall(C) = { List(C) c; Bool ok; };
+
+@needs(MdCoef(C, B))
+MdBall(C) md_ball(List(B) s, Int tau, Int i, Int pos, List(C) c) {
+    if (i >= 256) { return MdBall {.c = c, .ok = true}; }
+    if (pos >= s.len()) { return MdBall {.c = c, .ok = false}; }
+    C b = mc_of_byte(s[pos]);
+    // All ones when b > i: skip this byte.
+    if (mc_reveal(mc_shr(mc_sub(mc_lift(i), b), 31)) != 0) { return md_ball(s, tau, i, pos + 1, c); }
+    Int k = i + tau - 256;
+    C bit = mc_and(mc_shr(mc_of_byte(s[k / 8]), k % 8), mc_lift(1));
+    C sign = mc_sub(mc_lift(1), mc_add(bit, bit));
+    C cb = md_pick(c, b, 0, mc_lift(0));
+    ListBuf(C) lb17 = ListBuf();
+    return md_ball(s, tau, i + 1, pos + 1, md_ball_set(c, b, i, cb, sign, 0, lb17));
+}
+
+// c[b], read with masks over every position.
+@needs(MdCoef(C, B))
+C md_pick(List(C) c, C b, Int p, C acc) {
+    if (p >= 256) { return acc; }
+    return md_pick(c, b, p + 1, mc_or(acc, mc_and(md_eqm(b, mc_lift(p)), c[p])));
+}
+
+// c[i] = c[b], then c[b] = sign: every position written under masks.
+@needs(MdCoef(C, B))
+List(C) md_ball_set(List(C) c, C b, Int i, C cb, C sign, Int p, ListBuf(C) out) {
+    if (p >= 256) { return out.finish(); }
+    C ones = mc_lift(0 - 1);
+    C atb = md_eqm(b, mc_lift(p));
+    C v0 = if (p == i) { cb } else { c[p] };
+    C v = mc_or(mc_and(atb, sign), mc_and(mc_xor(atb, ones), v0));
+    return md_ball_set(c, b, i, cb, sign, p + 1, out.push(v));
+}
+
+// ─── Keys ───────────────────────────────────────────────────────────
+
+@needs(MdCoef(C, B))
+List(Int) md_reveal_bytes(List(B) b, Int i, ListBuf(Int) out) {
+    if (i >= b.len()) { return out.finish(); }
+    return md_reveal_bytes(b, i + 1, out.push(mc_reveal(mc_of_byte(b[i]))));
+}
+
+@needs(MdCoef(C, B))
+List(List(C)) md_vmap(List(List(C)) v, Int op, Int i, ListBuf(List(C)) out) {
+    if (i >= v.len()) { return out.finish(); }
+    List(C) r = md_red_or_caddq(v[i], op);
+    return md_vmap(v, op, i + 1, out.push(r));
+}
+
+@needs(MdCoef(C, B))
+List(List(C)) md_vadd(List(List(C)) a, List(List(C)) b, Int i, ListBuf(List(C)) out) {
+    if (i >= a.len()) { return out.finish(); }
+    ListBuf(C) lb20 = ListBuf();
+    return md_vadd(a, b, i + 1, out.push(md_add(a[i], b[i], 0, lb20)));
+}
+
+@needs(MdCoef(C, B))
+List(List(C)) md_vsub(List(List(C)) a, List(List(C)) b, Int i, ListBuf(List(C)) out) {
+    if (i >= a.len()) { return out.finish(); }
+    ListBuf(C) lb21 = ListBuf();
+    return md_vsub(a, b, i + 1, out.push(md_sub(a[i], b[i], 0, lb21)));
+}
+
+// power2round over a vector: the high parts (t1) or the low parts (t0).
+@needs(MdCoef(C, B))
+List(List(C)) md_p2r(List(List(C)) t, Bool high, Int i, ListBuf(List(C)) out) {
+    if (i >= t.len()) { return out.finish(); }
+    ListBuf(C) lb22 = ListBuf();
+    return md_p2r(t, high, i + 1, out.push(md_p2r_poly(t[i], high, 0, lb22)));
+}
+
+@needs(MdCoef(C, B))
+List(C) md_p2r_poly(List(C) a, Bool high, Int i, ListBuf(C) out) {
+    if (i >= 256) { return out.finish(); }
+    C a1 = md_p2r_hi(a[i]);
+    C v = if (high) { a1 } else { mc_sub(a[i], mc_shl(a1, 13)) };
+    return md_p2r_poly(a, high, i + 1, out.push(v));
+}
+
+/// ML-DSA.KeyGen_internal(xi) (FIPS 204 Algorithm 6) from the 32-byte
+/// seed xi: for known-answer tests; use mldsa_keygen otherwise. The
+/// public key is revealed; the secret key stays secret.
+@requires(declassify)
+pub MldsaKeys mldsa_keygen_internal(MldsaParams p, List(Secret(UInt(8))) xi) {
+    assert(xi.len() == 32, "ML-DSA: the key generation seed is 32 bytes");
+    List(Secret(UInt(8))) kl = [classify(wrapping_u8(p.k)), classify(wrapping_u8(p.l))];
+    List(Secret(UInt(8))) seeds = shake256g(xi.concat(kl), 128);
+    ListBuf(Int) lb23 = ListBuf();
+    List(Int) rho = md_reveal_bytes(seeds[0..32], 0, lb23);
+    List(Secret(UInt(8))) rhop = seeds[32..96];
+    List(Secret(UInt(8))) key = seeds[96..128];
+    ListBuf(List(List(Secret(Int(32))))) lb24 = ListBuf();
+    List(List(List(Secret(Int(32))))) a = md_lift_matrix(md_expand_a(p, rho), 0, lb24);
+    ListBuf(List(Secret(Int(32)))) lb25 = ListBuf();
+    List(List(Secret(Int(32)))) s1 = md_expand_s(rhop, p.eta, 0, p.l, 0, lb25);
+    ListBuf(List(Secret(Int(32)))) lb26 = ListBuf();
+    List(List(Secret(Int(32)))) s2 = md_expand_s(rhop, p.eta, p.l, p.k, 0, lb26);
+    ListBuf(List(Secret(Int(32)))) lb27 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb28 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb29 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb30 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb31 = ListBuf();
+    List(List(Secret(Int(32)))) t = md_vmap(md_vadd(md_vinvntt(md_matvec(a, md_vntt(s1, 0, lb27), 0, lb28), 0, lb29), s2, 0, lb30), 1, 0, lb31);
+    ListBuf(List(Secret(Int(32)))) lb32 = ListBuf();
+    List(List(Secret(Int(32)))) t1 = md_p2r(t, true, 0, lb32);
+    ListBuf(List(Secret(Int(32)))) lb33 = ListBuf();
+    List(List(Secret(Int(32)))) t0 = md_p2r(t, false, 0, lb33);
+    ListBuf(Secret(UInt(8))) pkb = ListBuf();
+    ListBuf(Int) lb34 = ListBuf();
+    List(Int) pk = rho.concat(md_reveal_bytes(md_pack_v(t1, 10, 0, 0, pkb).finish(), 0, lb34));
+    ListBuf(Secret(UInt(8))) lb35 = ListBuf();
+    List(Secret(UInt(8))) pks = md_lift_bytes(pk, 0, lb35);
+    List(Secret(UInt(8))) tr = shake256g(pks, 64);
+    ListBuf(Secret(UInt(8))) skb = ListBuf();
+    Int eb = md_eta_bits(p);
+    List(Secret(UInt(8))) packed = md_pack_v(t0, 13, 4096, 0, md_pack_v(s2, eb, p.eta, 0, md_pack_v(s1, eb, p.eta, 0, skb))).finish();
+    return MldsaKeys {.pk = pk, .sk = seeds[0..32].concat(key).concat(tr).concat(packed)};
+}
+
+/// A fresh ML-DSA key pair (the seed from the operating system).
+@requires(declassify)
+pub MldsaKeys mldsa_keygen(MldsaParams p) { return mldsa_keygen_internal(p, random_secret(32)); }
+
+// ─── Signing ────────────────────────────────────────────────────────
+
+// The signature from mu (64 secret bytes) and rnd (32 bytes) under sk:
+// FIPS 204 Algorithm 7 from line 6 on, as the reference sign loop.
+@requires(declassify)
+List(Int) md_sign_mu(MldsaParams p, List(Secret(UInt(8))) sk, List(Secret(UInt(8))) mu, List(Secret(UInt(8))) rnd) {
+    Int eb = md_eta_bits(p);
+    ListBuf(Int) lb36 = ListBuf();
+    List(Int) rho = md_reveal_bytes(sk[0..32], 0, lb36);
+    List(Secret(UInt(8))) key = sk[32..64];
+    Int off1 = 128;
+    Int off2 = off1 + 32 * eb * p.l;
+    Int off3 = off2 + 32 * eb * p.k;
+    ListBuf(List(Secret(Int(32)))) lb37 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb38 = ListBuf();
+    List(List(Secret(Int(32)))) s1 = md_vntt(md_unpack_v(sk, off1, p.l, eb, p.eta, 0, lb37), 0, lb38);
+    ListBuf(List(Secret(Int(32)))) lb39 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb40 = ListBuf();
+    List(List(Secret(Int(32)))) s2 = md_vntt(md_unpack_v(sk, off2, p.k, eb, p.eta, 0, lb39), 0, lb40);
+    ListBuf(List(Secret(Int(32)))) lb41 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb42 = ListBuf();
+    List(List(Secret(Int(32)))) t0 = md_vntt(md_unpack_v(sk, off3, p.k, 13, 4096, 0, lb41), 0, lb42);
+    ListBuf(List(List(Secret(Int(32))))) lb43 = ListBuf();
+    List(List(List(Secret(Int(32))))) a = md_lift_matrix(md_expand_a(p, rho), 0, lb43);
+    List(Secret(UInt(8))) rhopp = shake256g(key.concat(rnd).concat(mu), 64);
+    return md_sign_loop(p, a, s1, s2, t0, mu, rhopp, 0);
+}
+
+@requires(declassify)
+List(Int) md_sign_loop(MldsaParams p, List(List(List(Secret(Int(32))))) a, List(List(Secret(Int(32)))) s1, List(List(Secret(Int(32)))) s2, List(List(Secret(Int(32)))) t0, List(Secret(UInt(8))) mu, List(Secret(UInt(8))) rhopp, Int kappa) {
+    ListBuf(List(Secret(Int(32)))) lb44 = ListBuf();
+    List(List(Secret(Int(32)))) y = md_expand_mask(p, rhopp, kappa, 0, lb44);
+    ListBuf(List(Secret(Int(32)))) lb45 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb46 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb47 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb48 = ListBuf();
+    List(List(Secret(Int(32)))) w = md_vmap(md_vinvntt(md_matvec(a, md_vntt(y, 0, lb45), 0, lb46), 0, lb47), 1, 0, lb48);
+    ListBuf(List(Secret(Int(32)))) lb49 = ListBuf();
+    List(List(Secret(Int(32)))) w1 = md_vhi(w, p.gamma2, 0, lb49);
+    ListBuf(List(Secret(Int(32)))) lb50 = ListBuf();
+    List(List(Secret(Int(32)))) w0 = md_vlo(w, w1, p.gamma2, 0, lb50);
+    ListBuf(Secret(UInt(8))) wb = ListBuf();
+    List(Secret(UInt(8))) ct = shake256g(mu.concat(md_pack_v(w1, md_w1_bits(p), 0, 0, wb).finish()), p.lambda / 4);
+    List(Secret(Int(32))) c = md_ntt(md_challenge(ct, p.tau));
+    ListBuf(List(Secret(Int(32)))) lb51 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb52 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb53 = ListBuf();
+    List(List(Secret(Int(32)))) z = md_vmap(md_vadd(md_cmul(c, s1, 0, lb51), y, 0, lb52), 0, 0, lb53);
+    Secret(Int(32)) none = classify((Int(32)) 0);
+    if (mc_reveal(md_vnorm_mask(z, p.gamma1 - p.beta, 0, none)) != 0) { return md_sign_loop(p, a, s1, s2, t0, mu, rhopp, kappa + p.l); }
+    ListBuf(List(Secret(Int(32)))) lb54 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb55 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb56 = ListBuf();
+    List(List(Secret(Int(32)))) r0 = md_vmap(md_vsub(w0, md_cmul(c, s2, 0, lb54), 0, lb55), 0, 0, lb56);
+    if (mc_reveal(md_vnorm_mask(r0, p.gamma2 - p.beta, 0, none)) != 0) { return md_sign_loop(p, a, s1, s2, t0, mu, rhopp, kappa + p.l); }
+    ListBuf(List(Secret(Int(32)))) lb57 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb58 = ListBuf();
+    List(List(Secret(Int(32)))) ct0 = md_vmap(md_cmul(c, t0, 0, lb57), 0, 0, lb58);
+    if (mc_reveal(md_vnorm_mask(ct0, p.gamma2, 0, none)) != 0) { return md_sign_loop(p, a, s1, s2, t0, mu, rhopp, kappa + p.l); }
+    ListBuf(List(Secret(Int(32)))) lb59 = ListBuf();
+    ListBuf(List(Secret(Int(32)))) lb60 = ListBuf();
+    List(List(Secret(Int(32)))) h = md_vhint(md_vadd(r0, ct0, 0, lb59), w1, p.gamma2, 0, lb60);
+    if (mc_reveal(md_vsum(h, 0, none)) > p.omega) { return md_sign_loop(p, a, s1, s2, t0, mu, rhopp, kappa + p.l); }
+    // Accepted: c~, z and h are the signature.
+    ListBuf(Secret(UInt(8))) zb = ListBuf();
+    ListBuf(Int) lb61 = ListBuf();
+    List(Int) zp = md_reveal_bytes(md_pack_v(z, md_z_bits(p), p.gamma1, 0, zb).finish(), 0, lb61);
+    ListBuf(Int) lb62 = ListBuf();
+    ListBuf(List(Int)) lb63 = ListBuf();
+    ListBuf(Int) lb64 = ListBuf();
+    ListBuf(Int) lb65 = ListBuf();
+    return md_reveal_bytes(ct, 0, lb62).concat(zp).concat(md_hint_pack(p, md_reveal_v(h, 0, lb63), 0, 0, lb64, md_zero_ints(p.k, lb65)));
+}
+
+@needs(MdCoef(C, B))
+List(List(C)) md_vhi(List(List(C)) v, Int g, Int i, ListBuf(List(C)) out) {
+    if (i >= v.len()) { return out.finish(); }
+    ListBuf(C) lb66 = ListBuf();
+    return md_vhi(v, g, i + 1, out.push(md_hi_poly(v[i], g, 0, lb66)));
+}
+
+@needs(MdCoef(C, B))
+List(List(C)) md_vlo(List(List(C)) v, List(List(C)) v1, Int g, Int i, ListBuf(List(C)) out) {
+    if (i >= v.len()) { return out.finish(); }
+    ListBuf(C) lb67 = ListBuf();
+    return md_vlo(v, v1, g, i + 1, out.push(md_lo_poly(v[i], v1[i], g, 0, lb67)));
+}
+
+@needs(MdCoef(C, B))
+List(List(C)) md_vhint(List(List(C)) a0, List(List(C)) a1, Int g, Int i, ListBuf(List(C)) out) {
+    if (i >= a0.len()) { return out.finish(); }
+    ListBuf(C) lb68 = ListBuf();
+    return md_vhint(a0, a1, g, i + 1, out.push(md_hint_poly(a0[i], a1[i], g, 0, lb68)));
+}
+
+@needs(MdCoef(C, B))
+C md_vsum(List(List(C)) v, Int i, C acc) {
+    if (i >= v.len()) { return acc; }
+    return md_vsum(v, i + 1, md_sum(v[i], 0, acc));
+}
+
+@needs(MdCoef(C, B))
+List(List(Int)) md_reveal_v(List(List(C)) v, Int i, ListBuf(List(Int)) out) {
+    if (i >= v.len()) { return out.finish(); }
+    ListBuf(Int) lb69 = ListBuf();
+    return md_reveal_v(v, i + 1, out.push(md_reveal_poly(v[i], 0, lb69)));
+}
+
+@needs(MdCoef(C, B))
+List(Int) md_reveal_poly(List(C) a, Int i, ListBuf(Int) out) {
+    if (i >= a.len()) { return out.finish(); }
+    return md_reveal_poly(a, i + 1, out.push(mc_reveal(a[i])));
+}
+
+List(Int) md_zero_ints(Int n, ListBuf(Int) out) {
+    if (n <= 0) { return out.finish(); }
+    return md_zero_ints(n - 1, out.push(0));
+}
+
+// HintBitPack: the positions of the ones, polynomial by polynomial, then
+// the running count after each polynomial (omega + k bytes).
+List(Int) md_hint_pack(MldsaParams p, List(List(Int)) h, Int i, Int j, ListBuf(Int) idx, List(Int) counts) {
+    if (i >= p.k) {
+        List(Int) pos = idx.finish();
+        ListBuf(Int) lb70 = ListBuf();
+        return pos.concat(md_zero_ints(p.omega - pos.len(), lb70)).concat(counts);
+    }
+    if (j >= 256) {
+        List(Int) sofar = idx.finish();
+        List(Int) c2 = counts.with(i, sofar.len());
+        ListBuf(Int) again = ListBuf();
+        return md_hint_pack(p, h, i + 1, 0, md_push_all(sofar, 0, again), c2);
+    }
+    if (h[i][j] != 0) { return md_hint_pack(p, h, i, j + 1, idx.push(j), counts); }
+    return md_hint_pack(p, h, i, j + 1, idx, counts);
+}
+
+ListBuf(Int) md_push_all(List(Int) xs, Int i, ListBuf(Int) out) {
+    if (i >= xs.len()) { return out; }
+    return md_push_all(xs, i + 1, out.push(xs[i]));
+}
+
+// M' = 0 || |ctx| || ctx || M (pure ML-DSA, FIPS 204 Algorithm 2).
+List(Int) md_prefix(List(Int) m, List(Int) ctx) {
+    List(Int) head = [0, ctx.len()];
+    return head.concat(ctx).concat(m);
+}
+
+/// ML-DSA.Sign_internal (FIPS 204 Algorithm 7): the signature of the
+/// formatted message M' under sk with the 32 bytes rnd (all zero for the
+/// deterministic variant). Empty for a secret key of the wrong length.
+@requires(declassify)
+pub List(Int) mldsa_sign_internal(MldsaParams p, List(Secret(UInt(8))) sk, List(Int) mprime, List(Secret(UInt(8))) rnd) {
+    List(Int) none = [];
+    if (sk.len() != mldsa_sk_len(p) || rnd.len() != 32) { return none; }
+    ListBuf(Secret(UInt(8))) lb71 = ListBuf();
+    List(Secret(UInt(8))) mu = shake256g(sk[64..128].concat(md_lift_bytes(mprime, 0, lb71)), 64);
+    return md_sign_mu(p, sk, mu, rnd);
+}
+
+/// Signing from a caller-computed mu (FIPS 204's external-mu interface,
+/// mu = H(tr || M', 64)): for known-answer tests and pre-hashed callers.
+@requires(declassify)
+pub List(Int) mldsa_sign_mu(MldsaParams p, List(Secret(UInt(8))) sk, List(Int) mu, List(Secret(UInt(8))) rnd) {
+    List(Int) none = [];
+    if (sk.len() != mldsa_sk_len(p) || rnd.len() != 32 || mu.len() != 64) { return none; }
+    ListBuf(Secret(UInt(8))) lb72 = ListBuf();
+    return md_sign_mu(p, sk, md_lift_bytes(mu, 0, lb72), rnd);
+}
+
+/// ML-DSA.Sign (FIPS 204 Algorithm 2, hedged): the signature of m with
+/// the context string ctx (at most 255 bytes), with fresh randomness.
+/// Empty when ctx is too long or sk has the wrong length.
+@requires(declassify)
+pub List(Int) mldsa_sign(MldsaParams p, List(Secret(UInt(8))) sk, List(Int) m, List(Int) ctx) {
+    List(Int) none = [];
+    if (ctx.len() > 255) { return none; }
+    return mldsa_sign_internal(p, sk, md_prefix(m, ctx), random_secret(32));
+}
+
+/// The deterministic variant of ML-DSA.Sign (rnd = 32 zero bytes).
+@requires(declassify)
+pub List(Int) mldsa_sign_deterministic(MldsaParams p, List(Secret(UInt(8))) sk, List(Int) m, List(Int) ctx) {
+    List(Int) none = [];
+    if (ctx.len() > 255) { return none; }
+    ListBuf(Int) lb73 = ListBuf();
+    ListBuf(Secret(UInt(8))) lb74 = ListBuf();
+    return mldsa_sign_internal(p, sk, md_prefix(m, ctx), md_lift_bytes(md_zero_ints(32, lb73), 0, lb74));
+}
+
+// ─── Verification (public) ──────────────────────────────────────────
+
+// use_hint(a, hint) for a in [0, q), as the reference.
+Int md_use_hint(Int a, Int h, Int gamma2) {
+    Int a1 = md_hi(a, gamma2);
+    if (h == 0) { return a1; }
+    Int a0 = md_lo(a, a1, gamma2);
+    if (gamma2 == 261888) {
+        return if (a0 > 0) { (a1 + 1) & 15 } else { (a1 - 1) & 15 };
+    }
+    if (a0 > 0) { return if (a1 == 43) { 0 } else { a1 + 1 }; }
+    return if (a1 == 0) { 43 } else { a1 - 1 };
+}
+
+List(Int) md_use_hint_poly(List(Int) a, List(Int) h, Int g, Int i, ListBuf(Int) out) {
+    if (i >= 256) { return out.finish(); }
+    return md_use_hint_poly(a, h, g, i + 1, out.push(md_use_hint(a[i], h[i], g)));
+}
+
+List(List(Int)) md_use_hint_v(List(List(Int)) a, List(List(Int)) h, Int g, Int i, ListBuf(List(Int)) out) {
+    if (i >= a.len()) { return out.finish(); }
+    ListBuf(Int) lb75 = ListBuf();
+    return md_use_hint_v(a, h, g, i + 1, out.push(md_use_hint_poly(a[i], h[i], g, 0, lb75)));
+}
+
+/// The hint polynomials of a signature's last omega + k bytes, or None
+/// unless they are well formed (FIPS 204 Algorithm 21): counts never
+/// decreasing and at most omega, positions strictly increasing within a
+/// polynomial, unused position bytes zero.
+pub Option(List(List(Int))) md_hint_unpack(MldsaParams p, List(Int) y) {
+    List(List(Int)) none = [];
+    return md_hint_un(p, y, 0, 0, none);
+}
+
+Option(List(List(Int))) md_hint_un(MldsaParams p, List(Int) y, Int i, Int index, List(List(Int)) acc) {
+    if (i >= p.k) {
+        if (!md_zero_from(y, index, p.omega)) { return None; }
+        return Some(acc);
+    }
+    Int end = y[p.omega + i];
+    if (end < index || end > p.omega) { return None; }
+    if (!md_increasing(y, index + 1, end)) { return None; }
+    ListBuf(Int) zb = ListBuf();
+    List(Int) hp = md_hint_poly_of(y, index, end, md_zero_ints(256, zb));
+    return md_hint_un(p, y, i + 1, end, acc.concat([hp]));
+}
+
+Bool md_increasing(List(Int) y, Int i, Int end) {
+    if (i >= end) { return true; }
+    if (y[i - 1] >= y[i]) { return false; }
+    return md_increasing(y, i + 1, end);
+}
+
+List(Int) md_hint_poly_of(List(Int) y, Int i, Int end, List(Int) h) {
+    if (i >= end) { return h; }
+    return md_hint_poly_of(y, i + 1, end, h.with(y[i], 1));
+}
+
+Bool md_zero_from(List(Int) y, Int i, Int end) {
+    if (i >= end) { return true; }
+    if (y[i] != 0) { return false; }
+    return md_zero_from(y, i + 1, end);
+}
+
+Bool md_bytes_ok(List(Int) b, Int i) {
+    if (i >= b.len()) { return true; }
+    if (b[i] < 0 || b[i] > 255) { return false; }
+    return md_bytes_ok(b, i + 1);
+}
+
+// Verification from mu (FIPS 204 Algorithm 8 from line 7 on).
+Bool md_verify_mu(MldsaParams p, List(Int) pk, List(Int) mu, List(Int) sig) {
+    Int cl = p.lambda / 4;
+    Int zw = md_z_bits(p);
+    Option(List(List(Int))) hint = md_hint_unpack(p, sig[cl + p.l * 32 * zw..sig.len()]);
+    return match hint {
+        Some(h) => md_verify_h(p, pk, mu, sig, h),
+        None => false,
+    };
+}
+
+Bool md_verify_h(MldsaParams p, List(Int) pk, List(Int) mu, List(Int) sig, List(List(Int)) h) {
+    Int cl = p.lambda / 4;
+    Int zw = md_z_bits(p);
+    List(Int) ct = sig[0..cl];
+    ListBuf(List(Int)) lb78 = ListBuf();
+    List(List(Int)) z = md_unpack_v(sig, cl, p.l, zw, p.gamma1, 0, lb78);
+    if (md_vnorm_mask(z, p.gamma1 - p.beta, 0, 0) != 0) { return false; }
+    ListBuf(List(Int)) lb79 = ListBuf();
+    List(List(Int)) t1 = md_unpack_v(pk, 32, p.k, 10, 0, 0, lb79);
+    List(List(List(Int))) a = md_expand_a(p, pk[0..32]);
+    List(Int) c = md_ntt(md_challenge(ct, p.tau));
+    ListBuf(List(Int)) lb80 = ListBuf();
+    ListBuf(List(Int)) lb81 = ListBuf();
+    List(List(Int)) az = md_matvec(a, md_vntt(z, 0, lb80), 0, lb81);
+    ListBuf(List(Int)) lb82 = ListBuf();
+    List(List(Int)) ct1 = md_ct1(c, t1, 0, lb82);
+    ListBuf(List(Int)) lb83 = ListBuf();
+    ListBuf(List(Int)) lb84 = ListBuf();
+    ListBuf(List(Int)) lb85 = ListBuf();
+    ListBuf(List(Int)) lb86 = ListBuf();
+    List(List(Int)) w = md_vmap(md_vinvntt(md_vmap(md_vsub(az, ct1, 0, lb83), 0, 0, lb84), 0, lb85), 1, 0, lb86);
+    ListBuf(List(Int)) lb87 = ListBuf();
+    List(List(Int)) w1 = md_use_hint_v(w, h, p.gamma2, 0, lb87);
+    ListBuf(Int) wb = ListBuf();
+    List(Int) ct2 = shake256g(mu.concat(md_pack_v(w1, md_w1_bits(p), 0, 0, wb).finish()), cl);
+    return md_same(ct, ct2, 0);
+}
+
+// c * (t1 * 2^13) pointwise in the NTT domain (reference: shiftl, ntt,
+// pointwise_montgomery; the invntt comes after the subtraction).
+List(List(Int)) md_ct1(List(Int) c, List(List(Int)) t1, Int i, ListBuf(List(Int)) out) {
+    if (i >= t1.len()) { return out.finish(); }
+    ListBuf(Int) lb88 = ListBuf();
+    List(Int) t = md_ntt(md_shl_poly(t1[i], 13, 0, lb88));
+    ListBuf(Int) lb89 = ListBuf();
+    return md_ct1(c, t1, i + 1, out.push(md_pw(c, t, 0, lb89)));
+}
+
+Bool md_same(List(Int) a, List(Int) b, Int i) {
+    if (a.len() != b.len()) { return false; }
+    if (i >= a.len()) { return true; }
+    if (a[i] != b[i]) { return false; }
+    return md_same(a, b, i + 1);
+}
+
+/// ML-DSA.Verify_internal (FIPS 204 Algorithm 8): whether sig is a
+/// signature of the formatted message M' under pk. False for a key or
+/// signature of the wrong length or a malformed hint.
+pub Bool mldsa_verify_internal(MldsaParams p, List(Int) pk, List(Int) mprime, List(Int) sig) {
+    if (pk.len() != mldsa_pk_len(p) || sig.len() != mldsa_sig_len(p)) { return false; }
+    if (!md_bytes_ok(pk, 0) || !md_bytes_ok(sig, 0)) { return false; }
+    List(Int) tr = shake256g(pk, 64);
+    return md_verify_mu(p, pk, shake256g(tr.concat(mprime), 64), sig);
+}
+
+/// Verification against a caller-computed mu = H(H(pk, 64) || M', 64)
+/// (the external-mu interface).
+pub Bool mldsa_verify_mu(MldsaParams p, List(Int) pk, List(Int) mu, List(Int) sig) {
+    if (pk.len() != mldsa_pk_len(p) || sig.len() != mldsa_sig_len(p) || mu.len() != 64) { return false; }
+    if (!md_bytes_ok(pk, 0) || !md_bytes_ok(sig, 0)) { return false; }
+    return md_verify_mu(p, pk, mu, sig);
+}
+
+/// ML-DSA.Verify (FIPS 204 Algorithm 3): whether sig is a signature of
+/// m with the context string ctx under pk. False when ctx is longer
+/// than 255 bytes.
+pub Bool mldsa_verify(MldsaParams p, List(Int) pk, List(Int) m, List(Int) ctx, List(Int) sig) {
+    if (ctx.len() > 255) { return false; }
+    return mldsa_verify_internal(p, pk, md_prefix(m, ctx), sig);
+}
+
+/// mu = H(H(pk, 64) || M', 64) for the external-mu interface.
+pub List(Int) mldsa_mu(List(Int) pk, List(Int) mprime) { return shake256g(shake256g(pk, 64).concat(mprime), 64); }

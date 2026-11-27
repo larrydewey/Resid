@@ -244,5 +244,18 @@ x="$(printf '%s' "$summary" | sed -n 's/.*fail=\([0-9]*\).*/\1/p')"
 if [ -z "$summary" ]; then fail=$((fail + 1)); echo "FAIL r255probe did not finish"; printf '%s\n' "$out" | tail -3;
 else pass=$((pass + p)); fail=$((fail + x)); [ "$x" = 0 ] || printf '%s\n' "$out" | grep '^FAIL' | head -5 | cut -c1-200; fi
 
+# ML-DSA (lib/mldsa.resid) at all three parameter sets: NIST ACVP keyGen,
+# sigGen (deterministic and hedged; external, internal and external-mu)
+# byte for byte, sigVer (valid and invalid), and OpenSSL's signatures
+# (gen_mldsa.py over an ACVP-Server checkout and pyca/cryptography).
+(cd "$ROOT" && "$COMPILER" tests/crypto/mldsaprobe.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/mldsaprobe") > "$W/build.log" 2>&1 || {
+    echo "FAIL build mldsaprobe"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
+out="$("$W/mldsaprobe" "$ROOT/tests/crypto/vectors_mldsa/mldsa.txt" 2>&1)"
+summary="$(printf '%s\n' "$out" | sed -n 's/^SUMMARY //p')"
+p="$(printf '%s' "$summary" | sed -n 's/.*pass=\([0-9]*\).*/\1/p')"
+x="$(printf '%s' "$summary" | sed -n 's/.*fail=\([0-9]*\).*/\1/p')"
+if [ -z "$summary" ]; then fail=$((fail + 1)); echo "FAIL mldsaprobe did not finish"; printf '%s\n' "$out" | tail -3;
+else pass=$((pass + p)); fail=$((fail + x)); [ "$x" = 0 ] || printf '%s\n' "$out" | grep '^FAIL' | head -5 | cut -c1-200; fi
+
 echo "crypto: $pass passed, $fail failed ($files vector files)"
 [ "$fail" -eq 0 ]
