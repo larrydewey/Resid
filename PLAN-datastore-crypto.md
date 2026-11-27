@@ -19,6 +19,22 @@ differs from the plan below:
   and SampleInBall's masked writes are as SECURITY.md describes. The ACVP
   subset is the 4 shortest-message tests of each group (1.9 MB), plus
   OpenSSL interop. HashML-DSA is not implemented.
+- **Red-team round 1 (issue #9)** found no forged proof, note or
+  signature; one medium and five low findings are fixed, each with a
+  regression (`tests/crypto/*_redteam_test.resid`, `merkle_strprobe.resid`):
+  - `pc_open` refuses an opening outside [0, l) (scalar multiplication
+    reads bits 0..255 only); `pc_open_bytes` takes canonical encodings.
+  - A note must be exact UTF-8: `note_parse` and `ckpt_parse` refuse a
+    `Str` whose stored bytes are not the encoding of its code points
+    (overlong forms), and `note_parse_bytes`, `ckpt_open_bytes` and
+    `ckpt_cosigned_bytes` take the bytes as received.
+  - A key name holds no Unicode white space or control character.
+  - `r255probe` requires an invalid encoding to be refused, and the
+    vectors now include RFC 9496 Appendix A.2's invalid encodings.
+  - Signing reveals one bit of a rejected try's hint count, not the count.
+  - ML-DSA refuses a message, context, mu or hint that is not bytes.
+  - `tests/crypto/fuzz.resid` has mutation kinds for notes, ristretto255
+    encodings and ML-DSA keys, signatures and hints.
 - The ct coverage gate reports 17 `lib/dev/device*.resid` functions on
   master as well as on this branch. They predate this work; every
   function added here is covered.
