@@ -2439,7 +2439,8 @@ Int list_set_slow(Int l, Int owned, Int i, Int w) {
 
 // xs.fill(from, n, x) (spec §17): slots from..from+n hold x's word (w on
 // raw slots, W1). Owned and transient, the slots are written in place;
-// otherwise the list is copied once into a fresh transient and filled.
+// otherwise the list is copied once and filled: into a fresh transient
+// when the update is owned, else into a frozen copy (fill_target).
 @export("resid_list_fill_w", "ptr(ptr,i8,i64,i64,i64)")
 pub Int rt_list_fill_w(Int l, Int owned, Int from, Int n, Int w) {
     if (lbytes(l)) { return bl_fill(l, owned, from, n, w); }
@@ -2465,7 +2466,11 @@ Int fill_target(Int l, Int owned, Int from, Int n) {
     if (from < 0 || from > c) { return rt_index_abort(from, c, 0); }
     if (n < 0 || n > c - from) { return rt_index_abort(from + n, c, 0); }
     if (n == 0 || (owned != 0 && ltransient(l))) { return l; }
-    return with_fresh(l, 0);
+    // A copy for an update that is not owned is an ordinary value, as
+    // with_shared's is: left transient, a callee's owned update of it would
+    // write in place what every name bound to the fill sees.
+    Int t = with_fresh(l, 0);
+    return (if (owned == 0) { st32(t + 8, 0 - 1) } else { 0 }) * 0 + t;
 }
 
 // xs.grow(n, x): xs's elements then n copies of w. k is the raw slot kind
@@ -2477,7 +2482,7 @@ Int fill_target(Int l, Int owned, Int from, Int n) {
 // is so amortized O(1) an element, as concat is, and leaves no copy behind
 // per call. Any other list (empty, transient, a trie) is copied into a
 // fresh buffer, doubled, that the next grow can share; a list of inline
-// records into a fresh transient.
+// records into a copy of its own (frozen: a grow is never owned).
 @export("resid_list_grow_w", "ptr(ptr,i64,i64,i64)")
 pub Int rt_list_grow_w(Int l, Int n, Int w, Int k) { return if (k == 4 || k == 5 || lbytes(l)) { bl_grow_list(l, n, w) } else { list_grow(l, n, w, k) }; }
 
@@ -2491,10 +2496,11 @@ Int list_grow(Int l, Int n, Int w, Int k) {
     if (n > 1152921504606846972 - c) { return rt_index_abort(n, c, 0); }
     if (n == 0) { return l; }
     if (rec_words(ltype(l)) == 0) { return grow_tip(l, c, n, w, k); }
+    // A grow is never owned: its copy is frozen, as grow_tip's result is.
     Int t = with_fresh(l, n);
     Int f = lroot(t);
     _ = words_fill(f + 24 + c * 8, n, w);
-    _ = st64(f, c + n) + st64(f + 16, c + n) + st64(t, c + n);
+    _ = st64(f, c + n) + st64(f + 16, c + n) + st64(t, c + n) + st32(t + 8, 0 - 1);
     return sync_elems(if (c == 0 && k != 0) { st64(t + 24, k) * 0 + t } else { t });
 }
 

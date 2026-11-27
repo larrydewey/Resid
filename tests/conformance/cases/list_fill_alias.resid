@@ -1,0 +1,128 @@
+// A list operation that copies its list for an update the caller does not
+// own (the list stays live) returns an ordinary value, never a transient:
+// a callee's owned update of the copy (xs.with on its parameter) then
+// copies again, and the caller's names keep what they saw (runtime/rt/
+// map.resid fill_target, list_grow; bytelist.resid bl_fill). Each line
+// prints what the caller's names hold after the callee ran, then what the
+// callee returned.
+List(Int) mk(List(Int) xs, Int i, Int n) { if (i >= n) { return xs; } return mk(xs.concat([i]), i + 1, n); }
+List(Str) mks(List(Str) xs, Int i, Int n) { if (i >= n) { return xs; } return mks(xs.concat([f"s{i}"]), i + 1, n); }
+List(Float) mkf(List(Float) xs, Int i, Int n) { if (i >= n) { return xs; } return mkf(xs.concat([(Float) i]), i + 1, n); }
+List(Bool) mkz(List(Bool) xs, Int i, Int n) { if (i >= n) { return xs; } return mkz(xs.concat([i % 2 == 0]), i + 1, n); }
+List(UInt(8)) mkb(List(UInt(8)) xs, Int i, Int n) { if (i >= n) { return xs; } return mkb(xs.concat([(UInt(8)) i]), i + 1, n); }
+List(Int(32)) mk32(List(Int(32)) xs, Int i, Int n) { if (i >= n) { return xs; } return mk32(xs.concat([(Int(32)) i]), i + 1, n); }
+
+// Owned updates of the parameter, every index in turn.
+List(Int) upd(List(Int) xs, Int i, Int n) { if (i >= n) { return xs; } return upd(xs.with(i % xs.len(), 0 - i - 1), i + 1, n); }
+List(Str) upds(List(Str) xs, Int i, Int n) { if (i >= n) { return xs; } return upds(xs.with(i % xs.len(), "x"), i + 1, n); }
+List(Float) updf(List(Float) xs, Int i, Int n) { if (i >= n) { return xs; } return updf(xs.with(i % xs.len(), 0.5), i + 1, n); }
+List(Bool) updz(List(Bool) xs, Int i, Int n) { if (i >= n) { return xs; } return updz(xs.with(i % xs.len(), false), i + 1, n); }
+List(UInt(8)) updb(List(UInt(8)) xs, Int i, Int n) { if (i >= n) { return xs; } return updb(xs.with(i % xs.len(), (UInt(8)) 250), i + 1, n); }
+List(Int(32)) upd32(List(Int(32)) xs, Int i, Int n) { if (i >= n) { return xs; } return upd32(xs.with(i % xs.len(), (Int(32)) -7), i + 1, n); }
+
+Str fills(Int k) {
+    List(Int) a = mk([], 0, 20 * k);
+    List(Int) g = a.fill(0, 3, 9);
+    List(Int) h = upd(g, 0, 40 * k);
+    return f"fill Int: {g[0]} {g[5]} {a[0]} | {h[0]} {h[5]}";
+}
+
+Str fills_str(Int k) {
+    List(Str) a = mks([], 0, 20 * k);
+    List(Str) g = a.fill(1, 2, "f");
+    List(Str) h = upds(g, 0, 40 * k);
+    return f"fill Str: {g[0]} {g[1]} {g[5]} {a[1]} | {h[0]} {h[1]}";
+}
+
+Str fills_float(Int k) {
+    List(Float) a = mkf([], 0, 20 * k);
+    List(Float) g = a.fill(0, 3, 2.25);
+    List(Float) h = updf(g, 0, 40 * k);
+    return f"fill Float: {g[0]} {g[5]} {a[0]} | {h[0]} {h[5]}";
+}
+
+Str fills_bool(Int k) {
+    List(Bool) a = mkz([], 0, 20 * k);
+    List(Bool) g = a.fill(1, 2, true);
+    List(Bool) h = updz(g, 0, 40 * k);
+    return f"fill Bool: {g[0]} {g[1]} {g[2]} {a[1]} | {h[0]} {h[1]}";
+}
+
+Str fills_bytes(Int k) {
+    List(UInt(8)) a = mkb([], 0, 20 * k);
+    List(UInt(8)) g = a.fill(0, 3, 9);
+    List(UInt(8)) h = updb(g, 0, 40 * k);
+    return f"fill UInt(8): {g[0]} {g[5]} {a[0]} | {h[0]} {h[5]}";
+}
+
+Str fills_i32(Int k) {
+    List(Int(32)) a = mk32([], 0, 20 * k);
+    List(Int(32)) g = a.fill(0, 3, 9);
+    List(Int(32)) h = upd32(g, 0, 40 * k);
+    return f"fill Int(32): {g[0]} {g[5]} {a[0]} | {h[0]} {h[5]}";
+}
+
+// The fill's copy kept in a record and passed on from there.
+type Holder = { List(Int) xs; };
+
+Str fills_held(Int k) {
+    List(Int) a = mk([], 0, 20 * k);
+    Holder r = Holder { .xs = a.fill(2, 4, 8) };
+    List(Int) h = upd(r.xs, 0, 40 * k);
+    return f"fill held: {r.xs[2]} {r.xs[0]} | {h[2]}";
+}
+
+// A list of inline records: a with that is not owned copies it.
+type Pt = { Int x; Int y; };
+
+List(Pt) mkp(List(Pt) xs, Int i, Int n) { if (i >= n) { return xs; } return mkp(xs.concat([Pt { .x = i, .y = 0 - i }]), i + 1, n); }
+List(Pt) updp(List(Pt) xs, Int i, Int n) { if (i >= n) { return xs; } return updp(xs.with(i % xs.len(), Pt { .x = 99, .y = i }), i + 1, n); }
+
+Str records(Int k) {
+    List(Pt) a = mkp([], 0, 20 * k);
+    List(Pt) w = a.with(1, Pt { .x = 5, .y = 5 });
+    List(Pt) h = updp(w, 0, 40 * k);
+    return f"records: {w[0].x} {w[1].x} {w[2].x} {a[1].x} | {h[0].x} {h[1].y}";
+}
+
+// Grows, and the other copies made for an update that is not owned.
+Str grows(Int k) {
+    List(Int) a = mk([], 0, 20 * k);
+    List(Int) g = a.grow(3, 9);
+    List(Int) h = upd(g, 0, 60 * k);
+    List(UInt(8)) b = mkb([], 0, 20 * k);
+    List(UInt(8)) gb = b.grow(3, 9);
+    List(UInt(8)) hb = updb(gb, 0, 60 * k);
+    return f"grow: {g[0]} {g[21]} {a[0]} {hb.len()} {gb[0]} {gb[21]} {b[0]} | {h[0]} {hb[0]}";
+}
+
+Str others(Int k) {
+    List(Int) a = mk([], 0, 20 * k);
+    List(Int) w = a.with(1, 5);
+    List(Int) hw = upd(w, 0, 40 * k);
+    List(Int) c = a.concat([1, 2]);
+    List(Int) hc = upd(c, 0, 44 * k);
+    List(Int) s = a[2..10];
+    List(Int) hs = upd(s, 0, 16 * k);
+    List(UInt(8)) b = mkb([], 0, 20 * k);
+    List(UInt(8)) wb = b.with(1, 5);
+    List(UInt(8)) hwb = updb(wb, 0, 40 * k);
+    return f"others: {w[0]} {w[1]} {c[0]} {c[21]} {s[0]} {wb[0]} {wb[1]} {a[0]} {b[1]} | {hw[0]} {hc[21]} {hs[0]} {hwb[1]}";
+}
+
+// k is 1 (the program's own name): sizes the compiler cannot fold.
+@requires(args)
+Int main() {
+    Int k = args.count();
+    println(fills(k));
+    println(fills_str(k));
+    println(fills_float(k));
+    println(fills_bool(k));
+    println(fills_bytes(k));
+    println(fills_i32(k));
+    println(fills_held(k));
+    println(records(k));
+    println(grows(k));
+    println(others(k));
+    return 0;
+}
