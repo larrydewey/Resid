@@ -13,7 +13,8 @@ import "clock.resid";
 // Phase 2, after every job is joined: one job at a time, each with about
 // 20 MB live, must run. Before, the pages the burst freed stayed in the
 // idle workers' page caches, charged and resident, and every one was
-// refused (final-memRT-2). Under a budget no thread keeps a cache.
+// refused (final-memRT-2). Under a budget an idle worker gives its
+// caches back before it parks.
 List(Str) fill(Int i, Int n, Str seed, List(Str) acc) {
     return if (i >= n) { acc } else { fill(i + 1, n, seed, acc.concat([seed + str_repeat("z", 2000) + f"{i}"])) };
 }

@@ -1,0 +1,39 @@
+import "clock.resid";
+// Under a memory budget an idle pooled worker gives its cached free pages
+// and big blocks back before it parks (runtime/rt/ctl.resid, pool_main):
+// nothing else reaches them while it waits. run.sh runs this with
+// RESID_MEM_LIMIT=100 and arguments "23000 a b c d": four jobs of about
+// 10 MB run at once, well under half the budget, and finish; then one job
+// of about 80 MB must run. Before, workers kept their caches unless half
+// the budget was charged when they parked, so the four parked workers
+// held about a quarter of it and the last job was refused (red team
+// fin-memrt-1).
+List(Str) fill(Int i, Int n, Str seed, List(Str) acc) {
+    return if (i >= n) { acc } else { fill(i + 1, n, seed, acc.concat([seed + str_repeat("z", 2000) + f"{i}"])) };
+}
+
+@requires(clock)
+Int burst(Int i, Int n, Int ms, Int per) {
+    if (i >= n) { return 0; }
+    Result(Int, RegionError) r = spawn (clock) {
+        List(Str) xs = fill(0, per, f"j{i}", []);
+        Int w = clock_sleep_ms(ms);
+        return if (xs.len() == per) { 1 } else { 0 } + w * 0;
+    };
+    Int rest = burst(i + 1, n, ms, per);
+    Int v = r else { 1000 };
+    return v + rest;
+}
+
+@requires(args, clock)
+Int main() {
+    Int nj = args.count() - 2;
+    Int got = if (nj > 0) { burst(0, nj, 300, 5000) } else { 0 };
+    println(f"burst {nj} ok {got % 1000} refused {got / 1000}");
+    // Main thread: about 60 MB live, under a 100 MB budget.
+    Int m = str_parse_int(args.get(1));
+    Result(Int, RegionError) big = spawn () { List(Str) xs = fill(0, m, "m", []); return xs.len(); };
+    Int v = big else { 0 - 1 };
+    println(f"main job {v}");
+    return 0;
+}
