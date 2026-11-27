@@ -34,6 +34,11 @@ List(UInt(64)) bn_take(List(UInt(64)) x, Int n, Int i, ListBuf(UInt(64)) acc) {
     return bn_take(x, n, i + 1, acc.push(x[i]));
 }
 
+/// Whether `x` is in normal form: no leading (most significant) zero limb.
+/// Zero is the empty list. Values a peer sends must be normal: the rest of
+/// this library compares lengths first and assumes it.
+pub Bool bn_is_normal(List(UInt(64)) x) { return x.len() == 0 || x[x.len() - 1] != 0; }
+
 /// The natural number zero, an empty list.
 pub List(UInt(64)) bn_zero() { return []; }
 /// The natural number one.
@@ -208,8 +213,13 @@ UInt(256) bn_col(List(UInt(64)) a, List(UInt(64)) b, Int k, Int i, Int hi, UInt(
 /// A quotient `q` and remainder `r` of natural numbers.
 pub type BnDiv = { List(UInt(64)) q; List(UInt(64)) r; };
 
-/// Quotient and remainder of a by b (b nonzero).
-pub BnDiv bn_divmod(List(UInt(64)) a, List(UInt(64)) b) {
+/// Quotient and remainder of a by b (b nonzero), both trimmed. Either
+/// argument may carry leading zero limbs: both are trimmed first, so a zero
+/// divisor in any form ([0], [0, 0]) is refused and a divisor with a zero
+/// top limb ([5, 0]) cannot send the long division into a loop.
+pub BnDiv bn_divmod(List(UInt(64)) a0, List(UInt(64)) b0) {
+    List(UInt(64)) a = bn_trim(a0);
+    List(UInt(64)) b = bn_trim(b0);
     assert(b.len() > 0, "bn_divmod: division by zero");
     if (bn_cmp(a, b) < 0) { return BnDiv {.q = [], .r = a}; }
     if (b.len() == 1) { return bn_divmod_short(a, b[0]); }
@@ -320,10 +330,15 @@ pub List(UInt(64)) bn_modmul(List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) 
 
 // ─── GCD and inverse ────────────────────────────────────────────
 
-/// The greatest common divisor.
+/// The greatest common divisor (trimmed; either argument may carry leading
+/// zero limbs).
 pub List(UInt(64)) bn_gcd(List(UInt(64)) a, List(UInt(64)) b) {
+    return bn_gcd_at(bn_trim(a), bn_trim(b));
+}
+
+List(UInt(64)) bn_gcd_at(List(UInt(64)) a, List(UInt(64)) b) {
     if (b.len() == 0) { return a; }
-    return bn_gcd(b, bn_mod(a, b));
+    return bn_gcd_at(b, bn_mod(a, b));
 }
 
 /// The inverse of a modulo m (m > 1), or None when gcd(a, m) != 1.
