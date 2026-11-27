@@ -61,23 +61,44 @@ test "dc2-r255-1: pc_open_vec refuses values or blinding outside [0, l)" {
     Int(512) r = 123456789;
     List(Int) vs = rt_sc(v0).concat(rt_sc(v1));
     EgPt(Int(512)) c = rt_commit_vec(vs, r);
-    expect(pc_open_vec(c, vs, r)).toBeTrue();
+    expect(pc_open_vec(c, 2, vs, r)).toBeTrue();
     // The same commitment from an unreduced value: refused as an opening.
     List(Int) alias = rt_le(v0 + eg_l()).concat(rt_sc(v1));
     expect(hex_encode(r255_encode(rt_commit_vec(alias, r))) == hex_encode(r255_encode(c))).toBeTrue();
-    expect(pc_open_vec(c, alias, r)).toBeFalse();
-    expect(pc_open_vec(c, rt_sc(v0).concat(rt_le(v1 + eg_l() + eg_l())), r)).toBeFalse();
-    expect(pc_open_vec(c, vs, r + eg_l())).toBeFalse();
-    expect(pc_open_vec(c, vs, r + rt_two_to(256))).toBeFalse();
-    expect(pc_open_vec(c, vs, r - eg_l())).toBeFalse();
+    expect(pc_open_vec(c, 2, alias, r)).toBeFalse();
+    expect(pc_open_vec(c, 2, rt_sc(v0).concat(rt_le(v1 + eg_l() + eg_l())), r)).toBeFalse();
+    expect(pc_open_vec(c, 2, vs, r + eg_l())).toBeFalse();
+    expect(pc_open_vec(c, 2, vs, r + rt_two_to(256))).toBeFalse();
+    expect(pc_open_vec(c, 2, vs, r - eg_l())).toBeFalse();
     // Not whole values, a value missing, values swapped, a wrong value.
-    expect(pc_open_vec(c, vs[0..63], r)).toBeFalse();
-    expect(pc_open_vec(c, vs.concat([0]), r)).toBeFalse();
-    expect(pc_open_vec(c, rt_sc(v0), r)).toBeFalse();
-    expect(pc_open_vec(c, rt_sc(v1).concat(rt_sc(v0)), r)).toBeFalse();
-    expect(pc_open_vec(c, rt_sc(v0).concat(rt_sc(v1 + (Int(512)) 1)), r)).toBeFalse();
-    expect(pc_open_vec(c, vs.with(3, 256), r)).toBeFalse();
+    expect(pc_open_vec(c, 2, vs[0..63], r)).toBeFalse();
+    expect(pc_open_vec(c, 2, vs.concat([0]), r)).toBeFalse();
+    expect(pc_open_vec(c, 2, rt_sc(v0), r)).toBeFalse();
+    expect(pc_open_vec(c, 2, rt_sc(v1).concat(rt_sc(v0)), r)).toBeFalse();
+    expect(pc_open_vec(c, 2, rt_sc(v0).concat(rt_sc(v1 + (Int(512)) 1)), r)).toBeFalse();
+    expect(pc_open_vec(c, 2, vs.with(3, 256), r)).toBeFalse();
     // No values at all: the commitment is rH.
     List(Int) none = [];
-    expect(pc_open_vec(rt_commit_vec(none, r), none, r)).toBeTrue();
+    expect(pc_open_vec(rt_commit_vec(none, r), 0, none, r)).toBeTrue();
+}
+
+// dc3-r255-1: zero values at the end add nothing to a vector commitment,
+// so (5, 77) also opened as (5, 77, 0): the length was not bound.
+test "dc3-r255-1: pc_open_vec takes the number of values it expects" {
+    Int(512) v0 = 5;
+    Int(512) v1 = 77;
+    Int(512) zero = 0;
+    Int(512) r = 123456789;
+    List(Int) vs = rt_sc(v0).concat(rt_sc(v1));
+    List(Int) padded = vs.concat(rt_sc(zero));
+    EgPt(Int(512)) c = rt_commit_vec(vs, r);
+    expect(hex_encode(r255_encode(rt_commit_vec(padded, r))) == hex_encode(r255_encode(c))).toBeTrue();
+    expect(pc_open_vec(c, 2, vs, r)).toBeTrue();
+    expect(pc_open_vec(c, 2, padded, r)).toBeFalse();
+    // Asked for three, the padded opening is the honest one of (5, 77, 0).
+    expect(pc_open_vec(c, 3, padded, r)).toBeTrue();
+    expect(pc_open_vec(c, 3, vs, r)).toBeFalse();
+    expect(pc_open_vec(c, 1, vs, r)).toBeFalse();
+    expect(pc_open_vec(c, 0 - 1, vs, r)).toBeFalse();
+    expect(pc_open_vec(c, 1, rt_sc(v0), r)).toBeFalse();
 }

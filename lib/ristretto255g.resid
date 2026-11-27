@@ -29,6 +29,10 @@
 // group, so nobody knows log_G H. Vector commitments use
 // G_i = r255_from_uniform(SHA-512("resid/pedersen/G/v1" || le32(i))).
 // Commitments are hiding (r uniform) and binding under discrete log.
+// The generators do not depend on the vector's length, so a vector and
+// the same vector followed by zeros commit alike: the length is bound by
+// whoever opens (pc_open_vec takes the count it expects), not by the
+// commitment.
 
 import "word.resid";
 import "crypto.resid";
@@ -401,7 +405,8 @@ pub EgPt(P) pc_commit(P v, P r) { return eg_add(eg_base_mul(v), eg_mul(r, pc_h()
 /// Each value and `r` must be a scalar in [0, l): all 256 bits of a value
 /// are used as they are, so v and v + l commit alike, and this generic
 /// code cannot branch on a scalar to refuse it. pc_open_vec makes the
-/// check.
+/// check. The number of values is not committed to: zero values at the
+/// end add nothing (0·G_i), so pc_open_vec is told how many to expect.
 @needs(Wide512(P, B))
 pub EgPt(P) pc_commit_vec(List(B) vs, P r) {
     assert(vs.len() % 32 == 0, "pedersen: values are 32 bytes each");
@@ -433,13 +438,14 @@ pub Bool pc_open(EgPt(Int(512)) c, Int(512) v, Int(512) r) {
     return r255_eq(c, pc_commit(v, r));
 }
 
-/// Whether the opening (vs, r) matches the public vector commitment `c`:
-/// `vs` is the values' 32-byte little-endian encodings, concatenated.
-/// False unless it is whole 32-byte values, each canonical
-/// (r255_sc_decode, so below l), and 0 <= r < l.
-pub Bool pc_open_vec(EgPt(Int(512)) c, List(Int) vs, Int(512) r) {
+/// Whether the opening (vs, r) matches the public vector commitment `c`
+/// to `n` values: `vs` is the values' 32-byte little-endian encodings,
+/// concatenated. False unless it is exactly n values (a commitment does
+/// not bind its length: zeros at the end leave it unchanged), each
+/// canonical (r255_sc_decode, so below l), and 0 <= r < l.
+pub Bool pc_open_vec(EgPt(Int(512)) c, Int n, List(Int) vs, Int(512) r) {
     Int(512) z = 0;
-    if (vs.len() % 32 != 0 || r < z || r >= eg_l() || !pc_vec_canonical(vs, 0)) { return false; }
+    if (n < 0 || vs.len() != 32 * n || r < z || r >= eg_l() || !pc_vec_canonical(vs, 0)) { return false; }
     return r255_eq(c, pc_commit_vec(vs, r));
 }
 
