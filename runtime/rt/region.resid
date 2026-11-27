@@ -125,8 +125,9 @@ Int own_set(Int p, Int n, Int id) {
 // ─── Pages ─────────────────────────────────────────────────────────────
 // Single pages are cached per thread (64 at most; under a memory budget
 // one for each 8 MB of it, since a page a thread keeps stays charged and
-// resident and would refuse other threads' work: an idle worker and a
-// thread the budget refuses give theirs back, rg_cache_flush); other runs
+// resident and would refuse other threads' work: a thread the budget
+// would refuse, and an idle worker once half the budget is charged, give
+// theirs back, rg_cache_flush); other runs
 // go back to the kernel (MADV_DONTNEED) and onto the free list of their
 // order.
 //

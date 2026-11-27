@@ -189,9 +189,12 @@ pub Int rt_mem_limit_set(Int mb) {
 // (bytes handed out minus bytes given back) never passes the limit
 // without a refusal, whatever runs at the same time: every byte a program
 // can touch on the heap or in a region was charged first, so the total
-// bounds resident memory (thread stacks and the runtime's own tables are
-// not counted). Big blocks, realloc growth and runs of more than one
-// region page are charged whole when mapped. Memory that is filled a bit
+// bounds the program's heap and region memory. It does not bound resident
+// memory as a whole: thread stacks are not charged (the main thread's up
+// to RESID_STACK_MB, each concurrent spawn's up to RESID_SPAWN_STACK_MB,
+// where frames hold fixed-capacity values inline), nor are the runtime's
+// own tables (residc.md says so too). Big blocks, realloc growth and runs
+// of more than one region page are charged whole when mapped. Memory that is filled a bit
 // at a time is charged as it fills, a step ahead of its high-water mark:
 // a single region page 64 KB first, then doubling (region.resid,
 // page_charge), and a
@@ -210,24 +213,39 @@ pub Int mem_take(Int n) {
     return 0;
 }
 
-// Past the budget: this thread's cached free pages (charged while cached)
-// go back first, then the charge is tried once more.
+// Past the budget: this thread's cached free pages and big blocks
+// (charged while cached) go back first, then the charge is tried once more.
 @cold
 Int mem_retry(Int n, Int lim) {
-    if (rg_cache_flush() == 0) { return over_budget(lim); }
+    Int big = ld64(heap_tls() + 408);
+    _ = cache_flush(heap_tls());
+    if (rg_cache_flush() + big == 0) { return over_budget(lim); }
     Int now = resid_raw_fetch_add(mem_used(), n) + n;
     if (now > lim) { return mem_give(n) + over_budget(lim); }
     return 0;
 }
 
-// Whether a budget is set. Memory a thread caches for itself stays
-// charged (it is resident) and can refuse other threads' work, so under a
-// budget the region page cache is kept small (region.resid, cache_cap)
-// and an idle worker gives its cache back (ctl.resid, pool_main). The
-// big-block cache is kept as it is (at most 64 MB a thread, charged while
-// cached): freeing those blocks at once made the compiler's own build
-// fault on a block it still read.
+// Whether a budget is set. Memory a thread caches for itself (free region
+// pages, freed big blocks) stays charged, as it is resident, and can
+// refuse other threads' work. So under a budget the region page cache is
+// kept small (region.resid, cache_cap), a thread about to be refused gives
+// its caches back first (mem_retry), and once half the budget is charged
+// an idle worker gives its caches back before it parks (ctl.resid,
+// pool_main, mem_pressed). The caches stay otherwise: dropping either one
+// under every budget made the compiler, which sets one, much slower (the
+// page cache 5 times, the big-block cache 1.4 times on the runtime
+// build). The compiler's runtime build read a string from a freed arena
+// chunk after its arena was popped (fixed in driver.resid), which only
+// the big-block cache had kept readable.
 pub Bool mem_limited() { return limit_bytes() > 0; }
+
+pub Bool mem_pressed() {
+    Int lim = limit_bytes();
+    return lim > 0 && ld64(mem_used()) > lim / 2;
+}
+
+// This thread's cached big blocks given back (pool_main).
+pub Int heap_cache_flush() { return cache_flush(heap_tls()); }
 
 pub Int mem_give(Int n) { return resid_raw_fetch_add(mem_used(), 0 - n) * 0; }
 

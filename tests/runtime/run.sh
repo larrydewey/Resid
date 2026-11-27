@@ -484,9 +484,12 @@ fi
 # RESID_MEM_LIMIT under concurrent spawns (malloc.resid mem_take,
 # region.resid page_charge): 100 jobs that each fill a fresh region page
 # after a sleep; the ones past the budget get Err(RegionError) and the
-# peak stays under the limit plus 8 MB of slack for what is not charged
-# (thread stacks, the runtime's tables): measured 37 MB. Then three
-# sequential 20 MB jobs must run: no idle worker keeps freed pages charged.
+# peak stays under the limit plus 8 MB. The 8 MB is this test's slack for
+# what the budget does not charge (its jobs' small thread stacks, the
+# runtime's tables), not a general bound: stacks are outside the budget,
+# up to RESID_SPAWN_STACK_MB for each concurrent spawn. Measured 31-38
+# MB. Then three sequential 20 MB jobs must run: once half the budget is
+# charged, no idle worker keeps freed pages charged.
 # Before: every job ran, 83 MB resident under 50, and the three were
 # refused.
 if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/spawn_budget.resid -o "$W/spawn_budget") > "$W/spawn_budget.log" 2>&1 \
