@@ -1,0 +1,37 @@
+// RB-18 follow-up (red team EKEY-R3-1): a key resting on r and the draw
+// r2, with r also behind a call whose summary is frozen in a cycle (swap),
+// must not count as drawn for one sealing call: r keys two seals under a
+// constant nonce, E0279.
+import "random.resid";
+import "aesgcmg.resid";
+
+List(Int) zero_iv() { return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; }
+
+@key_from(x)
+List(Secret(UInt(8))) kdf(List(Secret(UInt(8))) x) { return x; }
+
+type Pair = { Secret(UInt(8)) a; Secret(UInt(8)) b; };
+
+Pair swap(List(Secret(UInt(8))) x, Int n) {
+    if (n <= 0) { return Pair {.a = classify(0), .b = classify(0)}; }
+    Pair p = swap(x, n - 1);
+    return Pair {.a = x[0] ^ p.a, .b = p.a};
+}
+
+@requires(declassify)
+Int seal_two(List(Secret(UInt(8))) msg) {
+    List(Secret(UInt(8))) r = random_secret(32);
+    List(Secret(UInt(8))) r2 = random_secret(32);
+    Int a = aes_gcmg_seal(r, zero_iv(), msg, []).len();
+    Pair p = swap(kdf(r), random_bytes(1)[0]);
+    List(Secret(UInt(8))) k2 = r2.concat([p.a, p.b]);
+    Int b = aes_gcmg_seal(k2, zero_iv(), msg, []).len();
+    return a + b;
+}
+
+@requires(declassify)
+Int main() {
+    List(Secret(UInt(8))) m = random_secret(5);
+    println(f"{seal_two(m)}");
+    return 0;
+}
