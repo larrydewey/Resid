@@ -443,10 +443,12 @@ fi
 # Owned updates of a large list a call froze (map.resid, no_thaw_cost):
 # after about one copy's worth of path copies the list is thawed and then
 # written in place, in loops that have no region. Measured: under 1 MB;
-# before, each update copied a path for good (1.2 GB).
+# before, each update copied a path for good (1.2 GB). The debt is each
+# list's own: another list's thaw every 25 steps does not reset it (3 MB;
+# with one debt per thread, 87 MB).
 if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/list_with.resid -o "$W/list_with") > "$W/list_with.log" 2>&1 \
     && RESID_MEM_LIMIT=32 timeout 120 "$W/list_with" > "$W/list_with.out" 2>&1 \
-    && [ "$(tr '\n' ' ' < "$W/list_with.out")" = "257 999994 999999 15 " ]; then
+    && [ "$(tr '\n' ' ' < "$W/list_with.out")" = "257 999994 999999 15 5001 99999 7 0 1 1 " ]; then
     pass=$((pass + 1))
 else
     fail=$((fail + 1)); echo "FAIL owned updates of a frozen list: $(tail -1 "$W/list_with.out" "$W/list_with.log" 2>/dev/null | tr '\n' ' ')"

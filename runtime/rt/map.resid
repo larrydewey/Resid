@@ -1206,14 +1206,16 @@ Int map_remove_p(Int m, Int rk, Int kb) {
 }
 
 // Stamps are unique process-wide: each thread takes blocks of 65536 from a
-// global counter; past 2^32 they are 0 (appends never in place again).
+// global counter; past 2^31 they are 0 (appends never in place again), so
+// no stamp has bit 31 set and none equals a frozen header's word at 12
+// (the frozen mark and a debt, frozen_from).
 Int own_w() { return resid_raw_tls("map_own", 16); }
 
 Int new_own() {
     Int w = own_w();
     _ = if (ld64(w) == ld64(w + 8)) { own_block(w) } else { 0 };
     Int nx = ld64(w);
-    if (nx > 4294967295) { return 0; }
+    if (nx > 2147483647) { return 0; }
     return st64(w, nx + 1) * 0 + nx;
 }
 
@@ -2433,7 +2435,7 @@ Int list_set_slow(Int l, Int owned, Int i, Int w) {
     if (lbytes(l)) { return bl_set_slow(l, owned, i, w); }
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return mark_frozen(with_shared(l, i, w)); }
+    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return frozen_from(with_shared(l, i, w), l, path_cost(l)); }
     if (owned == 0) { return with_shared(l, i, w); }
     Int t = if (ltransient(l)) { l } else { with_fresh(l, 0) };
     return st64(lroot(t) + 24 + i * 8, w) * 0 + t;
@@ -2537,7 +2539,7 @@ Int words_dup(Int p, Int have, Int n) {
 Int list_with_slow(Int l, Int owned, Int i, Int v) {
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return mark_frozen(with_shared(l, i, v)); }
+    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return frozen_from(with_shared(l, i, v), l, path_cost(l)); }
     Int t = if (owned == 0 || ltransient(l)) { l } else { with_fresh(l, 0) };
     if (owned == 0) { return with_shared(l, i, v); }
     Int f = lroot(t);
@@ -2574,7 +2576,7 @@ pub Int rt_list_with_fh(Int l, Int owned, Int i, Int v, Int ek) {
 Int list_with_fh_slow(Int l, Int owned, Int i, Int v, Int ek) {
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return mark_frozen(with_shared(l, i, v)); }
+    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return frozen_from(with_shared(l, i, v), l, path_cost(l)); }
     if (owned == 0) { return with_shared(l, i, v); }
     Int t = if (ltransient(l)) { l } else { with_fresh_f(l, 0) };
     Int f = lroot(t);
@@ -2602,23 +2604,33 @@ pub Bool no_thaw(Int l) { return !ltransient(l) && lcount(l) > fresh_max() && (l
 pub Int mark_frozen(Int l) { return st32(l + 12, ld32(l + 12) | 2147483648) * 0 + l; }
 
 // An owned update of a list frozen before takes the persistent path only
-// while what those copies have cost on this thread stays below the list's
-// size; the update that reaches it thaws the list instead (one whole copy
-// into a transient, written in place from then on). A loop updating a
-// large list it owns, which a call boundary froze, so stops copying after
-// about one copy's worth of paths (before, every update copied a path, and
-// the old paths stayed in a loop without a region); a parser's node list,
-// thawed and refrozen by every call, still mostly copies a path, and the
-// thaws cost at most what the paths did. `cost` is the persistent copy's
-// size in words: a path, or the whole list when that copy is whole.
-Int thaw_debt() { return resid_raw_tls("rt_thaw_debt", 8); }
+// while what those copies have cost this list stays below its size; the
+// update that reaches it thaws the list instead (one whole copy into a
+// transient, written in place from then on). A loop updating a large list
+// it owns, which a call boundary froze, so stops copying after about one
+// copy's worth of paths (before, every update copied a path, and the old
+// paths stayed in a loop without a region); a parser's node list, thawed
+// and refrozen by every call, still mostly copies a path, and the thaws
+// cost at most what the paths did. `cost` is the persistent copy's size
+// in words: a path, or the whole list when that copy is whole.
+//
+// The debt is the list's own: bits 0..30 of its header's word at 12 (bit
+// 31 is the frozen mark), carried to each persistent result by
+// frozen_from. Only a trie keeps one: a flat list's copy is whole, so it
+// thaws at once, and an inline-record list (whose element count those
+// bits hold) is always flat. A debt kept per thread let one list's thaw
+// reset another's, which then copied a path at every update for good. A
+// list a map stamped (resid_map_list_push) before it froze starts with
+// that stamp as its debt, which only thaws it sooner.
+pub Int thaw_debt(Int l) { return ld32(l + 12) & 2147483647; }
 
-pub Bool no_thaw_cost(Int l, Int cost) {
-    if (!no_thaw(l)) { return false; }
-    Int w = thaw_debt();
-    Int c = ld64(w) + cost;
-    if (c >= lcount(l)) { return st64(w, 0) * 0 == 1; }
-    return st64(w, c) * 0 == 0;
+pub Bool no_thaw_cost(Int l, Int cost) { return no_thaw(l) && thaw_debt(l) + cost < min(lcount(l), 2147483647); }
+
+// The frozen persistent result r of an owned update of l that copied
+// `cost` words: marked, with l's debt and that cost.
+pub Int frozen_from(Int r, Int l, Int cost) {
+    if (rec_words(ltype(r)) != 0) { return mark_frozen(r); }
+    return st32(r + 12, 2147483648 | min(thaw_debt(l) + cost, 2147483647)) * 0 + r;
 }
 
 // What with_shared copies: a flat list becomes a trie (all of it), a
@@ -2629,7 +2641,7 @@ pub Int path_cost(Int l) { return if (lflat(l)) { lcount(l) } else { 40 + lshift
 Int list_with_f_slow(Int l, Int owned, Int i, Int v, Int ek) {
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return mark_frozen(with_shared(l, i, v)); }
+    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return frozen_from(with_shared(l, i, v), l, path_cost(l)); }
     if (owned == 0) { return with_shared(l, i, v); }
     Int t = if (ltransient(l)) { l } else { with_fresh(l, 0) };
     Int f = lroot(t);
@@ -2658,7 +2670,7 @@ pub Int rt_list_concat_own(Int a, Int owned, Int b0) {
     if (lbytes(a) || lbytes(b0)) { return bl_concat_own(a, owned, b0); }
     Int b = cat_like(a, b0);
     Int m = lcount(b);
-    if (owned != 0 && no_thaw(a)) { return mark_frozen(rt_list_concat(a, b)); }
+    if (owned != 0 && no_thaw(a)) { return frozen_from(rt_list_concat(a, b), a, 0); }
     if (owned == 0) { return rt_list_concat(a, b); }
     if (m == 0) { return a; }
     Int n = lcount(a);
@@ -2691,7 +2703,7 @@ pub Int rt_list_push_own(Int a, Int w, Int k) {
 @noinline
 Int list_push_own_slow(Int a, Int w, Int k) {
     if (k == 4 || k == 5 || lbytes(a)) { return rt_bl_push_own(a, w); }
-    if (no_thaw(a)) { return mark_frozen(rt_list_push_k(a, w, k)); }
+    if (no_thaw(a)) { return frozen_from(rt_list_push_k(a, w, k), a, 0); }
     Int n = lcount(a);
     Int t = if (ltransient(a)) { a } else { with_fresh(a, max(4, n)) };
     _ = if (n == 0 && !raw_kind(ltype(a))) { st64(t + 24, k) } else { 0 };
@@ -2726,7 +2738,7 @@ Int with_grow(Int t, Int f0, Int n, Int need) {
 @export("resid_list_concat_own_f", "ptr(ptr,i8,ptr,ptr)")
 pub Int rt_list_concat_own_f(Int a, Int owned, Int b, Int ek) {
     Int m = lcount(b);
-    if (owned != 0 && no_thaw(a)) { return mark_frozen(rt_list_concat(a, b)); }
+    if (owned != 0 && no_thaw(a)) { return frozen_from(rt_list_concat(a, b), a, 0); }
     if (owned == 0) { return rt_list_concat(a, b); }
     if (m == 0) { return a; }
     Int n = lcount(a);
@@ -2743,7 +2755,7 @@ pub Int rt_list_concat_own_f(Int a, Int owned, Int b, Int ek) {
 @export("resid_list_concat_own_fh", "ptr(ptr,i8,ptr,ptr)")
 pub Int rt_list_concat_own_fh(Int a, Int owned, Int b, Int ek) {
     Int m = lcount(b);
-    if (owned != 0 && no_thaw(a)) { return mark_frozen(rt_list_concat(a, rt_list_share_f(b))); }
+    if (owned != 0 && no_thaw(a)) { return frozen_from(rt_list_concat(a, rt_list_share_f(b)), a, 0); }
     if (owned == 0) { return rt_list_concat(a, rt_list_share_f(b)); }
     if (m == 0) { return a; }
     Int n = lcount(a);
