@@ -1,0 +1,8 @@
+err invalid value 256, expected a byte
+ok [65, 0]
+err invalid value -1, expected a byte
+ok [67, 0, 128, 255]
+err invalid value -1, expected a byte
+err invalid value 256, expected a byte
+ok [67, 7, 0, 255]
+err invalid value 300, expected a byte

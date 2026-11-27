@@ -1,0 +1,38 @@
+// CBOR byte strings take bytes, 0..255 (lib/cbor.resid, ce_bytes and
+// ce_byte): a value outside that range is refused with invalid_value, as
+// the decoders refuse one, rather than wrapped into a valid-looking
+// encoding that another value also has. In-range bytes encode as before.
+import "cbor.resid";
+import "serial_value.resid";
+
+// A byte string streamed one byte at a time (write_byte).
+type Raw = { Int a; Int b; };
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_raw(Raw x, F s) {
+    F s1 = write_bytes_begin(s, 3)?;
+    F s2 = write_byte(s1, x.a)?;
+    F s3 = write_byte(s2, x.b)?;
+    F s4 = write_byte(s3, 255)?;
+    return write_bytes_end(s4);
+}
+Encode(Raw, F) = enc_raw;
+
+Str shw(Result(List(Int), SerialError) r) {
+    return match (r) { Ok(b) => f"ok {b}", Err(e) => "err " + e.msg };
+}
+
+// k is 1 (the program's own name): values the compiler cannot fold.
+@requires(args)
+Int main() {
+    Int k = args.count();
+    println(shw(to_cbor(VBytes([256 * k]))));
+    println(shw(to_cbor(VBytes([0 * k]))));
+    println(shw(to_cbor(VBytes([1, 2, 0 - k, 255]))));
+    println(shw(to_cbor(VBytes([0, 128 * k, 255]))));
+    println(shw(to_cbor(Raw {.a = 0 - k, .b = 1})));
+    println(shw(to_cbor(Raw {.a = 1, .b = 255 + k})));
+    println(shw(to_cbor(Raw {.a = 7 * k, .b = 0})));
+    println(shw(to_cbor(VSeq([VInt(k), VBytes([300])]))));
+    return 0;
+}

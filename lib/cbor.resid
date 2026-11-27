@@ -57,7 +57,9 @@ List(Int) ce_ints(List(UInt(8)) bs, Int i, ListBuf(Int) acc) {
 }
 
 // Internal writes cannot fail, so they carry no Result: the verbs below
-// are the only place the format can report one.
+// are the only place the format can report one. What they store is in
+// 0..255: a head, tag or simple byte, or a byte the verbs checked
+// (ce_bytes, ce_byte), so wrapping_u8 never changes a value.
 CborEnc ce_push(CborEnc e, Int b) {
     List(UInt(8)) one = [wrapping_u8(b)];
     return CborEnc {.out = e.out.concat(one)};
@@ -149,7 +151,21 @@ Result(CborEnc, SerialError) ce_float(CborEnc e, Float v) {
 }
 
 Result(CborEnc, SerialError) ce_str(CborEnc e, Str v) { return Ok(ce_text(e, v)); }
-Result(CborEnc, SerialError) ce_bytes(CborEnc e, List(Int) v) { return Ok(ce_push_all(ce_head(e, 2, cb_len(v)), v, 0)); }
+// A byte outside 0..255 is refused, as the decoders refuse one
+// (serial.resid's dec_fixed_bytes_at), rather than written wrapped: two
+// different values never get one encoding.
+Result(CborEnc, SerialError) ce_bytes(CborEnc e, List(Int) v) {
+    Int bad = ce_bad_byte(v, 0);
+    if (bad >= 0) { return Err(invalid_value(f"{v[bad]}", "a byte")); }
+    return Ok(ce_push_all(ce_head(e, 2, cb_len(v)), v, 0));
+}
+
+// The index of the first element of v from i on that is not a byte, or -1.
+Int ce_bad_byte(List(Int) v, Int i) {
+    if (i >= v.len()) { return -1; }
+    if (v[i] < 0 || v[i] > 255) { return i; }
+    return ce_bad_byte(v, i + 1);
+}
 
 // A streamed string was promised its byte length up front, so its head can
 // be written before the first code point.
@@ -157,7 +173,10 @@ Result(CborEnc, SerialError) ce_str_begin(CborEnc e, Int chars, Int bytes) { ret
 Result(CborEnc, SerialError) ce_str_char(CborEnc e, Int cp) { return Ok(ce_push_all(e, cb_cp_bytes(cp), 0)); }
 Result(CborEnc, SerialError) ce_str_end(CborEnc e) { return Ok(e); }
 Result(CborEnc, SerialError) ce_bytes_begin(CborEnc e, Int len) { return Ok(ce_head(e, 2, (UInt(64))len)); }
-Result(CborEnc, SerialError) ce_byte(CborEnc e, Int b) { return Ok(ce_push(e, b)); }
+Result(CborEnc, SerialError) ce_byte(CborEnc e, Int b) {
+    if (b < 0 || b > 255) { return Err(invalid_value(f"{b}", "a byte")); }
+    return Ok(ce_push(e, b));
+}
 Result(CborEnc, SerialError) ce_bytes_end(CborEnc e) { return Ok(e); }
 
 // None is null and Some(v) is v: an option is the value itself.
