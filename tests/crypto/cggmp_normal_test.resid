@@ -109,3 +109,15 @@ test "presigning blames a co-signer whose K is not in normal form" {
     expect(blamed(s1, with_k(in, [5, 0], 0, ListBuf()))).toEqual("blamed 2");
     expect(blamed(s1, with_k(in, s2.k_ct.concat([0]), 0, ListBuf()))).toEqual("blamed 2");
 }
+
+test "pa_ct_ok refuses a ciphertext whose nonce was 1" {
+    // c = (N+1)^m * 1^N = 1 + mN reveals m as (c - 1) / N.
+    PaillierPub pk = fixture_pub();
+    List(UInt(64)) c1 = pa_enc(pk, zi_from_nat([5]), [1]);
+    expect(bn_cmp(bn_divmod(bn_sub(c1, [1]), pk.n).q, [5]) == 0).toBeTrue();
+    expect(pa_ct_ok(pk, c1)).toBeFalse();
+    expect(pa_ct_ok(pk, [1])).toBeFalse();
+    expect(pa_ct_ok(pk, bn_add(pk.n, [1]))).toBeFalse();
+    // A ciphertext with a random nonce is still accepted.
+    expect(pa_ct_ok(pk, pa_enc(pk, zi_from_nat([5]), [7]))).toBeTrue();
+}
