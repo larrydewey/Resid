@@ -5758,6 +5758,44 @@ GT lw_sort(LW w, Int id, List(Str) env, GT c) {
     return lw_rt1(vg, "ptr", "@list_sort_by(ptr " + v.val + ", ptr @" + tname + ")", v.ty);
 }
 
+// Whether `toEqual` compares an Expect(T) payload by its text: every value
+// that is not a number, a Bool or a Str. Such a payload is the value itself
+// (box_heap_ passes a pointer through), and the runtime's untyped ToString
+// cannot read it (a list or record has no type word), so both sides are
+// shown by their type (lw_show: lists, maps, sets, records, sums, Option,
+// Result, Dec, Bytes, fixed-capacity values) and the texts compared.
+Bool lw_expect_by_text(Str et) {
+    if (num_norm_cg(et) == "Str" || et == "Bool" || int_fam(et) || is_float_cg(et)) { return false; }
+    return ll_ty(et) == "ptr" || is_fixed_type(et);
+}
+
+// `toEqual` / `toNotEqual` over shown text. The expected value is lowered
+// at the payload's type (a literal gets its representation: `[1]` against a
+// List(UInt(8)) is a byte list), and both sides are shown at that type, so
+// `None` and `[]` read as the type they stand for. The two texts are also
+// what a failure prints.
+GT lw_expect_eq_text(LW w, Int id, GT base, Str et, Str m, Int pos, List(Str) env) {
+    GT y = lw_marg_as(w, id, 0, et, env, base);
+    if (y.err != "") { return y; }
+    GT sa = lw_show(w, lw_step(y, base.val, et, y.lines, y.tmp), false, env);
+    if (sa.err != "") { return sa; }
+    GT sb = lw_show(w, lw_step(sa, y.val, et, sa.lines, sa.tmp), false, env);
+    if (sb.err != "") { return sb; }
+    Int t1 = sb.tmp + 1;
+    Str r8 = f"%t{t1}";
+    Str ok = f"%t{t1 + 1}";
+    Str pred = if (m == "toNotEqual") { "eq" } else { "ne" };
+    List(Str) ls = sb.lines.concat([r8 + " = call i8 @resid_str_eq(ptr " + sa.val + ", ptr " + sb.val + ")", ok + " = icmp " + pred + " i8 " + r8 + ", 0"]);
+    return cg_expect_guard2("", ok, m, nil_list(), sa.val, sb.val, pos, lw_step(sb, ok, "Bool", ls, t1 + 1));
+}
+
+// The text a failed matcher prints for its actual value: shown by type for
+// a payload lw_expect_by_text covers, else the box's own ToString.
+GT lw_expect_actual(LW w, GT self, Str et, List(Str) env) {
+    if (lw_expect_by_text(et)) { return lw_show(w, lw_step(self, self.val, et, self.lines, self.tmp), false, env); }
+    return lw_rt1(self, "ptr", "@ToString(ptr " + self.val + ")", "Str");
+}
+
 // Expect(T) methods (SPEC-testing.md §5); `pos` names the assertion.
 GT lw_expect_method(LW w, Int id, GT base, Str m, List(Str) env) {
     Str et = expect_elem(base.ty);
@@ -5765,6 +5803,7 @@ GT lw_expect_method(LW w, Int id, GT base, Str m, List(Str) env) {
     Funcs fs = w.fs;
     Int pos = w.g.ns[id].ep - w.base;
     if (m == "toEqual" || m == "toBe" || m == "toNotEqual") {
+        if (lw_expect_by_text(et)) { return lw_expect_eq_text(w, id, base, et, m, pos, env); }
         GT y = lw_marg(w, id, 0, env, base);
         if (y.err != "") { return y; }
         return cg_expect_assert(src, base, y, et, m, pos, env, fs);
@@ -5783,7 +5822,11 @@ GT lw_expect_method(LW w, Int id, GT base, Str m, List(Str) env) {
         if (pr2.err != "") { return pr2; }
         return cg_expect_close(src, base, e2, pr2, pos, env, fs);
     }
-    if (m == "toBeNull") { return cg_expect_null(src, base, pos, env, fs); }
+    if (m == "toBeNull") {
+        GT an = lw_expect_actual(w, base, et, env);
+        if (an.err != "") { return an; }
+        return cg_expect_null(src, lw_step(an, base.val, base.ty, an.lines, an.tmp), an.val, pos, env, fs);
+    }
     if (m == "toContain") {
         GT it = lw_marg(w, id, 0, env, base);
         if (it.err != "") { return it; }
@@ -5801,7 +5844,12 @@ GT lw_expect_method(LW w, Int id, GT base, Str m, List(Str) env) {
         Str want = "Bool closure(" + et + ")";
         GT pd = if (lw_kind(w, pa) == "lambda") { lw_lambda(w, pa, want, env, base) } else { lw_expr(w, pa, env, base) };
         if (pd.err != "") { return pd; }
-        return cg_expect_satisfy(src, base, pd, et, pos, env, fs);
+        // A composite's text is made before the call (the untyped ToString
+        // cannot read it); a scalar's box renders itself on failure.
+        if (!lw_expect_by_text(et)) { return cg_expect_satisfy(src, base, pd, et, "", pos, env, fs); }
+        GT sh = lw_expect_actual(w, lw_step(pd, base.val, et, pd.lines, pd.tmp), et, env);
+        if (sh.err != "") { return sh; }
+        return cg_expect_satisfy(src, base, lw_step(sh, pd.val, pd.ty, sh.lines, sh.tmp), et, sh.val, pos, env, fs);
     }
     return gt_err("unsupported method " + m + " on " + base.ty, base);
 }

@@ -194,6 +194,24 @@ if (cd "$ROOT" && "$COMPILER" test examples/math_test.resid) > "$W/tm.log" 2>&1 
 else
     fail=$((fail + 1)); echo "FAIL residc test: $(grep -v '^OK' "$W/tm.log" | tail -2 | tr '\n' ' ')"
 fi
+# `residc test` matchers on every value shape: each test in expect/fail_test
+# must fail (and the run exit non-zero, printing both values by their type,
+# never "null"), each in expect/pass_test must pass.
+(cd "$ROOT" && "$COMPILER" test tests/runtime/expect/fail_test.resid -o "$W/xf") > "$W/xf.log" 2>&1
+xf=$?
+if [ "$xf" -ne 0 ] && grep -q "Failures: 57 | Passed: 0" "$W/xf.log" && ! grep -qE "(actual|expected): +null" "$W/xf.log" \
+    && grep -q "actual:   \[1, 2, 3\]" "$W/xf.log" && grep -q "expected: \[9, 9\]" "$W/xf.log" \
+    && grep -q "expected: None" "$W/xf.log" && grep -q 'actual:   Pt { x: 1, y: "a" }' "$W/xf.log" \
+    && grep -q "actual:   {1: \"a\"}" "$W/xf.log" && grep -q "actual:   Some(\[1\])" "$W/xf.log"; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL residc test failing matchers (exit $xf): $(grep -E '✓|Failures' "$W/xf.log" | head -6 | tr '\n' ' ')"
+fi
+if (cd "$ROOT" && "$COMPILER" test tests/runtime/expect/pass_test.resid -o "$W/xp") > "$W/xp.log" 2>&1 && grep -q "Failures: 0 | Passed: 47" "$W/xp.log"; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL residc test passing matchers: $(grep -E '✗|Failures|error' "$W/xp.log" | head -6 | tr '\n' ' ')"
+fi
 # Buffered stdin: bytes then lines, one longer than the 64 KB buffer.
 if (cd "$ROOT" && "$COMPILER" tests/runtime/term/stdin.resid -o "$W/stdin" --profile debug) > "$W/stdin.log" 2>&1 \
     && { printf 'xyhello\n'; head -c 100000 /dev/zero | tr '\0' a; printf '\nlast'; } | "$W/stdin" > "$W/stdin.out" \

@@ -2738,8 +2738,10 @@ GT cg_expect_guard(Str s, Str okreg, Str method, Int pos, GT c) {
 
 // `expect(actual).toEqual(expected)`: compare the boxed actual against the
 // expected, T-aware. Int-family unboxes to i64 (i128 for Int(128)); Float
-// compares via fcmp oeq; Bool via the bool box; Str via resid_str_eq;
-// composite values via their canonical ToString representation.
+// compares via fcmp oeq; Bool via the bool box; Str via resid_str_eq.
+// Composite values never reach here: lowering compares them by their
+// typed text (lw_expect_eq_text in lower.resid); the last path is only
+// for a boxed scalar of another kind, which the box's ToString can read.
 GT cg_expect_assert(Str s, GT self, GT y, Str et, Str method, Int pos, List(Str) env, Funcs fs) {
     // `toNotEqual` is `toEqual` with every predicate inverted. `seq` covers
     // the two branches whose comparison is "the i8 result is non-zero".
@@ -2930,19 +2932,34 @@ Str list_elem_cg(Str t) {
 }
 
 // `toBeNull()`: an Option box carries tag 2 for None (tag 1 is Some).
-GT cg_expect_null(Str s, GT self, Int pos, List(Str) env, Funcs fs) {
+// `shown` is the actual value's text when the caller has already made it
+// ("" to render it with the box's ToString on failure).
+GT cg_expect_null(Str s, GT self, Str shown, Int pos, List(Str) env, Funcs fs) {
     Int t1 = self.tmp + 1;
     Int t2 = t1 + 1;
     Int t3 = t1 + 2;
     Str tg = f"%t{t1}";
     Str ok = f"%t{t2}";
-    Str fa = f"%t{t3}";
+    Str fa = if (shown != "") { shown } else { f"%t{t3}" };
     List(Str) m0 = self.lines;
     List(Str) m1 = m0.concat([tg + " = call i64 @resid_box_tag(ptr " + self.val + ")"]);
     List(Str) m2 = m1.concat([ok + " = icmp eq i64 " + tg + ", 2"]);
-    List(Str) fl = [fa + " = call ptr @ToString(ptr " + self.val + ")"];
+    List(Str) fl = if (shown != "") { nil_list() } else { [fa + " = call ptr @ToString(ptr " + self.val + ")"] };
     GT z = GT {.pos = pos, .val = ok, .ty = "Bool", .cnt = 0, .err = "", .glines = self.glines, .lines = m2, .tmp = t3, .lbl = self.lbl, .tail = false};
     return cg_expect_guard2(s, ok, "toBeNull", fl, fa, "", pos, z);
+}
+
+// An element's kind for the runtime's typed list and set text (as lower's
+// map_show_kind): 0 a scalar its box formats, 1 Str, 2 UInt(64), 3
+// Int(128), 4 UInt(128), 5 anything else.
+Int cg_show_kind(Str t) {
+    Str n = num_norm_cg(t);
+    if (n == "Str") { return 1; }
+    if (n == "UInt" || n == "UInt(64)") { return 2; }
+    if (n == "Int(128)") { return 3; }
+    if (n == "UInt(128)") { return 4; }
+    if (t == "Bool" || int_fam(t) || is_float_cg(t)) { return 0; }
+    return 5;
 }
 
 // `toContain(item)`: List(T) dispatches on T to the typed list_contains_*
@@ -2968,7 +2985,11 @@ GT cg_expect_contains(Str s, GT self, GT item, Str et, Int pos, List(Str) env, F
         Str call = if (sk) { "@resid_map_has(ptr " + self.val + ", i8 " + lin_kk_txt(se) + ", i64 " + eb.val + ")" } else { "@resid_set_contains(ptr " + self.val + ", ptr " + eb.val + ")" };
         List(Str) m1 = m0.concat([cr + " = call i8 " + call]);
         List(Str) m2 = m1.concat([ok + " = icmp ne i8 " + cr + ", 0"]);
-        List(Str) fl = [fa + " = call ptr @ToString(ptr " + self.val + ")"];
+        // The set's text by its element kind (a composite element has no
+        // kind the runtime can format alone: the box's ToString).
+        Int sk5 = cg_show_kind(se);
+        Str fcall = if (sk5 == 5) { "@ToString(ptr " + self.val + ")" } else { "@resid_set_format_t(ptr " + self.val + f", i8 {sk5}, ptr null)" };
+        List(Str) fl = [fa + " = call ptr " + fcall];
         GT z = GT {.pos = pos, .val = ok, .ty = "Bool", .cnt = 0, .err = "", .glines = eb.glines, .lines = m2, .tmp = t3, .lbl = eb.lbl, .tail = false};
         return cg_expect_guard2(s, ok, "toContain", fl, fa, "", pos, z);
     }
@@ -2986,7 +3007,12 @@ GT cg_expect_contains(Str s, GT self, GT item, Str et, Int pos, List(Str) env, F
     List(Str) m0 = item.lines;
     List(Str) m1 = m0.concat([cr + " = call i8 " + prim + "(ptr " + self.val + ", " + aty + " " + item.val + ")"]);
     List(Str) m2 = m1.concat([ok + " = icmp ne i8 " + cr + ", 0"]);
-    List(Str) fl = [fa + " = call ptr @ToString(ptr " + self.val + ")"];
+    // The list's text by its element kind (the checker admits only the
+    // word, Float and Str elements `.contains` takes); a raw list has no
+    // type word for ToString to read.
+    Int lk = cg_show_kind(cet);
+    Str fcall = if (lk >= 2 && lk <= 4) { "@resid_list_show_t(ptr " + self.val + f", i8 {lk})" } else { "@resid_list_show(ptr " + self.val + ", i64 " + (if (cstr) { "1" } else { "0" }) + ")" };
+    List(Str) fl = [fa + " = call ptr " + fcall];
     GT z = GT {.pos = pos, .val = ok, .ty = "Bool", .cnt = 0, .err = "", .glines = item.glines, .lines = m2, .tmp = t3, .lbl = item.lbl, .tail = false};
     return cg_expect_guard2(s, ok, "toContain", fl, fa, "", pos, z);
 }
@@ -3048,7 +3074,7 @@ GT cg_expect_unbox(GT self, Str et, GT c) {
 // `toSatisfy(predicate)`: an indirect call through the predicate closure,
 // same protocol as cg_fn_call (slot 0 is the function pointer, the closure
 // address rides as the i64 environment argument).
-GT cg_expect_satisfy(Str s, GT self, GT pred, Str et, Int pos, List(Str) env, Funcs fs) {
+GT cg_expect_satisfy(Str s, GT self, GT pred, Str et, Str shown, Int pos, List(Str) env, Funcs fs) {
     GT u = cg_expect_unbox(self, et, pred);
     Int t1 = u.tmp + 1;
     Int t2 = t1 + 1;
@@ -3059,13 +3085,13 @@ GT cg_expect_satisfy(Str s, GT self, GT pred, Str et, Int pos, List(Str) env, Fu
     Str fp = f"%t{t2}";
     Str envr = f"%t{t3}";
     Str ok = f"%t{t4}";
-    Str fa = f"%t{t5}";
+    Str fa = if (shown != "") { shown } else { f"%t{t5}" };
     List(Str) m0 = u.lines;
     List(Str) m1 = m0.concat([fp0 + " = load i64, ptr " + pred.val]);
     List(Str) m2 = m1.concat([fp + " = inttoptr i64 " + fp0 + " to ptr"]);
     List(Str) m3 = m2.concat([envr + " = ptrtoint ptr " + pred.val + " to i64"]);
     List(Str) m4 = m3.concat([ok + " = call i1 " + fp + "(i64 " + envr + ", " + ll_ty(et) + " " + u.val + ")"]);
-    List(Str) fl = [fa + " = call ptr @ToString(ptr " + self.val + ")"];
+    List(Str) fl = if (shown != "") { nil_list() } else { [fa + " = call ptr @ToString(ptr " + self.val + ")"] };
     GT z = GT {.pos = pos, .val = ok, .ty = "Bool", .cnt = 0, .err = "", .glines = u.glines, .lines = m4, .tmp = t5, .lbl = u.lbl, .tail = false};
     return cg_expect_guard2(s, ok, "toSatisfy", fl, fa, "", pos, z);
 }
@@ -3199,6 +3225,11 @@ TD td_scan(Str s, Int pos, Int copied, Str acc, List(Str) names, List(Str) syms)
             }
         }
     }
+    // A `;` left after a declaration skip_decl ends at its closing brace
+    // (`type P = { ... };`) is a declaration of its own: stepping over it
+    // with skip_decl would swallow the next declaration, and a test block
+    // there was never run.
+    if (t.text == ";") { return td_scan(s, t.pos, copied, acc, names, syms); }
     // An annotation (`@requires(...)`) may precede a test block: step over
     // it and keep scanning.
     if (str_starts_with(t.text, "@")) {

@@ -167,6 +167,16 @@ negated with `!`. A test states what must hold, not what it holds.
 | `toThrow()` | the given closure aborts | 0 |
 | `toSatisfy(pred)` | the predicate holds | 1 |
 
+`toEqual`, `toBe` and `toNotEqual` compare numbers, `Bool` and `Str` by
+value; every other value (lists, maps, sets, records, sums, `Option`,
+`Result`, `Dec`, `Bytes`, fixed-capacity values) by its text as `Show`
+writes it at the payload's type, the same text a failure prints. A type
+with its own `Show` is compared by that text. `toContain` on a list takes
+the element types `.contains` does (integers, `Float`, `Str`). No matcher
+but `toHaveLength` takes a value holding a `Secret` (E0255): it would
+compare the secret and print it on failure; compare with `ct_eq` and
+expect the `Bool`.
+
 `toBeCloseTo` is **Float-only**. An earlier draft documented an `Int` form
 ("equal to `n` decimal digits"); the compiler rejects it
 (`toBeCloseTo expects Expect(Float)`).

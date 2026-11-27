@@ -1,0 +1,71 @@
+// Every test here must FAIL (tests/runtime/run.sh checks the count, the
+// exit code and the printed values). Composite values once compared by an
+// untyped ToString that read every list, record and map as null, so all of
+// these passed (and toNotEqual on equal lists always failed).
+type Pt = { Int x; Str y; };
+type Shape = Circle(Int) | Square(Int) | Empty;
+type Color = Red | Green | Blue(Int) | Two(Str, Bool);
+type Val = VText(Str) | VList(List(Int));
+List(Str) names() { return ["ann", "bo"]; }
+List(UInt(8)) octets() { return [1, 2]; }
+
+test "list vs shorter list" { List(Int) a = [1, 2, 3]; expect(a).toEqual([9, 9]); }
+test "list vs empty" { List(Int) a = [1, 2, 3]; expect(a).toEqual([]); }
+test "list bindings" { List(Int) a = [1, 2, 3]; List(Int) b = [9, 9]; expect(a).toEqual(b); }
+test "list of UInt(64)" { List(UInt(64)) a = [1]; List(UInt(64)) b = [2]; expect(a).toEqual(b); }
+test "list of UInt(64) high bit" { List(UInt(64)) a = [18446744073709551615]; List(UInt(64)) b = [1]; expect(a).toEqual(b); }
+test "list of Str" { List(Str) a = ["a, b"]; expect(a).toEqual(["a", "b"]); }
+test "list of records" { List(Pt) a = [Pt {.x = 1, .y = "a"}]; expect(a).toEqual([Pt {.x = 1, .y = "b"}]); }
+test "nested lists" { List(List(Int)) a = [[1], [2]]; expect(a).toEqual([[1, 2]]); }
+test "list of Float" { List(Float) a = [1.5]; expect(a).toEqual([2.5]); }
+test "list of Bool" { List(Bool) a = [true, false]; expect(a).toEqual([true, true]); }
+test "map value" { Map(Int, Str) e = {}; Map(Int, Str) a = e.insert(1, "a"); Map(Int, Str) b = e.insert(1, "b"); expect(a).toEqual(b); }
+test "map key" { Map(Str, Int) e = {}; Map(Str, Int) a = e.insert("k", 1); Map(Str, Int) b = e.insert("j", 1); expect(a).toEqual(b); }
+test "set" { Set(Int) e = {}; Set(Int) a = e.insert(1).insert(2); Set(Int) b = e.insert(1).insert(3); expect(a).toEqual(b); }
+test "option some vs none" { Option(Int) o = Some(1); expect(o).toEqual(None); }
+test "option none vs some" { Option(Int) o = None; expect(o).toEqual(Some(1)); }
+test "option payload" { Option(List(Int)) o = Some([1]); expect(o).toEqual(Some([2])); }
+test "result ok vs err" { Result(Int, Str) r = Ok(1); expect(r).toEqual(Err("x")); }
+test "result payload" { Result(Int, Str) r = Ok(1); expect(r).toEqual(Ok(2)); }
+test "record" { Pt p = Pt {.x = 1, .y = "a"}; Pt q = Pt {.x = 2, .y = "b"}; expect(p).toEqual(q); }
+test "record one field" { Pt p = Pt {.x = 1, .y = "a"}; expect(p).toEqual(Pt {.x = 1, .y = "A"}); }
+test "sum variant" { Shape s = Circle(1); expect(s).toEqual(Square(1)); }
+test "sum payload" { Shape s = Circle(1); expect(s).toEqual(Circle(2)); }
+test "sum unit" { Shape s = Empty; expect(s).toEqual(Circle(0)); }
+test "dec" { Dec(2) a = d2(1.50m); expect(a).toEqual(d2(1.25m)); }
+test "float" { expect(1.5).toEqual(2.5); }
+test "int128" { Int(128) a = 170141183460469231731687303715884105727; expect(a).toEqual(1); }
+test "uint256" { UInt(256) a = 115792089237316195423570985008687907853269984665640564039457584007913129639935; expect(a).toEqual(1); }
+test "bytes" { Bytes a = b"ab"; expect(a).toEqual(b"ac"); }
+test "byte list" { List(UInt(8)) a = [1, 2]; List(UInt(8)) b = [1, 3]; expect(a).toEqual(b); }
+test "toNotEqual on equal lists" { List(Int) a = [1, 2]; expect(a).toNotEqual([1, 2]); }
+test "toNotEqual on equal records" { Pt p = Pt {.x = 1, .y = "a"}; expect(p).toNotEqual(Pt {.x = 1, .y = "a"}); }
+test "toNotEqual on equal maps" { Map(Int, Str) e = {}; expect(e.insert(1, "a")).toNotEqual(e.insert(1, "a")); }
+test "toContain on a list" { List(Int) a = [1, 2]; expect(a).toContain(3); }
+test "toContain on a byte list" { List(UInt(8)) a = [1, 2]; UInt(8) x = 3; expect(a).toContain(x); }
+test "toBeNull on some list" { Option(List(Int)) o = Some([1]); expect(o).toBeNull(); }
+test "toSatisfy on a list" { List(Int) a = [1, 2]; expect(a).toSatisfy(lambda(xs) { xs.len() == 3 }); }
+test "map of Str keys" { Map(Str, Int) e = {}; expect(e.insert("a", 1).insert("b", 2)).toEqual(e.insert("a", 1).insert("b", 3)); }
+test "map lengths" { Map(Str, Int) e = {}; expect(e.insert("a", 1)).toEqual(e.insert("a", 1).insert("b", 2)); }
+test "variant payload" { Color c = Blue(2); expect(c).toEqual(Blue(3)); }
+test "variant two payloads" { Color c = Two("a", true); expect(c).toEqual(Two("b", true)); }
+test "nullary variants" { Color c = Red; expect(c).toEqual(Green); }
+test "err payload" { Result(Int, Str) r = Err("a"); expect(r).toEqual(Err("b")); }
+test "option of Str" { Option(Str) o = Some("a"); expect(o).toEqual(Some("b")); }
+test "option of record" { Option(Pt) o = Some(Pt {.x = 1, .y = "a"}); expect(o).toEqual(Some(Pt {.x = 2, .y = "a"})); }
+test "float whole" { expect(1.0).toEqual(2.0); }
+test "list of Str lengths" { List(Str) a = ["a"]; expect(a).toEqual(["a", "b"]); }
+test "ok of Str" { Result(Str, Int) r = Ok("a"); expect(r).toEqual(Ok("b")); }
+test "variant Str payload" { Val v = VText("x"); expect(v).toEqual(VText("y")); }
+test "variant List payload" { Val v = VList([1]); expect(v).toEqual(VList([2])); }
+test "toContain on a literal list" { expect([1, 2]).toContain(3); }
+test "toContain on a Str list from a call" { expect(names()).toContain("cy"); }
+test "toContain on a byte list from a call" { UInt(8) x = 3; expect(octets()).toContain(x); }
+test "toHaveLength on a literal list" { expect([1, 2]).toHaveLength(3); }
+test "toHaveLength on a Str list from a call" { expect(names()).toHaveLength(3); }
+test "toHaveLength on a byte list" { List(UInt(8)) a = [1, 2]; expect(a).toHaveLength(3); }
+test "toHaveLength on a record list" { List(Pt) a = [Pt {.x = 1, .y = "a"}]; expect(a).toHaveLength(2); }
+// Discovery once stepped over the `;` after a record type with the next
+// declaration, so a test right after one was silently never run.
+type Wrap = { Int v; };
+test "right after a record type" { Wrap w = Wrap {.v = 1}; expect(w.v).toEqual(2); }
