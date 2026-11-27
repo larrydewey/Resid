@@ -83,7 +83,9 @@ Int map_enter(Int m) {
 
 Int map_leave(Int prev) { return st64(map_heap_w(), prev) + region_done(); }
 
-Int map_obj_free(Int p) { return if (p != 0 && !in_region(p) && ld64(p - 16) != 63) { c_free(p) } else { 0 }; }
+// Only heap memory is freed: never a region page's, owned or not (one
+// region_abandon left to the program has no owner, like a freed one).
+Int map_obj_free(Int p) { return if (p != 0 && !rg_in_range(p) && ld64(p - 16) != 63) { c_free(p) } else { 0 }; }
 
 Int raw_empty() { return 0 - 9223372036854775807 - 1; }
 Int raw_tomb() { return 0 - 9223372036854775807; }

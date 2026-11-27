@@ -1,0 +1,53 @@
+// Spawns made at scope depth 0 (no function here pushes a region) whose
+// results point into the job's region (runtime/rt/ctl.resid, Structured
+// spawn): with no region to take the job's pages, the job's return moves
+// its result out to the heap and the job frees its region; only a result
+// that cannot move keeps its pages. run.sh sets RESID_MEM_LIMIT=48. Before,
+// each such join kept the job's whole region (at least a 1 MB region page):
+// the budget ran out after about 12k spawns, the region range after 262k.
+type Pair = { Str name; List(Int) xs; };
+
+Str text(Int i) {
+    Result(Str, RegionError) r = spawn () { return f"<{i}>"; };
+    return r else { "" };
+}
+
+List(Int) ints(Int i) {
+    Result(List(Int), RegionError) r = spawn () { return [i, i * 2, i * 3]; };
+    return r else { [] };
+}
+
+Pair pair(Int i) {
+    Result(Pair, RegionError) r = spawn () { return Pair {.name = f"p{i}", .xs = [i, 0 - i]}; };
+    return r else { Pair {.name = "ERR", .xs = []} };
+}
+
+// Each loop binds a result as it is joined and carries a string (the
+// first failure, or "ok"): no scope is pushed around the call, and the
+// loop has no region of its own, so every spawn is made at depth 0. An Err
+// (the budget, or the region range) or a wrong value is a failure.
+Str first(Str acc, Bool ok, Str what, Int i) { return if (!ok && acc == "ok") { f"bad {what} at {i}" } else { acc }; }
+
+Str run_text(Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    Str s = text(i);
+    // Every result is there (an Err is ""); every 1000th is read whole.
+    return run_text(i + 1, n, first(acc, s.len() > 2 && (i % 1000 != 0 || s == f"<{i}>"), "text", i));
+}
+
+Str run_ints(Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    List(Int) l = ints(i);
+    return run_ints(i + 1, n, first(acc, l.len() == 3 && l[2] - l[1] == i, "ints", i));
+}
+
+Str run_pairs(Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    Pair p = pair(i);
+    return run_pairs(i + 1, n, first(acc, p.name == f"p{i}" && p.xs.len() == 2 && p.xs[0] + p.xs[1] == 0, "pair", i));
+}
+
+Int main() {
+    println(f"{run_text(0, 300000, "ok")} {run_ints(0, 20000, "ok")} {run_pairs(0, 20000, "ok")}");
+    return 0;
+}

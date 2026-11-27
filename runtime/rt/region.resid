@@ -96,7 +96,17 @@ pub Int region_of(Int p) {
     return ld64(ld64(rg_g() + 16) + (off >> 20) * 8);
 }
 
-// p lies on a region page no region owns any more (freed by a pop).
+// p lies in the reserved range: on a region page, live or not (a page
+// left to the program, region_abandon, is owned by no region but is never
+// heap memory).
+pub Bool rg_in_range(Int p) {
+    Int base = ld64(rg_g());
+    return base != 0 && ult(p - base, rg_pages() * rg_page());
+}
+
+// p lies on a region page no region owns any more (freed by a pop, or left
+// to the program by region_abandon, which only the string index's caches
+// ask about: a slot dropped for a live string is only a miss).
 pub Bool region_freed(Int p) {
     Int base = ld64(rg_g());
     Int off = p - base;
@@ -648,6 +658,9 @@ Int keep_from(Int l, Int i) {
     return keep_from(l, i - 1);
 }
 
+// Region r's pages left to the program, owned by no region (id 0, as a
+// freed page's is, but never freed or reused): a depth-0 loop exit or
+// spawn join whose result could not move out of r.
 pub Int region_abandon(Int r) {
     Int top = ld64(r + 8);
     _ = if (top != 0) { retag(top, 0) } else { 0 };

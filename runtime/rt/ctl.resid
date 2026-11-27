@@ -72,15 +72,20 @@ pub Int rt_abort_msg_at(Int msg, Int at) { return rt_fail(msg, at); }
 // message buffer.
 //
 // The block lives in the parent's current region (the heap at depth 0), as
-// any value made at the spawn does; at depth 0 the child's region is left
-// to the program when the join takes it (region_abandon: owned by no
-// region, as heap memory is). The worker runs in a region of its own,
+// any value made at the spawn does. The worker runs in a region of its own,
 // pushed on its thread; when it ends the region is detached into the block,
 // and the parent takes it at the join (spawn_finish), pages and all, into
 // the block's region (no copy). A Result whose payload is a scalar needs
 // none of it: the child frees its region itself (its pages stay in its
 // thread's cache for the next job) and the join makes the Result again in
-// the block's region.
+// the block's region. At depth 0 there is no region to take the pages, so
+// the job's return moves its result out to the heap by the result type's
+// move (resid_spawn_out, before the Result is made): the result is then a
+// payload like a scalar's, and the child frees its whole region. Only a
+// result that could not move (a closure without a mover, a type with no
+// move) leaves its region to the program at the join (region_abandon:
+// owned by no region, as heap memory is; map_obj_free never frees such a
+// page).
 // An abort frees the child's region at once and the join makes the
 // Err(RegionError) in the block's region. A spawn made while an arena is
 // active (the compiler's own bulk arenas, which only the heap depth
@@ -96,20 +101,42 @@ Int sp_size() { return 976; }
 
 pub Int spawn_run(Int a) { return st64(a + 16, resid_raw_call2(ld64(a), ld64(a + 8), 0)); }
 
+// The running job's words (sp_job): 0 the id of its region when its
+// result must move out to the heap (the block is on the heap: a spawn made
+// at depth 0), else 0; 1 set once its return asked for that move
+// (resid_spawn_out). A job run inline inside another (no thread) keeps the
+// outer job's words for it.
+Int sp_job() { return resid_raw_tls("rt_spawn_job", 16); }
+
 // The child's side, on its own thread (or inline on the parent's).
 pub Int spawn_entry(Int a) {
+    Int j = sp_job();
+    Int o0 = ld64(j);
+    Int o1 = ld64(j + 8);
+    _ = st64(j, 0) + st64(j + 8, 0);
+    _ = spawn_entry_in(a, j);
+    return st64(j, o0) + st64(j + 8, o1);
+}
+
+Int spawn_entry_in(Int a, Int j) {
     _ = st64(a + 416, 0) + st64(a + 432, 0) + rec_init(a + 352, 0);
     if (ld64(a + 456) == 0) {
         if (under_catch(resid_raw_fn("spawn_run"), a)) { return spawn_abort_heap(a); }
         return 0;
     }
     Int d = rt_scope_push();
-    if (under_catch(resid_raw_fn("spawn_run"), a)) { return spawn_abort(a, d); }
+    _ = if (region_of(a) == 0) { st64(j, ld64(rec_at(d))) } else { 0 };
+    Bool caught = under_catch(resid_raw_fn("spawn_run"), a);
+    // The move succeeded: nothing the result reaches is in the job's
+    // regions (mv_failed reads and clears the word only this move set).
+    Bool moved = ld64(j + 8) != 0 && !mv_failed();
+    _ = st64(j, 0) + st64(j + 8, 0);
+    if (caught) { return spawn_abort(a, d); }
     // Regions this job started and left running are joined before its
     // region leaves the thread (their blocks lie in it).
     _ = spawn_join_from(d);
     Int res = ld64(a + 16);
-    Int kind = if (res == 0) { 2 } else { if (ld32(res) == 1 && ld32(res + 4) == 1 && sp_scalar(ld64(res + 16))) { 1 } else { 0 } };
+    Int kind = if (res == 0) { 2 } else { if (ld32(res) == 1 && ld32(res + 4) == 1 && (moved || sp_scalar(ld64(res + 16)))) { 1 } else { 0 } };
     _ = st64(a + 432, kind) + rec_init(a + 352, 0);
     if (kind != 0) {
         _ = if (kind == 1) { st64(a + 440, ld64(res + 8)) + st64(a + 448, ld64(res + 16)) } else { 0 };
@@ -150,7 +177,7 @@ Int spawn_abort_heap(Int a) {
 }
 
 @export("resid_spawn", "ptr(ptr,ptr)")
-pub Int rt_spawn(Int worker, Int captures) { return rt_spawn_wait(rt_spawn_start(worker, captures)); }
+pub Int rt_spawn(Int worker, Int captures) { return rt_spawn_release(rt_spawn_start(worker, captures)); }
 
 // The parent's side of a join, once: the child's region goes where the
 // block lives (spawn_finish's rule above).
@@ -167,6 +194,20 @@ Int spawn_finish(Int a) {
     if (kind == 1) { return st64(a + 16, sp_box(t, 1, ld64(a + 440), ld64(a + 448))); }
     if (kind == 2) { return 0; }
     return if (t != 0) { region_adopt_detached(c, t) } else { region_abandon(c) };
+}
+
+// The move the job's return makes of its result (lw_ret in the compiler,
+// on the boxed slot value, before resid_ok_box): out of the job's regions
+// to the heap when its block is on the heap (sp_job), else an empty range
+// that moves nothing.
+@export("resid_spawn_out", "ptr()")
+pub Int rt_spawn_out() {
+    Int j = sp_job();
+    Int c = resid_raw_tls("rg_mv_spawn", 24);
+    Int id = ld64(j);
+    if (id == 0) { return mv_ctx(c, 1, 0, 0); }
+    _ = st64(j + 8, 1) + fwd_reset() + st64(mv_fail_word(), 0);
+    return mv_ctx(c, id, 9223372036854775807, 0);
 }
 
 // A payload word that points at nothing in the child's region.
@@ -368,6 +409,22 @@ pub Int rt_spawn_wait(Int a) {
     _ = futex_wait0(a + 32);
     _ = if (ld64(a + 424) != 0) { spawn_finish(a) } else { 0 };
     return ld64(a + 16);
+}
+
+// The last wait for a running region, where its name goes out of scope (a
+// return, or the end of the block that bound it; the compiler's
+// lw_fut_waits): nothing reads the block after it. A block on the heap (a
+// spawn made at depth 0, which no region pop frees) is freed here with its
+// captures array; the Result lies apart from both.
+@export("resid_spawn_release", "ptr(ptr)")
+pub Int rt_spawn_release(Int a) {
+    Int r = rt_spawn_wait(a);
+    // Made at depth 0 with no arena active (word 456: the job had a region
+    // of its own), both were xmalloc'd; a spawn under an arena keeps both.
+    if (rg_in_range(a) || ld64(a + 456) == 0) { return r; }
+    Int cap = ld64(a + 8);
+    _ = if (cap != 0 && !rg_in_range(cap)) { c_free(cap) } else { 0 };
+    return c_free(a) * 0 + r;
 }
 
 // Ok(payload) as a Result box (tag 1).

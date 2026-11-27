@@ -425,6 +425,19 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/spawn_jobs.resid -o "$W/spawn_jo
 else
     fail=$((fail + 1)); echo "FAIL spawned regions in a loop: $(tail -1 "$W/spawn_jobs.out" "$W/spawn_jobs.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# Spawns made at depth 0 whose results point into the job's region
+# (ctl.resid, resid_spawn_out): the job's return moves the result to the
+# heap and the job frees its region, and the join frees the control
+# block. 300k string results, 20k lists and 20k records: 35 MB; before,
+# each join kept the job's region page (the budget ran out after about
+# 12k spawns; without one, the region range ran out at 262k, 1.6 GB).
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/spawn_depth0.resid -o "$W/spawn_depth0") > "$W/spawn_depth0.log" 2>&1 \
+    && RESID_MEM_LIMIT=48 timeout 300 "$W/spawn_depth0" > "$W/spawn_depth0.out" 2>&1 \
+    && [ "$(cat "$W/spawn_depth0.out")" = "ok ok ok" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL depth-0 spawns returning region values: $(tail -1 "$W/spawn_depth0.out" "$W/spawn_depth0.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # Owned updates of a large list a call froze (map.resid, no_thaw_cost):
 # after about one copy's worth of path copies the list is thawed and then
 # written in place, in loops that have no region. Measured: under 1 MB;
