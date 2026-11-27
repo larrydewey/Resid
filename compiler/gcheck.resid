@@ -2746,7 +2746,12 @@ GKM gk_mcall_r(GK k0, Int id, Str exp) {
         if (!str_has_prefix(bt, "List(") || is_list_fixed(bt)) { return gkm(gterr(k, ".concat() joins two lists, got " + bt + "; use + for text", id), false); }
         GKT a = gk_marg_as(k, id, 0, bt);
         if (a.err != "") { return gkm(a, false); }
-        return gkm(gt(a.k, bt, id), true);
+        // The argument must be a list of the same element type: lowering
+        // copies its elements in as the receiver's, so a List(B) joined to
+        // a List(A) would be read back as A records.
+        Str cu = gk_list_join(bt, a.ty);
+        if (cu == "") { return gkm(gterr(a.k, ".concat type mismatch: expected " + bt + ", found " + a.ty, id), false); }
+        return gkm(gt(a.k, cu, id), true);
     }
     if (is_map_type(bt)) { return gkm(gk_map_method(k, id, bt, m, na), true); }
     if (is_set_type(bt)) { return gkm(gk_set_method(k, id, bt, m, na), true); }
@@ -2765,6 +2770,24 @@ GKM gk_mcall_r(GK k0, Int id, Str exp) {
     Str cfty = gk_field_type(k, bt, m);
     if (cfty != "" && is_fn_type(cfty)) { return gkm(gk_fn_call(gk_mem(k, id, gk_sfield(k, bt, m)), id, 1, cfty), true); }
     return gkm(gterr(k, "unsupported method " + m, id), false);
+}
+
+// The type of list `bt` joined with list `at` (concat), or "" when their
+// elements differ. An empty literal on either side takes the other's
+// element type; a known receiver type is never widened or changed.
+Str gk_list_join(Str bt, Str at) {
+    if (ty_same(bt, at)) { return bt; }
+    Str u0 = gk_unify(bt, at);
+    // A width parameter's element meets a plain literal's in a generic
+    // body (each copy is checked again with the width known).
+    Str be = str_slice(bt, 5, str_len(bt) - 1);
+    Str ae = if (str_has_prefix(at, "List(")) { str_slice(at, 5, str_len(at) - 1) } else { "" };
+    Bool wvar = gm_has_var(be) && ((is_int_ty(be) && is_int_ty(ae)) || (is_float_ty(be) && is_float_ty(ae)));
+    Str u = if (u0 == "" && wvar) { bt } else { u0 };
+    if (u == "" || !str_has_prefix(u, "List(")) { return ""; }
+    Bool open = gm_has_var(bt) || str_contains(bt, "_") || str_contains(bt, "Unknown");
+    if (!open) { return if (ty_same(u, bt)) { bt } else { "" }; }
+    return u;
 }
 
 // The receivers `.len()` measures: heap and fixed lists, text, bytes,
@@ -3554,7 +3577,12 @@ pub GKS gk_stmt(GK k, Int id, Str ret) {
         GKT it = gk_expr(k, kg_kid(g, id, 1), "");
         if (it.err != "") { return gs_of(it); }
         if (!str_has_prefix(it.ty, "Range") && !is_list_type(it.ty)) { return gs_err(it.k, "for-in over non-iterable " + it.ty, id); }
-        GK kb = gk_bind(it.k, id, g.ns[kg_kid(g, id, 0)].text);
+        // The loop variable is read as its declared type: it must be the
+        // list's element type (an integer for a range).
+        Str lvt = g.ns[kg_kid(g, id, 0)].text;
+        Str fe = gk_for_elem(it.ty, lvt);
+        if (fe != "") { return gs_err(it.k, fe, id); }
+        GK kb = gk_bind(it.k, id, lvt);
         GKS b = gk_stmt(kb, kg_kid(g, id, 2), ret);
         return GKS {.k = gk_scope(k, b.k), .err = b.err, .at = b.at};
     }
@@ -3572,6 +3600,23 @@ pub GKS gk_stmt(GK k, Int id, Str ret) {
         return gs_ok(e.k);
     }
     return gs_err(k, "unexpected statement " + kind, id);
+}
+
+// Why a for-in loop variable declared `lvt` cannot range over `it`, or "".
+Str gk_for_elem(Str it, Str lvt) {
+    if (str_has_prefix(it, "Range")) {
+        if (is_int_ty(lvt)) { return ""; }
+        return "for-in over a range binds an integer, not " + lvt;
+    }
+    List(Str) as = ty_args(it);
+    if (as.len() == 0) { return ""; }
+    Str et = str_trim(as[0]);
+    if (ty_same(et, lvt) || et == "Unknown") { return ""; }
+    Str u = gk_unify(lvt, et);
+    if (u != "" && ty_same(u, lvt)) { return ""; }
+    Bool wvar = (gm_has_var(et) || gm_has_var(lvt)) && ((is_int_ty(et) && is_int_ty(lvt)) || (is_float_ty(et) && is_float_ty(lvt)));
+    if (wvar) { return ""; }
+    return "for-in loop variable is " + lvt + ", but " + it + " holds " + et;
 }
 
 // ─── Declarations ───────────────────────────────────────────────────
@@ -5036,6 +5081,11 @@ Str gk_case_msg(Kg g, Int id) {
     KN n = g.ns[id];
     Bool tdecl = n.kind == "struct_t" || n.kind == "sum_t" || n.kind == "alias_t";
     if (tdecl && n.text == "Vec") { return "`Vec` is the built-in vector type (spec §46); give the type another name"; }
+    // Lowering knows a built-in type by its name (a record named Dec was
+    // moved out of a loop's region as a decimal: its fields were left
+    // behind and freed), so no declared type may take one.
+    Bool anyt = tdecl || n.kind == "ctype_t" || n.kind == "cwhere_t";
+    if (anyt && gm_builtin_type(n.text)) { return "`" + n.text + "` is a built-in type; give the type another name"; }
     Str k = n.kind;
     Bool ty = k == "struct_t" || k == "sum_t" || k == "alias_t" || k == "ctype_t" || k == "cwhere_t" || k == "bdecl";
     if (ty && !gk_upper_name(n.text)) { return "type name `" + n.text + "` must start with an uppercase letter"; }
@@ -5196,7 +5246,11 @@ pub GKR gk_analyze_m(Kg g, Int unit, Str src, Str smap0, Bool log, Bool fin, Str
     if (!lite && gm_verb_clash(k, 0, src, smap0, false)) { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
     GKS r = gk_decls(gm_log_beaten(k, 0), unit, 0, src, smap);
     if (r.err != "") { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
-    if (!fin && r.k.gx.log.len() > 0) { return GKR {.status = 0, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = r.k.gx.log}; }
+    // A lite round checked only the last copies: the whole-program passes
+    // (gk_finish: authority, among others) would read the other functions'
+    // unchecked nodes, a builtin method there as a call of a user function
+    // of its name. The full round that ends instantiation runs them.
+    if (!fin && (r.k.gx.log.len() > 0 || lite)) { return GKR {.status = 0, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = r.k.gx.log}; }
     Int st = gk_finish(r.k, sg.fnode, src, smap, smap0);
     Int n = kg_count(g);
     List(Str) ty = gk_dense_ty(sort(r.k.tl.keys), r.k.tl.tys, 0, 0, n, "", ListBuf());

@@ -1,0 +1,44 @@
+// Records holding strings and lists, made in a loop's region, returned out
+// of it inside a record and collected in a ListBuf another loop carries:
+// every string survives the loops' regions and their compactions (the
+// D-Bus decoder of resid-gui lost them when its record was named Dec).
+type DV = DStr(Str) | DByte(Int) | DStruct(List(DV)) | DVar(DV) | DArr(Str, List(DV));
+type Decoded = { Bool ok; Str why; DV v; Int at; };
+
+Str word(List(Int) b, Int at) { return f"word-{b[at]}-{b[at + 1]}"; }
+
+Decoded dstruct(List(Int) b, Int at, Int k, List(DV) acc) {
+    if (k >= 2) { return Decoded { .ok = true, .why = "", .v = DStruct(acc), .at = at }; }
+    DV v = if (k == 0) { DByte(b[at]) } else { DVar(DStr(word(b, at))) };
+    return dstruct(b, at + 1, k + 1, acc.concat([v]));
+}
+
+Decoded elems(List(Int) b, Int at, Int stop, ListBuf(DV) acc) {
+    if (at >= stop) { return Decoded { .ok = true, .why = "", .v = DArr("x", acc.finish()), .at = at }; }
+    Decoded d = dstruct(b, at, 0, []);
+    return elems(b, d.at, stop, acc.push(d.v));
+}
+
+// Garbage enough to reuse any freed region page.
+Str clobber(Int i, Int n, List(Str) acc) {
+    if (i >= n) { return f"{acc.len()}"; }
+    return clobber(i + 1, n, acc.concat([f"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz{i}"]));
+}
+
+Str fstr(List(DV) fs, Int i) { return match (fs[i]) { DStruct(xs) => match (xs[1]) { DVar(v) => match (v) { DStr(s) => s, _ => "?" }, _ => "?" }, _ => "?" }; }
+
+Str dec(List(Int) b, Int n) {
+    Decoded f = elems(b, 0, n, ListBuf());
+    List(DV) fs = match (f.v) { DArr(es, xs) => xs, _ => [] };
+    Str before = fstr(fs, 0) + " " + fstr(fs, fs.len() - 1);
+    Str c = clobber(0, 20000, []);
+    return f"{fs.len()} " + before + " | " + fstr(fs, 0) + " " + fstr(fs, fs.len() - 1) + " " + c;
+}
+
+List(Int) bytes(Int i, Int n, ListBuf(Int) acc) { return if (i >= n) { acc.finish() } else { bytes(i + 1, n, acc.push((i * 7 + rt(3)) % 256)) }; }
+
+Int main() {
+    println(dec(bytes(0, 8, ListBuf()), 6));
+    println(dec(bytes(0, 4001, ListBuf()), 4000));
+    return 0;
+}

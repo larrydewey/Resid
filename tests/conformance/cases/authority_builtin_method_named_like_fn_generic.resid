@@ -1,0 +1,23 @@
+// A user function named like a built-in method, in a program that
+// instantiates a generic: `b.finish()` on a ListBuf, `m.get(k)` on a Map
+// and `xs.len()` are the built-in methods, not authority edges to the user
+// functions of those names (a round that checked only the generic's copies
+// read the other functions' method calls as calls of them, E0219).
+@requires(environment(readonly))
+Str finish(Str k) { return environment.get(k); }
+@requires(environment(readonly))
+Str get(Str k) { return environment.get(k); }
+@requires(environment(readonly))
+Int len(Str k) { return str_len(environment.get(k)); }
+
+T same(T x) { return x; }
+List(T) one(T x) { ListBuf(T) b = ListBuf(); return b.push(x).finish(); }
+
+List(Int) mk(Int n) { ListBuf(Int) b = ListBuf(); return b.push(n).finish(); }
+Int look(Map(Str, Int) m) { return m.get("a") else { 0 }; }
+
+Int main() {
+    Map(Str, Int) m = {"a": 4};
+    println(f"{same(mk(3)).len()} {look(m)} {one(7)[0]}");
+    return 0;
+}
