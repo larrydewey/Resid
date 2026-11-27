@@ -771,7 +771,7 @@ Result(Map(Int, PsB4R), CgFail) ps4_all(Ps3 s, List(CgMsg) in, List(Int) others,
     Option(PsB4R) ob = ex_b4(in, j, c.self, true, 0);
     return match ob {
         None => Err(cg_fail("missing round-3 broadcast", [j])),
-        Some(b) => if (b.delta_share.len() == 0 || b.chi_l.inf || b.chi_m.inf) { Err(cg_fail("invalid round-3 broadcast", [j])) }
+        Some(b) => if (b.delta_share.len() == 0 || !bn_is_normal(b.delta_share) || b.chi_l.inf || b.chi_m.inf) { Err(cg_fail("invalid round-3 broadcast", [j])) }
                    else { ps4_all(s, in, others, i + 1, acc.insert(j, b)) }
     };
 }

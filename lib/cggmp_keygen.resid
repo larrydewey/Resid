@@ -196,7 +196,7 @@ pub type Kg3 = {
     List(CgMsg) out;
 };
 
-Bool kg_valid_n(List(UInt(64)) n) { return bn_bit_len(n) == 2048 && bn_is_odd(n); }
+Bool kg_valid_n(List(UInt(64)) n) { return zk_n_size_ok(n) && bn_is_odd(n); }
 
 Result(Kg3Peer, CgFail) kg3_peer(Kg2 s, List(CgMsg) in, Int j) {
     KgCtx c = s.prev.ctx;

@@ -60,11 +60,12 @@ pub List(UInt(64)) pa_enc(PaillierPub k, BnInt m, List(UInt(64)) rho) {
 }
 
 /// Whether |m| <= (N - 1) / 2.
-pub Bool pa_msg_ok(PaillierPub k, BnInt m) { return bn_cmp(m.mag, bn_shr(k.n, 1)) <= 0; }
+pub Bool pa_msg_ok(PaillierPub k, BnInt m) { return bn_is_normal(m.mag) && bn_cmp(m.mag, bn_shr(k.n, 1)) <= 0; }
 
-/// A ciphertext is valid when it is a unit mod N^2 below N^2.
+/// A ciphertext is valid when it is a unit mod N^2 below N^2, in normal form
+/// (no leading zero limb: [0], [0, 0] or [c, 0] from a peer is refused).
 pub Bool pa_ct_ok(PaillierPub k, List(UInt(64)) c) {
-    if (c.len() == 0 || bn_cmp(c, k.n2) >= 0) { return false; }
+    if (!bn_is_normal(c) || c.len() == 0 || bn_cmp(c, k.n2) >= 0) { return false; }
     return bn_cmp(bn_gcd(c, k.n2), [1]) == 0;
 }
 

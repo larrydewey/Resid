@@ -21,16 +21,19 @@ pub Int zk_stat() { return 80; }
 /// Holds Pedersen commitment parameters: N = pq, s = t^lam (mod N).
 pub type Pedersen = { List(UInt(64)) n; List(UInt(64)) s; List(UInt(64)) t; };
 
-/// Whether `x` is in [1, `n` - 1] and coprime to `n`.
+/// Whether `x` is in [1, `n` - 1] and coprime to `n`. Both must be in normal
+/// form (no leading zero limb): a peer that sends [0], [0, 0] or [x, 0] is
+/// refused, and so blamed, rather than reaching the arithmetic.
 pub Bool zk_valid_mod_n(List(UInt(64)) x, List(UInt(64)) n) {
+    if (!bn_is_normal(x) || !bn_is_normal(n)) { return false; }
     if (x.len() == 0 || bn_cmp(x, n) >= 0) { return false; }
     return bn_cmp(bn_gcd(x, n), [1]) == 0;
 }
 
 /// Whether `n` has exactly the CGGMP21 modulus size, 2048 bits (zk_bits_n in
 /// cggmp_prim.resid). The proofs' ranges are fixed for that size: a smaller N
-/// passes them with a small factor.
-pub Bool zk_n_size_ok(List(UInt(64)) n) { return bn_bit_len(n) == 2048; }
+/// passes them with a small factor. `n` must be in normal form.
+pub Bool zk_n_size_ok(List(UInt(64)) n) { return bn_is_normal(n) && bn_bit_len(n) == 2048; }
 
 /// Pedersen parameters are valid when s and t are units mod N and differ.
 pub Bool pedersen_valid(Pedersen p) {
