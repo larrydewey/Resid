@@ -65,7 +65,11 @@ type EkS = { EkA ret; List(Str) reqs; List(Str) discl; };
 // what it needs, where.
 type EkChk = { EkA v; Bool own; Bool prov; Bool pub; Int at; Str callee; };
 
-type EkT = { Int lp; List(EkN) nch; Map(Str, EkA) env; Map(Str, EkA) fields; Map(Int, EkS) sum; List(EkSrc) srcs; Map(Str, Int) skeys; List(Int) discl; List(EkChk) chks; EkA res; List(Str) reqs; List(Str) dis; Int cur; Map(Int, Bool) edges; Map(Int, Bool) chd; Bool rec; };
+// fz: the fixed point's bookkeeping past the widening round (ek_cons):
+// "h:<fn>:<hash>" for each state a function was computed at, "l:<fn>" the
+// last of them, "z:<fn>" a function frozen when an earlier one came back,
+// "d:<source>" a source taken as disclosed (ek_cons_sum).
+type EkT = { Int lp; List(EkN) nch; Map(Str, EkA) env; Map(Str, EkA) fields; Map(Int, EkS) sum; List(EkSrc) srcs; Map(Str, Int) skeys; List(Int) discl; List(EkChk) chks; EkA res; List(Str) reqs; List(Str) dis; Int cur; Map(Int, Bool) edges; Map(Int, Bool) chd; Bool rec; Map(Str, Str) fz; };
 
 type EkC = { Kg g; List(Int) def; Str src; Str smap; List(Int) nls; Str dbg; Bool wide; };
 
@@ -308,16 +312,16 @@ EkA ek_touch(EkA a) {
 List(EkA) ek_touch_all(List(EkA) xs, Int i, List(EkA) acc) { return if (i >= xs.len()) { acc } else { ek_touch_all(xs, i + 1, acc.concat([ek_touch(xs[i])])) }; }
 List(EkA) ek_capped_all(List(EkA) xs, Int c, Int i, List(EkA) acc) { return if (i >= xs.len()) { acc } else { ek_capped_all(xs, c, i + 1, acc.concat([ek_capped(xs[i], c)])) }; }
 
-EkT ek_lp(EkT t, Int lp) { return EkT {.lp = lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec}; }
+EkT ek_lp(EkT t, Int lp) { return EkT {.lp = lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec, .fz = t.fz}; }
 
-EkT ek_with_env(EkT t, Map(Str, EkA) env) { return EkT {.lp = t.lp, .nch = t.nch, .env = env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec}; }
+EkT ek_with_env(EkT t, Map(Str, EkA) env) { return EkT {.lp = t.lp, .nch = t.nch, .env = env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec, .fz = t.fz}; }
 // Locals by name: a name is bound once in a function and never shadowed
 // (spec "Statements"), and the residual graph shares subtrees between
 // specialized copies, so a use's def edge may name another copy's binder.
 Str ek_bname(EkC c, Int id) { return if (c.g.ns[id].kind == "pat" || c.g.ns[id].kind == "letpat") { c.g.ns[id].aux } else { c.g.ns[id].text }; }
 EkT ek_bind(EkC c, EkT t, Int id, EkA v) { return ek_with_env(t, t.env.insert(ek_bname(c, id), v)); }
-EkT ek_field(EkT t, Str k, EkA v) { return EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields.insert(k, v), .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec}; }
-EkT ek_res(EkT t, EkA r) { return EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = r, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec}; }
+EkT ek_field(EkT t, Str k, EkA v) { return EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields.insert(k, v), .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec, .fz = t.fz}; }
+EkT ek_res(EkT t, EkA r) { return EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = r, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec, .fz = t.fz}; }
 
 // A new source, or the existing one with the same identity.
 EkE ek_source(EkT t, Int kind, Int len, List(Int) deps, Int dcap, Str key, Int at) {
@@ -328,13 +332,13 @@ EkE ek_source(EkT t, Int kind, Int len, List(Int) deps, Int dcap, Str key, Int a
     // derived one its cap, an agreed one at most 32.
     Int most = if (kind == 2) { 1000000 } else if (kind == 4) { dcap } else if (kind == 3) { if (dcap > 32) { 32 } else { dcap } } else { len };
     EkSrc s = EkSrc {.kind = kind, .len = most, .deps = deps, .dcap = dcap, .key = key, .at = at, .fn = t.cur};
-    EkT t2 = EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs.concat([s]), .skeys = if (key == "") { t.skeys } else { t.skeys.insert(key, id) }, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec};
+    EkT t2 = EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs.concat([s]), .skeys = if (key == "") { t.skeys } else { t.skeys.insert(key, id) }, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec, .fz = t.fz};
     return eke(EkA {.src = [id], .cap = -1, .ps = [], .ze = false, .mt = false, .fk = [], .fv = [], .alts = []}, t2);
 }
 
 // Disclose what v holds: its sources everywhere, its parameters to callers.
 EkT ek_disclose(EkT t, EkA v) {
-    return EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = ek_union(t.discl, v.src), .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = ek_sunion(t.dis, v.ps, 0), .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec};
+    return EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = ek_union(t.discl, v.src), .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = ek_sunion(t.dis, v.ps, 0), .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec, .fz = t.fz};
 }
 
 Int ek_def(EkC c, Int id) { return if (id < c.def.len()) { c.def[id] } else { -1 }; }
@@ -646,7 +650,7 @@ EkE ek_apply(EkC c, Int id, Int f, EkAV av) {
     EkT t = av.t;
     Str aux = c.g.ns[f].aux;
     if (ek_reviewed(aux)) { return ek_reviewed_call(c, id, f, aux, av); }
-    EkT te = if (t.cur >= 0) { EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges.insert(f * 4294967296 + t.cur, true), .chd = t.chd, .rec = t.rec} } else { t };
+    EkT te = if (t.cur >= 0) { EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges.insert(f * 4294967296 + t.cur, true), .chd = t.chd, .rec = t.rec, .fz = t.fz} } else { t };
     if (!te.sum.contains(f)) { return eke(ek_bot(), te); }
     EkS s = te.sum.get(f) else { EkS {.ret = ek_none(), .reqs = [], .discl = []} };
     // The result: the summary's own sources and each parameter it keeps,
@@ -726,7 +730,7 @@ EkT ek_need(EkC c, Int at, EkA v, Bool own, Bool prov, Bool pub, Str callee, EkT
     // A value that holds this function's parameters is checked at the
     // callers, with the sources it holds already passed along.
     Bool here = t.rec && v.ps.len() == 0 && !ek_in_test(c, t);
-    return EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = if (here) { t.chks.concat([ch]) } else { t.chks }, .res = t.res, .reqs = ek_sunion(t.reqs, mine, 0), .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec};
+    return EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = if (here) { t.chks.concat([ch]) } else { t.chks }, .res = t.res, .reqs = ek_sunion(t.reqs, mine, 0), .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec, .fz = t.fz};
 }
 
 List(Str) ek_req_entries(List(Str) ps, Bool own, Bool prov, Bool pub, Str callee, Int i, List(Str) acc) {
@@ -823,7 +827,7 @@ EkT ek_nonce_site(EkC c, Int id, Int f, EkAV av, Str nn, Str key, EkT t) {
     Int ki = if (kn == "") { -1 } else { ek_param(c, f, kn, 1) };
     EkA kv = if (ki >= 0) { ek_argpath(c, f, av, f"{ki}", t) } else { ek_none() };
     EkN site = EkN {.at = id, .fn = t.cur, .lp = t.lp, .known = known, .ksrc = ek_flat_srcs(t, ek_union_all(ek_alts_of(kv), 0, kv.src), 0, [], 0), .callee = ek_short(c.g.ns[f].text)};
-    return EkT {.lp = t.lp, .nch = t.nch.concat([site]), .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec};
+    return EkT {.lp = t.lp, .nch = t.nch.concat([site]), .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec, .fz = t.fz};
 }
 
 // A literal list of literals (a constant after reduction).
@@ -1012,17 +1016,125 @@ EkT ek_fn(EkC c, Int f, EkT t) {
     EkA start = EkA {.src = [], .cap = -3, .ps = [], .ze = false, .mt = false, .fk = [], .fv = [], .alts = []};
     Map(Str, EkA) ne = {};
     Map(Str, EkA) nf = {};
-    EkT t0 = EkT {.lp = t.lp, .nch = t.nch, .env = ne, .fields = nf, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = start, .reqs = [], .dis = [], .cur = f, .edges = t.edges, .chd = t.chd, .rec = t.rec};
+    EkT t0 = EkT {.lp = t.lp, .nch = t.nch, .env = ne, .fields = nf, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = start, .reqs = [], .dis = [], .cur = f, .edges = t.edges, .chd = t.chd, .rec = t.rec, .fz = t.fz};
     EkT t1 = ek_params(c, f, 1, t0);
     EkT t2 = ek_s(c, kg_kid(c.g, f, fn.nk - 1), t1);
     // A function whose returns are all not known yet stays not known. Past
-    // the widening round, alternatives are met, so the fixed point ends.
+    // the widening round, alternatives are met, and a function caught in a
+    // cycle only moves toward more warnings (ek_cons_sum), so the fixed
+    // point ends.
     EkA ret = if (c.wide) { ek_deep_collapse(t2.res) } else { t2.res };
     EkS now = EkS {.ret = ret, .reqs = t2.reqs, .discl = t2.dis};
     EkS old = t2.sum.get(f) else { EkS {.ret = ek_none(), .reqs = [], .discl = []} };
-    Bool ch = !ek_same(old, now);
-    return EkT {.lp = t2.lp, .nch = t2.nch, .env = t2.env, .fields = t2.fields, .sum = t2.sum.insert(f, now), .srcs = t2.srcs, .skeys = t2.skeys, .discl = t2.discl, .chks = t2.chks, .res = ek_none(), .reqs = [], .dis = [], .cur = -1, .edges = t2.edges, .chd = if (ch) { t2.chd.insert(f, true) } else { t2.chd }, .rec = t2.rec};
+    // A state computed before, other than the last one (the walk is a
+    // cycle, RB-18), freezes the function: from then on its summary is the
+    // meet of its states. The same state again is no cycle: a callee
+    // changed, not it.
+    Str hash = if (c.wide) { str_sha256(ek_sum_text(now)) } else { "" };
+    Str hk = f"h:{f}:" + hash;
+    Bool again = c.wide && t2.fz.contains(hk) && (t2.fz.get(f"l:{f}") else { "" }) != hash && !t2.fz.contains(f"z:{f}");
+    Bool frozen = again || (c.wide && t2.fz.contains(f"z:{f}"));
+    EkCS cs = if (!frozen) { EkCS {.s = now, .gone = []} } else if (t2.sum.contains(f)) { ek_cons_sum(old, now, false) } else { ek_cons_sum(EkS {.ret = ek_bot(), .reqs = [], .discl = []}, now, false) };
+    EkS keep = cs.s;
+    Bool _d = if (again && c.dbg != "") { println("ekey frozen " + fn.text) } else { false };
+    Map(Str, Str) fz0 = if (!c.wide) { t2.fz } else if (again) { t2.fz.insert(hk, "1").insert(f"l:{f}", hash).insert(f"z:{f}", "1") } else { t2.fz.insert(hk, "1").insert(f"l:{f}", hash) };
+    Map(Str, Str) fz = if (!frozen) { fz0 } else { ek_gone(fz0, cs.gone, 0) };
+    Bool ch = !ek_same(old, keep);
+    // The recording pass keeps a frozen function's summary: its walk there
+    // is a step of the cycle again, not the meet the callers must see.
+    return EkT {.lp = t2.lp, .nch = t2.nch, .env = t2.env, .fields = t2.fields, .sum = if (t2.rec && t2.fz.contains(f"z:{f}")) { t2.sum } else { t2.sum.insert(f, keep) }, .srcs = t2.srcs, .skeys = t2.skeys, .discl = t2.discl, .chks = t2.chks, .res = ek_none(), .reqs = [], .dis = [], .cur = -1, .edges = t2.edges, .chd = if (ch) { t2.chd.insert(f, true) } else { t2.chd }, .rec = t2.rec, .fz = fz};
 }
+
+// ─── Termination (RB-18) ────────────────────────────────────────────
+//
+// The transfer functions are not monotone (a known-empty arm is dropped and
+// marks its result, a marked value touched counts zero, more than four
+// alternatives meet), so the rounds alone need not reach a fixed point: a
+// function's result can alternate between two states forever. Past the
+// widening round, a function whose computed state comes back after a
+// different one is caught in such a cycle and frozen: from then on its
+// summary only moves one way, toward more warnings, never fewer
+// (ek_cons_sum):
+//
+//   - its result is the meet of its states (ek_lo: the sources and
+//     parameters all of them hold, the smallest cap, empty when any is,
+//     known empty only when all are, a record's fields while every state
+//     has the same ones), so it counts no more than any of them;
+//   - what a state held and the meet does not (a source, a parameter) is
+//     taken as disclosed: a source dropped is disclosed everywhere ("d:"
+//     in fz), a parameter dropped joins the summary's disclosures, so a
+//     `declassify` of the result that the meet no longer sees still counts;
+//   - its keying requirements and disclosures are unions.
+//
+// Termination. A summary is drawn from a finite set: its sources and
+// parameter paths from the program's, its cap is -1, a slice's literal
+// length or a sum below its sources' lengths (ek_cat1 drops a larger one),
+// records go two levels deep and selections four wide. A function that changes forever must
+// therefore come back to a state it had, after a different one, and is
+// frozen. A frozen summary changes finitely often: its sources and paths
+// only shrink, its cap only decreases, its flags and record shape change
+// at most once, and the dropped sources, requirements and disclosures only
+// grow, all within finite sets. So every function either settles or is
+// frozen and then settles, and the rounds end. They are also capped
+// (ek_max_rounds); past the cap every summary is pinned (ek_pin: holds
+// nothing, counts zero, what it held disclosed) and a warning says so.
+// Functions that are not frozen keep the latest state, as before: rounds
+// that only climb toward the fixed point slowly are not met with their
+// early, smaller states.
+
+type EkCS = { EkS s; List(Int) gone; };
+
+EkCS ek_cons_sum(EkS old, EkS now, Bool pin) {
+    EkA lo0 = ek_lo(ek_lo_of(old.ret), ek_lo_of(now.ret));
+    EkA lo = if (pin) { ek_pin(lo0) } else { lo0 };
+    EkA hi = ek_hi(ek_hi_of(old.ret), ek_hi_of(now.ret));
+    List(Str) lost = ek_sminus(hi.ps, lo.ps, 0, []);
+    return EkCS {.s = EkS {.ret = lo, .reqs = ek_sunion(old.reqs, now.reqs, 0), .discl = ek_sunion(ek_sunion(old.discl, now.discl, 0), lost, 0)}, .gone = ek_iminus(hi.src, lo.src, 0, [])};
+}
+
+List(Str) ek_sminus(List(Str) a, List(Str) b, Int i, List(Str) acc) { return if (i >= a.len()) { acc } else { ek_sminus(a, b, i + 1, if (b.contains(a[i])) { acc } else { acc.concat([a[i]]) }) }; }
+List(Int) ek_iminus(List(Int) a, List(Int) b, Int i, List(Int) acc) { return if (i >= a.len()) { acc } else { ek_iminus(a, b, i + 1, if (b.contains(a[i])) { acc } else { acc.concat([a[i]]) }) }; }
+
+// What both count: a meet that keeps a record's fields when both have them.
+EkA ek_lo(EkA a, EkA b) {
+    if (a.cap == -3) { return b; }
+    if (b.cap == -3) { return a; }
+    EkA m = ek_meet(a, b);
+    if (a.fk.len() > 0 && f"{a.fk}" == f"{b.fk}") { return ek_with_fields(m, a.fk, ek_lo_fields(a.fv, b.fv, 0, [])); }
+    return m;
+}
+
+List(EkA) ek_lo_fields(List(EkA) a, List(EkA) b, Int i, List(EkA) acc) { return if (i >= a.len()) { acc } else { ek_lo_fields(a, b, i + 1, acc.concat([ek_lo(ek_lo_of(a[i]), ek_lo_of(b[i]))])) }; }
+
+EkA ek_lo_of(EkA x) { return if (x.alts.len() > 0) { ek_lo_fold(x.alts, 1, x.alts[0]) } else { x }; }
+EkA ek_lo_fold(List(EkA) xs, Int i, EkA acc) { return if (i >= xs.len()) { acc } else { ek_lo_fold(xs, i + 1, ek_lo(acc, xs[i])) }; }
+
+// What either may hold (its sources and parameters; fields join the whole).
+EkA ek_hi(EkA a, EkA b) {
+    if (a.cap == -3) { return b; }
+    if (b.cap == -3) { return a; }
+    return EkA {.src = ek_union(a.src, b.src), .cap = -1, .ps = ek_sunion(a.ps, b.ps, 0), .ze = a.ze || b.ze, .mt = a.mt && b.mt, .fk = [], .fv = [], .alts = []};
+}
+
+EkA ek_hi_of(EkA x) { return if (x.alts.len() > 0) { ek_hi_fold(x.alts, 1, x.alts[0]) } else { x }; }
+EkA ek_hi_fold(List(EkA) xs, Int i, EkA acc) { return if (i >= xs.len()) { acc } else { ek_hi_fold(xs, i + 1, ek_hi(acc, xs[i])) }; }
+
+// Frozen: holds nothing and counts zero, through a touch too (marked).
+EkA ek_pin(EkA r) { return EkA {.src = [], .cap = 0, .ps = [], .ze = true, .mt = false, .fk = [], .fv = [], .alts = []}; }
+
+// Past the last round: every summary pinned, what it held disclosed.
+EkT ek_pin_all(EkT t, List(Int) fs, Int i) {
+    if (i >= fs.len()) { return t; }
+    EkS s = t.sum.get(fs[i]) else { EkS {.ret = ek_none(), .reqs = [], .discl = []} };
+    EkCS p = ek_cons_sum(s, s, true);
+    EkT t2 = EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum.insert(fs[i], p.s), .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec, .fz = ek_gone(t.fz, p.gone, 0)};
+    return ek_pin_all(t2, fs, i + 1);
+}
+
+Map(Str, Str) ek_gone(Map(Str, Str) fz, List(Int) xs, Int i) { return if (i >= xs.len()) { fz } else { ek_gone(fz.insert(f"d:{xs[i]}", "1"), xs, i + 1) }; }
+
+// The sources taken as disclosed (ek_cons_sum), for the recording pass.
+List(Int) ek_gone_ids(List(Str) ks, Int i, List(Int) acc) { return if (i >= ks.len()) { sort(acc) } else { ek_gone_ids(ks, i + 1, if (str_starts_with(ks[i], "d:")) { acc.concat([str_parse_int(str_slice(ks[i], 2, str_len(ks[i])))]) } else { acc }) }; }
 
 EkT ek_decls(EkC c, Int id, Int i, EkT t) {
     if (i >= c.g.ns[id].nk) { return t; }
@@ -1055,14 +1167,169 @@ EkT ek_some(EkC c, List(Int) fs, Int i, EkT t) {
     return ek_some(c, fs, i + 1, ek_fn(c, fs[i], t));
 }
 
-EkT ek_rounds(EkC c, Map(Int, List(Int)) cs, EkT t, Int round) {
+// The rounds of the fixed point. Each runs in an arena of its own (RB-18:
+// a run kept every round's state, gigabytes on a large program); what the
+// next round needs (the summaries, sources, call edges, what changed, the
+// bookkeeping) leaves it as text (ek_enc). At most ek_max_rounds; past it
+// every summary is pinned (ek_pin) and a warning says so.
+type EkRR = { EkT t; Str note; };
+
+Int ek_max_rounds() { return 100; }
+Int ek_widen_round() { return 30; }
+
+EkRR ek_rounds(EkC c, Map(Int, List(Int)) cs, EkT t) {
+    List(Str) r = ek_rounds_s(c, cs, ek_enc(t), 0);
+    return EkRR {.t = ek_dec(r[0]), .note = r[1]};
+}
+
+List(Str) ek_rounds_s(EkC c, Map(Int, List(Int)) cs, Str st, Int round) {
+    Int _in = resid_bulk_push();
+    EkT t = ek_dec(st);
     Map(Int, Bool) none = {};
     Map(Int, Bool) work = ek_next(cs, sort(t.chd.keys()), 0, none);
-    if (work.len() == 0 || round > 10000) { return t; }
-    Bool _p = if (c.dbg != "") { println(f"ekey round {round}: {work.len()} functions, {t.srcs.len()} sources") } else { false };
-    EkT t0 = EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = -1, .edges = t.edges, .chd = none, .rec = t.rec};
-    EkC c2 = if (round >= 30 && !c.wide) { EkC {.g = c.g, .def = c.def, .src = c.src, .smap = c.smap, .nls = c.nls, .dbg = c.dbg, .wide = true} } else { c };
-    return ek_rounds(c2, cs, ek_some(c2, sort(work.keys()), 0, t0), round + 1);
+    Bool more = work.len() > 0 && round < ek_max_rounds();
+    Bool _p = if (c.dbg != "" && work.len() > 0) { println(f"ekey round {round}: {work.len()} functions, {t.srcs.len()} sources") } else { false };
+    EkC c2 = EkC {.g = c.g, .def = c.def, .src = c.src, .smap = c.smap, .nls = c.nls, .dbg = c.dbg, .wide = round >= ek_widen_round()};
+    EkT t0 = EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = -1, .edges = t.edges, .chd = none, .rec = t.rec, .fz = t.fz};
+    EkT t2 = if (more) { ek_some(c2, sort(work.keys()), 0, t0) } else if (work.len() > 0) { ek_pin_all(t0, sort(t.sum.keys()), 0) } else { t };
+    Str note = if (!more && work.len() > 0) { ek_unsettled(c, sort(work.keys())) } else { "" };
+    List(Str) out = resid_list_str_persist_copy([ek_enc(t2), note]);
+    Int _out = resid_bulk_pop();
+    if (!more) { return out; }
+    return ek_rounds_s(c, cs, out[0], round + 1);
+}
+
+Str ek_unsettled(EkC c, List(Int) fs) {
+    List(Str) ns = ek_fn_names(c, fs, 0, []);
+    Str msg = f"the key analysis did not settle within {ek_max_rounds()} rounds (still changing: " + str_join(ns, ", ") + (if (fs.len() > ns.len()) { f", and {fs.len() - ns.len()} more" } else { "" }) + "); every function's result now counts as holding no unpredictable bytes, so a key passed through a call may be reported when it is sound";
+    return ek_warn_code_n("E0270", msg, c.g, fs[0], c.nls, c.smap);
+}
+
+List(Str) ek_fn_names(EkC c, List(Int) fs, Int i, List(Str) acc) { return if (i >= fs.len() || i >= 5) { acc } else { ek_fn_names(c, fs, i + 1, acc.concat([ek_short(c.g.ns[fs[i]].text)])) }; }
+
+// ─── A round's state as text ────────────────────────────────────────
+//
+// Tokens separated by \x1f; a text token escapes \x1e and \x1f (ek_esc).
+// Lists are a count and their items; a value (EkA) is its sources, cap,
+// parameter paths, flags, field names, field values and alternatives.
+
+Str ek_esc(Str s) { return if (!str_contains(s, "\x1e") && !str_contains(s, "\x1f")) { s } else { str_replace(str_replace(s, "\x1e", "\x1e0"), "\x1f", "\x1e1") }; }
+Str ek_unesc(Str s) { return if (!str_contains(s, "\x1e")) { s } else { str_replace(str_replace(s, "\x1e1", "\x1f"), "\x1e0", "\x1e") }; }
+
+StrBuf ek_w(StrBuf b, Str tok) { return b.push(tok).push_char(31); }
+StrBuf ek_wi(StrBuf b, Int n) { return ek_w(b, f"{n}"); }
+StrBuf ek_w_ints(StrBuf b, List(Int) xs, Int i) { return if (i >= xs.len()) { b } else { ek_w_ints(ek_wi(b, xs[i]), xs, i + 1) }; }
+StrBuf ek_w_strs(StrBuf b, List(Str) xs, Int i) { return if (i >= xs.len()) { b } else { ek_w_strs(ek_w(b, ek_esc(xs[i])), xs, i + 1) }; }
+StrBuf ek_w_il(StrBuf b, List(Int) xs) { return ek_w_ints(ek_wi(b, xs.len()), xs, 0); }
+StrBuf ek_w_sl(StrBuf b, List(Str) xs) { return ek_w_strs(ek_wi(b, xs.len()), xs, 0); }
+
+StrBuf ek_w_a(StrBuf b, EkA a) {
+    StrBuf b1 = ek_w_sl(ek_w(ek_w(ek_w_sl(ek_wi(ek_w_il(b, a.src), a.cap), a.ps), if (a.ze) { "1" } else { "0" }), if (a.mt) { "1" } else { "0" }), a.fk);
+    return ek_w_as(ek_w_as(b1, a.fv), a.alts);
+}
+
+StrBuf ek_w_as(StrBuf b, List(EkA) xs) { return ek_w_as_at(ek_wi(b, xs.len()), xs, 0); }
+StrBuf ek_w_as_at(StrBuf b, List(EkA) xs, Int i) { return if (i >= xs.len()) { b } else { ek_w_as_at(ek_w_a(b, xs[i]), xs, i + 1) }; }
+
+StrBuf ek_w_srcs(StrBuf b, List(EkSrc) xs, Int i) {
+    if (i >= xs.len()) { return b; }
+    EkSrc x = xs[i];
+    return ek_w_srcs(ek_wi(ek_wi(ek_w(ek_wi(ek_w_il(ek_wi(ek_wi(b, x.kind), x.len), x.deps), x.dcap), ek_esc(x.key)), x.at), x.fn), xs, i + 1);
+}
+
+StrBuf ek_w_skeys(StrBuf b, Map(Str, Int) m, List(Str) ks, Int i) { return if (i >= ks.len()) { b } else { ek_w_skeys(ek_wi(ek_w(b, ek_esc(ks[i])), m.get(ks[i]) else { -1 }), m, ks, i + 1) }; }
+
+StrBuf ek_w_fz(StrBuf b, Map(Str, Str) m, List(Str) ks, Int i) { return if (i >= ks.len()) { b } else { ek_w_fz(ek_w(ek_w(b, ek_esc(ks[i])), ek_esc(m.get(ks[i]) else { "" })), m, ks, i + 1) }; }
+
+StrBuf ek_w_sums(StrBuf b, Map(Int, EkS) m, List(Int) ks, Int i) {
+    if (i >= ks.len()) { return b; }
+    EkS s = m.get(ks[i]) else { EkS {.ret = ek_none(), .reqs = [], .discl = []} };
+    return ek_w_sums(ek_w_sl(ek_w_sl(ek_w_a(ek_wi(b, ks[i]), s.ret), s.reqs), s.discl), m, ks, i + 1);
+}
+
+Str ek_enc(EkT t) {
+    StrBuf b0 = ek_w_srcs(ek_wi(ek_w_il(StrBuf(), t.discl), t.srcs.len()), t.srcs, 0);
+    List(Str) sk = sort(t.skeys.keys());
+    StrBuf b1 = ek_w_skeys(ek_wi(b0, sk.len()), t.skeys, sk, 0);
+    List(Str) zk = sort(t.fz.keys());
+    StrBuf b2 = ek_w_fz(ek_wi(ek_w_il(ek_w_il(b1, sort(t.edges.keys())), sort(t.chd.keys())), zk.len()), t.fz, zk, 0);
+    List(Int) fs = sort(t.sum.keys());
+    return ek_w_sums(ek_wi(b2, fs.len()), t.sum, fs, 0).finish();
+}
+
+type EkDI = { List(Int) v; Int i; };
+type EkDS = { List(Str) v; Int i; };
+type EkDA = { EkA v; Int i; };
+type EkDAs = { List(EkA) v; Int i; };
+
+Int ek_ri(List(Str) ts, Int i) { return str_parse_int(ts[i]); }
+
+EkDI ek_r_il(List(Str) ts, Int i) { return ek_r_ints(ts, i + 1, ek_ri(ts, i), ListBuf()); }
+EkDI ek_r_ints(List(Str) ts, Int i, Int n, ListBuf(Int) acc) { return if (n <= 0) { EkDI {.v = acc.finish(), .i = i} } else { ek_r_ints(ts, i + 1, n - 1, acc.push(ek_ri(ts, i))) }; }
+EkDS ek_r_sl(List(Str) ts, Int i) { return ek_r_strs(ts, i + 1, ek_ri(ts, i), []); }
+EkDS ek_r_strs(List(Str) ts, Int i, Int n, List(Str) acc) { return if (n <= 0) { EkDS {.v = acc, .i = i} } else { ek_r_strs(ts, i + 1, n - 1, acc.concat([ek_unesc(ts[i])])) }; }
+
+EkDA ek_r_a(List(Str) ts, Int i) {
+    EkDI src = ek_r_il(ts, i);
+    Int cap = ek_ri(ts, src.i);
+    EkDS ps = ek_r_sl(ts, src.i + 1);
+    Bool ze = ts[ps.i] == "1";
+    Bool mt = ts[ps.i + 1] == "1";
+    EkDS fk = ek_r_sl(ts, ps.i + 2);
+    EkDAs fv = ek_r_as(ts, fk.i);
+    EkDAs al = ek_r_as(ts, fv.i);
+    return EkDA {.v = EkA {.src = src.v, .cap = cap, .ps = ps.v, .ze = ze, .mt = mt, .fk = fk.v, .fv = fv.v, .alts = al.v}, .i = al.i};
+}
+
+EkDAs ek_r_as(List(Str) ts, Int i) { return ek_r_as_at(ts, i + 1, ek_ri(ts, i), []); }
+EkDAs ek_r_as_at(List(Str) ts, Int i, Int n, List(EkA) acc) {
+    if (n <= 0) { return EkDAs {.v = acc, .i = i}; }
+    EkDA a = ek_r_a(ts, i);
+    return ek_r_as_at(ts, a.i, n - 1, acc.concat([a.v]));
+}
+
+type EkDSrc = { List(EkSrc) v; Int i; };
+EkDSrc ek_r_srcs(List(Str) ts, Int i, Int n, List(EkSrc) acc) {
+    if (n <= 0) { return EkDSrc {.v = acc, .i = i}; }
+    EkDI deps = ek_r_il(ts, i + 2);
+    Int j = deps.i;
+    EkSrc x = EkSrc {.kind = ek_ri(ts, i), .len = ek_ri(ts, i + 1), .deps = deps.v, .dcap = ek_ri(ts, j), .key = ek_unesc(ts[j + 1]), .at = ek_ri(ts, j + 2), .fn = ek_ri(ts, j + 3)};
+    return ek_r_srcs(ts, j + 4, n - 1, acc.concat([x]));
+}
+
+type EkDKs = { Map(Str, Int) v; Int i; };
+EkDKs ek_r_skeys(List(Str) ts, Int i, Int n, Map(Str, Int) acc) { return if (n <= 0) { EkDKs {.v = acc, .i = i} } else { ek_r_skeys(ts, i + 2, n - 1, acc.insert(ek_unesc(ts[i]), ek_ri(ts, i + 1))) }; }
+
+Map(Int, Bool) ek_set_i(List(Int) xs, Int i, Map(Int, Bool) acc) { return if (i >= xs.len()) { acc } else { ek_set_i(xs, i + 1, acc.insert(xs[i], true)) }; }
+type EkDZ = { Map(Str, Str) v; Int i; };
+EkDZ ek_r_fz(List(Str) ts, Int i, Int n, Map(Str, Str) acc) { return if (n <= 0) { EkDZ {.v = acc, .i = i} } else { ek_r_fz(ts, i + 2, n - 1, acc.insert(ek_unesc(ts[i]), ek_unesc(ts[i + 1]))) }; }
+
+type EkDSum = { Map(Int, EkS) v; Int i; };
+EkDSum ek_r_sums(List(Str) ts, Int i, Int n, Map(Int, EkS) acc) {
+    if (n <= 0) { return EkDSum {.v = acc, .i = i}; }
+    EkDA r = ek_r_a(ts, i + 1);
+    EkDS rq = ek_r_sl(ts, r.i);
+    EkDS ds = ek_r_sl(ts, rq.i);
+    return ek_r_sums(ts, ds.i, n - 1, acc.insert(ek_ri(ts, i), EkS {.ret = r.v, .reqs = rq.v, .discl = ds.v}));
+}
+
+EkT ek_dec(Str st) {
+    List(Str) ts = str_split(st, "\x1f");
+    EkDI dis = ek_r_il(ts, 0);
+    List(EkSrc) s0 = [];
+    EkDSrc srcs = ek_r_srcs(ts, dis.i + 1, ek_ri(ts, dis.i), s0);
+    Map(Str, Int) k0 = {};
+    EkDKs sk = ek_r_skeys(ts, srcs.i + 1, ek_ri(ts, srcs.i), k0);
+    EkDI ed = ek_r_il(ts, sk.i);
+    EkDI ch = ek_r_il(ts, ed.i);
+    Map(Str, Str) z0 = {};
+    EkDZ fz = ek_r_fz(ts, ch.i + 1, ek_ri(ts, ch.i), z0);
+    Map(Int, EkS) m0 = {};
+    EkDSum sm = ek_r_sums(ts, fz.i + 1, ek_ri(ts, fz.i), m0);
+    Map(Str, EkA) e = {};
+    Map(Str, EkA) fe = {};
+    Map(Int, Bool) be = {};
+    return EkT {.lp = 0, .nch = [], .env = e, .fields = fe, .sum = sm.v, .srcs = srcs.v, .skeys = sk.v, .discl = dis.v, .chks = [], .res = ek_none(), .reqs = [], .dis = [], .cur = -1, .edges = ek_set_i(ed.v, 0, be), .chd = ek_set_i(ch.v, 0, be), .rec = false, .fz = fz.v};
 }
 
 // ─── Checking the sites ─────────────────────────────────────────────
@@ -1177,17 +1444,20 @@ pub EKR ek_run(Kg g, Int unit, Str src, Str smap, Str dbg) {
     Map(Int, EkS) se = {};
     Map(Str, Int) ke = {};
     Map(Int, Bool) be = {};
-    EkT t0 = EkT {.lp = 0, .nch = [], .env = e, .fields = fe, .sum = se, .srcs = [], .skeys = ke, .discl = [], .chks = [], .res = ek_none(), .reqs = [], .dis = [], .cur = -1, .edges = be, .chd = be, .rec = false};
+    Map(Str, Str) sz = {};
+    EkT t0 = EkT {.lp = 0, .nch = [], .env = e, .fields = fe, .sum = se, .srcs = [], .skeys = ke, .discl = [], .chks = [], .res = ek_none(), .reqs = [], .dis = [], .cur = -1, .edges = be, .chd = be, .rec = false, .fz = sz};
     EkT t1 = ek_decls(c, unit, 0, t0);
     Map(Int, List(Int)) cs0 = {};
-    EkT t2 = ek_rounds(c, ek_callers(sort(t1.edges.keys()), 0, cs0), t1, 0);
+    EkRR rr = ek_rounds(c, ek_callers(sort(t1.edges.keys()), 0, cs0), t1);
+    EkT t2 = rr.t;
     // The recording pass: every keying site, with final summaries.
     // Sources keep their ids (one per node, or per derivation), so the
-    // summaries' references stay valid; disclosure is gathered afresh.
-    EkT t3 = ek_decls(c, unit, 0, EkT {.lp = t2.lp, .nch = t2.nch, .env = e, .fields = fe, .sum = t2.sum, .srcs = t2.srcs, .skeys = t2.skeys, .discl = [], .chks = [], .res = ek_none(), .reqs = [], .dis = [], .cur = -1, .edges = be, .chd = be, .rec = true});
+    // summaries' references stay valid; disclosure is gathered afresh, from
+    // the sources the fixed point took as disclosed (ek_cons_sum).
+    EkT t3 = ek_decls(c, unit, 0, EkT {.lp = t2.lp, .nch = t2.nch, .env = e, .fields = fe, .sum = t2.sum, .srcs = t2.srcs, .skeys = t2.skeys, .discl = ek_gone_ids(t2.fz.keys(), 0, []), .chks = [], .res = ek_none(), .reqs = [], .dis = [], .cur = -1, .edges = be, .chd = be, .rec = true, .fz = t2.fz});
     EkR r0 = ek_check_all(c, t3, 0, src, smap, StrBuf(), 0);
     Str nw = ek_nonce_warn(c, t3, 0, src, smap, StrBuf());
-    EkR r = EkR {.text = r0.text + nw, .n = r0.n + str_count(nw, "warning[")};
+    EkR r = EkR {.text = rr.note + r0.text + nw, .n = r0.n + str_count(nw, "warning[") + (if (rr.note == "") { 0 } else { 1 })};
     Str d = if (dbg == "") { "" } else { ek_dbg_sums(c, t3, sort(t3.sum.keys()), 0, dbg, StrBuf()) };
     return EKR {.warnings = d + r.text, .n = r.n + (if (d == "") { 0 } else { 1 })};
 }
