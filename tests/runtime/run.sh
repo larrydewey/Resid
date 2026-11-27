@@ -502,6 +502,17 @@ sys.exit(0 if ok else 1)' "$W/spawn_budget" > "$W/spawn_budget.out" 2>&1; then
 else
     fail=$((fail + 1)); echo "FAIL concurrent spawns under RESID_MEM_LIMIT: $(tail -1 "$W/spawn_budget.out" "$W/spawn_budget.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# The compiler builds the runtime with freed big blocks unmapped at once
+# (malloc.resid, RESID_UNMAP_FREED=1), so a value read after its arena is
+# freed faults instead of finding the old bytes. Before, --runtime-module
+# printed a file name made in the code generator's arena after the arena
+# was popped (driver.resid), and crashed this way (exit 139).
+if (cd "$ROOT" && RESID_UNMAP_FREED=1 timeout 600 "$COMPILER" runtime/rt/rt.resid --runtime-module -o "$W/rt_unmapped") > "$W/rt_unmapped.log" 2>&1 \
+    && grep -q "^wrote $W/rt_unmapped.ll$" "$W/rt_unmapped.log"; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL runtime build with freed blocks unmapped: $(tail -1 "$W/rt_unmapped.log" 2>/dev/null)"
+fi
 # CBOR encoding appends packed bytes (lib/cbor.resid): 2 MB encoded in
 # 54 MB. The encoder that kept a cons cell per output byte took 486 MB.
 if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/cbor_bytes.resid -o "$W/cbor_bytes") > "$W/cbor_bytes.log" 2>&1 \

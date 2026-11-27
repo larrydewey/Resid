@@ -11065,7 +11065,8 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     filesystem.write_all(ll0, doc);
     Int _cg_out = resid_bulk_pop();
     if (rtmod) {
-        println("wrote " + ll0);
+        // ll0 was made in the arena just freed: the name again, not ll0.
+        println("wrote " + out + ".ll");
         return 0;
     }
     // (Strings made in the arena are gone with it.)

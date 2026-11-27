@@ -393,9 +393,23 @@ pub Int c_free_wiped(Int p) {
     return if (h < 64) { c_free(p) } else { big_keep(p - 16, h) };
 }
 
+// RESID_UNMAP_FREED=1: freed big blocks are unmapped at once, never
+// cached, so a read of one after it is freed faults instead of finding
+// the old bytes. A test setting (tests/runtime/run.sh builds the runtime
+// with the compiler under it: an arena string read after its pop crashed
+// it, driver.resid).
+Bool unmap_freed() {
+    Int g = resid_raw_global("rt_unmap_freed", 8);
+    Int v = ld64(g);
+    if (v != 0) { return v == 1; }
+    Int e = c_getenv(resid_raw_addr("RESID_UNMAP_FREED"));
+    Bool on = e != 0 && ld8(e) == 49 && ld8(e + 1) == 0;
+    return st64(g, if (on) { 1 } else { 2 }) * 0 == 0 && on;
+}
+
 Int big_keep(Int b, Int h) {
     Int t = heap_tls();
-    if (ld64(t + 408) >= 256 || ld64(t + 416) + h > 67108864) { return heap_unmap(b, h); }
+    if (ld64(t + 408) >= 256 || ld64(t + 416) + h > 67108864 || unmap_freed()) { return heap_unmap(b, h); }
     _ = st64(b + 8, ld64(t + 400));
     _ = st64(t + 400, b);
     _ = st64(t + 408, ld64(t + 408) + 1);
