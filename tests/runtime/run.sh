@@ -412,12 +412,15 @@ fi
 # helpers concatenating in brackets, calling a list's `with` or slicing a
 # list (paren, with, slice; lf_scalar): 0.3 MB at both sizes, where taken
 # for leaves they passed 40 MB within a million steps (with, slice) or
-# ten million (paren).
+# ten million (paren). And helpers concatenating two calls' pointer
+# results, multiplying or negating a Dec, concatenating a match arm's
+# binding, or calling a closure parameter named like a leaf (both, dmul,
+# dneg, pat, clo): taken for leaves, each passed 40 MB by ten million.
 if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/fstr_leaf.resid -o "$W/fstr_leaf") > "$W/fstr_leaf.log" 2>&1 \
-    && [ "$(for fl in "count 1000000" "count 10000000" "sum 1000000" "sum 10000000" "walk 1000000" "walk 10000000" "paren 1000000" "paren 10000000" "with 1000000" "with 10000000" "slice 1000000" "slice 10000000"; do RESID_MEM_LIMIT=40 timeout 120 "$W/fstr_leaf" $fl 2>&1; done | tr '\n' ' ')" = "918920 18918920 3785855 7497175 9888890 108888890 1000000 10000000 2999998 29999997 2000000 20000000 " ]; then
+    && [ "$(for fl in "count 1000000" "count 10000000" "sum 1000000" "sum 10000000" "walk 1000000" "walk 10000000" "paren 1000000" "paren 10000000" "with 1000000" "with 10000000" "slice 1000000" "slice 10000000" "both 1000000" "both 10000000" "dmul 1000000" "dmul 10000000" "dneg 1000000" "dneg 10000000" "pat 1000000" "pat 10000000" "clo 1000000" "clo 10000000"; do RESID_MEM_LIMIT=40 timeout 120 "$W/fstr_leaf" $fl 2>&1; done | tr '\n' ' ')" = "918920 18918920 3785855 7497175 9888890 108888890 1000000 10000000 2999998 29999997 2000000 20000000 1000000 10000000 2000000 20000000 2000000 20000000 1000000 10000000 1000000 10000000 " ]; then
     pass=$((pass + 1))
 else
-    fail=$((fail + 1)); echo "FAIL f-string helpers are not leaves: $(for fl in "count 10000000" "sum 10000000" "walk 10000000" "paren 10000000" "with 10000000" "slice 10000000"; do RESID_MEM_LIMIT=40 timeout 120 "$W/fstr_leaf" $fl 2>&1 | tail -1; done | tr '\n' ' ') $(grep -m1 -i error "$W/fstr_leaf.log")"
+    fail=$((fail + 1)); echo "FAIL f-string helpers are not leaves: $(for fl in "count 10000000" "sum 10000000" "walk 10000000" "paren 10000000" "with 10000000" "slice 10000000" "both 10000000" "dmul 10000000" "dneg 10000000" "pat 10000000" "clo 10000000"; do RESID_MEM_LIMIT=40 timeout 120 "$W/fstr_leaf" $fl 2>&1 | tail -1; done | tr '\n' ' ') $(grep -m1 -i error "$W/fstr_leaf.log")"
 fi
 # Loop regions for `for` and `while` (lower.resid, lw_iter): loops whose
 # bodies allocate and carry nothing, each run at n and at 10 n steps (the

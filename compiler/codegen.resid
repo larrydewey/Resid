@@ -1452,8 +1452,8 @@ GT cg_match_payload_raw(GT sc, Str ety, Int slot, GT c) {
 // reads its other parameters, and calls only leaf functions (itself
 // included) and non-allocating builtins; its body has no string or byte
 // literal, list literal, slice, method call other than `.len()`,
-// capitalised name other than a numeric type, or `+` next to an operand
-// not known to be a scalar (lower.resid's lf_node). Leafness only
+// capitalised name other than a numeric type, or arithmetic on an
+// operand not known to be a scalar (lower.resid's lf_node). Leafness only
 // decides whether a scope is worth its push and pop, never whether one is
 // sound.
 
@@ -1523,8 +1523,9 @@ List(Str) leaf_calls(Str s, Int pos, Int end, List(Str) ptrs, Str prev, Bool pdo
         }
         return leaf_calls(s, f.pos, end, ptrs, f.text, true, acc);
     }
-    if (t.text == "+") {
-        // A bracketed operand (`(a) + (b)`) may be a string too.
+    if (list_has_str(["+", "-", "*", "/", "%"], t.text)) {
+        // A bracketed operand (`(a) + (b)`) may be a string too, and
+        // arithmetic on a pointer (a Dec) makes a new value.
         Tok nx = lex_tok(s, t.pos);
         Bool pl = pdot || prev == "]" || prev == ")" || list_has_str(ptrs, prev);
         Bool nl = (nx.kind == "ident" && list_has_str(ptrs, nx.text)) || nx.text == "(" || nx.text == "[";
