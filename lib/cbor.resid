@@ -1,10 +1,12 @@
 // cbor.resid — CBOR (RFC 8949) as a format for resid-serial.
 //
-// A CBOR encoder state is the bytes written so far, newest first, so every
-// write is O(1) and `cbor_bytes` reverses them once at the end. CBOR is
-// prefix-free, so compound values need no separators: a definite length
-// frames its parts, and the streamed string and bytes verbs write the
-// length they were promised up front.
+// A CBOR encoder state is the bytes written so far, packed (a byte a
+// byte), and each write appends its bytes in one piece: the list's tip
+// takes them in place, so writing is amortized O(1) a byte and an older
+// state still sees exactly its own bytes. CBOR is prefix-free, so
+// compound values need no separators: a definite length frames its parts,
+// and the streamed string and bytes verbs write the length they were
+// promised up front.
 //
 // The decoder state is the input, the read position, and a stack of the
 // open containers, each holding the parts it has left (or -1 for an
@@ -34,38 +36,46 @@ import "cbor_floats.resid";
 
 // ─── The encoder ─────────────────────────────────────────────────────
 
-/// The bytes written so far, newest first.
-/// Every write prepends one cell and `cbor_bytes` reverses the chain once at
-/// the end.
-type CbOut = CoNil | CoCons(CoCell);
-/// One written byte and the bytes written before it.
-type CoCell = { CbOut next; Int b; };
-
-/// The CBOR encoder state: the bytes written so far, newest first.
-type CborEnc = { CbOut out; };
+/// The CBOR encoder state: the bytes written so far, packed, oldest first.
+/// Each write appends a whole head or payload at once; an encoder kept from
+/// before a write (backtracking) still sees only its own bytes.
+type CborEnc = { List(UInt(8)) out; };
 
 /// A fresh encoder with nothing written.
-pub CborEnc cbor_encoder() { return CborEnc {.out = CoNil}; }
+pub CborEnc cbor_encoder() {
+    List(UInt(8)) none = [];
+    return CborEnc {.out = none};
+}
 
 /// The bytes written, oldest first.
 /// Consumes the state.
-pub List(Int) cbor_bytes(CborEnc e) { return cb_out_list(e.out, ListBuf()); }
+pub List(Int) cbor_bytes(CborEnc e) { return ce_ints(e.out, 0, ListBuf()); }
 
-/// The bytes of `o` pushed onto `b`, then the finished list, oldest first.
-pub List(Int) cb_out_list(CbOut o, ListBuf(Int) b) {
-    return match o { CoNil => b.finish().reverse(), CoCons(c) => cb_out_list(c.next, b.push(c.b)) };
+List(Int) ce_ints(List(UInt(8)) bs, Int i, ListBuf(Int) acc) {
+    if (i >= bs.len()) { return acc.finish(); }
+    return ce_ints(bs, i + 1, acc.push((Int) bs[i]));
 }
 
 // Internal writes cannot fail, so they carry no Result: the verbs below
-// are the only place the format can report one.
+// are the only place the format can report one. What they store is in
+// 0..255: a head, tag or simple byte, a byte the verbs checked (ce_bytes,
+// ce_byte), or a code point's UTF-8 (ce_str_char checks the code point).
+// The conversion is checked anyway: a value out of range is a bug here,
+// and it stops the program rather than wrap into another value's bytes.
 CborEnc ce_push(CborEnc e, Int b) {
-    CoCell c = CoCell {.next = e.out, .b = b};
-    return CborEnc {.out = CoCons(c)};
+    List(UInt(8)) one = [(UInt(8)) b];
+    return CborEnc {.out = e.out.concat(one)};
 }
 
+/// Bytes `bs` from `i` on, appended in one piece.
 CborEnc ce_push_all(CborEnc e, List(Int) bs, Int i) {
     if (i >= bs.len()) { return e; }
-    return ce_push_all(ce_push(e, bs[i]), bs, i + 1);
+    return CborEnc {.out = e.out.concat(ce_u8(bs, i, ListBuf()))};
+}
+
+List(UInt(8)) ce_u8(List(Int) bs, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= bs.len()) { return acc.finish(); }
+    return ce_u8(bs, i + 1, acc.push((UInt(8)) bs[i]));
 }
 
 CborEnc ce_head(CborEnc e, Int major, UInt(64) arg) { return ce_push_all(e, cb_head(major, arg), 0); }
@@ -73,9 +83,11 @@ CborEnc ce_head(CborEnc e, Int major, UInt(64) arg) { return ce_push_all(e, cb_h
 // A text string carrying a string's own bytes: a struct field name, a map
 // key, or a string value.
 CborEnc ce_text(CborEnc e, Str key) {
-    List(Int) bytes = cb_str_bytes(key);
+    ListBuf(UInt(8)) b = ListBuf();
+    List(UInt(8)) bytes = resid_bytes_append_str(b, key).finish();
     Int n = bytes.len();
-    return ce_push_all(ce_head(e, 3, (UInt(64))n), bytes, 0);
+    CborEnc h = ce_head(e, 3, (UInt(64))n);
+    return CborEnc {.out = h.out.concat(bytes)};
 }
 
 Result(CborEnc, SerialError) ce_unit(CborEnc e) { return Ok(ce_push(e, 0xF6)); }
@@ -141,15 +153,38 @@ Result(CborEnc, SerialError) ce_float(CborEnc e, Float v) {
 }
 
 Result(CborEnc, SerialError) ce_str(CborEnc e, Str v) { return Ok(ce_text(e, v)); }
-Result(CborEnc, SerialError) ce_bytes(CborEnc e, List(Int) v) { return Ok(ce_push_all(ce_head(e, 2, cb_len(v)), v, 0)); }
+// A byte outside 0..255 is refused, as the decoders refuse one
+// (serial.resid's dec_fixed_bytes_at), rather than written wrapped: two
+// different values never get one encoding.
+Result(CborEnc, SerialError) ce_bytes(CborEnc e, List(Int) v) {
+    Int bad = ce_bad_byte(v, 0);
+    if (bad >= 0) { return Err(invalid_value(f"{v[bad]}", "a byte")); }
+    return Ok(ce_push_all(ce_head(e, 2, cb_len(v)), v, 0));
+}
+
+// The index of the first element of v from i on that is not a byte, or -1.
+Int ce_bad_byte(List(Int) v, Int i) {
+    if (i >= v.len()) { return -1; }
+    if (v[i] < 0 || v[i] > 255) { return i; }
+    return ce_bad_byte(v, i + 1);
+}
 
 // A streamed string was promised its byte length up front, so its head can
 // be written before the first code point.
 Result(CborEnc, SerialError) ce_str_begin(CborEnc e, Int chars, Int bytes) { return Ok(ce_head(e, 3, (UInt(64))bytes)); }
-Result(CborEnc, SerialError) ce_str_char(CborEnc e, Int cp) { return Ok(ce_push_all(e, cb_cp_bytes(cp), 0)); }
+// A Unicode scalar value only: not negative, at most U+10FFFF, and not a
+// surrogate. Any other Int would wrap into a valid-looking encoding that
+// another value also has (cp and cp + 2^26 shared one) or be ill-formed.
+Result(CborEnc, SerialError) ce_str_char(CborEnc e, Int cp) {
+    if (cp < 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) { return Err(invalid_value(f"{cp}", "a code point")); }
+    return Ok(ce_push_all(e, cb_cp_bytes(cp), 0));
+}
 Result(CborEnc, SerialError) ce_str_end(CborEnc e) { return Ok(e); }
 Result(CborEnc, SerialError) ce_bytes_begin(CborEnc e, Int len) { return Ok(ce_head(e, 2, (UInt(64))len)); }
-Result(CborEnc, SerialError) ce_byte(CborEnc e, Int b) { return Ok(ce_push(e, b)); }
+Result(CborEnc, SerialError) ce_byte(CborEnc e, Int b) {
+    if (b < 0 || b > 255) { return Err(invalid_value(f"{b}", "a byte")); }
+    return Ok(ce_push(e, b));
+}
 Result(CborEnc, SerialError) ce_bytes_end(CborEnc e) { return Ok(e); }
 
 // None is null and Some(v) is v: an option is the value itself.

@@ -83,7 +83,9 @@ Int map_enter(Int m) {
 
 Int map_leave(Int prev) { return st64(map_heap_w(), prev) + region_done(); }
 
-Int map_obj_free(Int p) { return if (p != 0 && !in_region(p) && ld64(p - 16) != 63) { c_free(p) } else { 0 }; }
+// Only heap memory is freed: never a region page's, owned or not (one
+// region_abandon left to the program has no owner, like a freed one).
+Int map_obj_free(Int p) { return if (p != 0 && !rg_in_range(p) && ld64(p - 16) != 63) { c_free(p) } else { 0 }; }
 
 Int raw_empty() { return 0 - 9223372036854775807 - 1; }
 Int raw_tomb() { return 0 - 9223372036854775807; }
@@ -1204,14 +1206,16 @@ Int map_remove_p(Int m, Int rk, Int kb) {
 }
 
 // Stamps are unique process-wide: each thread takes blocks of 65536 from a
-// global counter; past 2^32 they are 0 (appends never in place again).
+// global counter; past 2^31 they are 0 (appends never in place again), so
+// no stamp has bit 31 set and none equals a frozen header's word at 12
+// (the frozen mark and a debt, frozen_from).
 Int own_w() { return resid_raw_tls("map_own", 16); }
 
 Int new_own() {
     Int w = own_w();
     _ = if (ld64(w) == ld64(w + 8)) { own_block(w) } else { 0 };
     Int nx = ld64(w);
-    if (nx > 4294967295) { return 0; }
+    if (nx > 2147483647) { return 0; }
     return st64(w, nx + 1) * 0 + nx;
 }
 
@@ -2370,7 +2374,7 @@ pub Int rt_list_rec_slot(Int l, Int owned, Int i, Int w) {
 Int list_rec_slot_slow(Int l, Int owned, Int i, Int w) {
     Int n = lelems(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    Bool keep = owned != 0 && !no_thaw(l);
+    Bool keep = owned != 0 && !no_thaw_cost(l, lcount(l));
     Int t = if (keep && ltransient(l)) { l } else { with_fresh(l, 0) };
     if (keep) { return t; }
     _ = st32(t + 8, 0 - 1);
@@ -2417,7 +2421,7 @@ Int list_set_rec_slow(Int l, Int owned, Int i, Int r, Int w) {
     Int n = lelems(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
     // A record list is always flat: a shared one is copied whole.
-    Bool keep = owned != 0 && !no_thaw(l);
+    Bool keep = owned != 0 && !no_thaw_cost(l, lcount(l));
     Int t = if (keep && ltransient(l)) { l } else { with_fresh(l, 0) };
     _ = mcopy(lroot(t) + 32 + i * w * 8, r, (w - 1) * 8);
     if (keep) { return t; }
@@ -2431,7 +2435,7 @@ Int list_set_slow(Int l, Int owned, Int i, Int w) {
     if (lbytes(l)) { return bl_set_slow(l, owned, i, w); }
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    if (owned != 0 && no_thaw(l)) { return mark_frozen(with_shared(l, i, w)); }
+    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return frozen_from(with_shared(l, i, w), l, path_cost(l)); }
     if (owned == 0) { return with_shared(l, i, w); }
     Int t = if (ltransient(l)) { l } else { with_fresh(l, 0) };
     return st64(lroot(t) + 24 + i * 8, w) * 0 + t;
@@ -2439,7 +2443,8 @@ Int list_set_slow(Int l, Int owned, Int i, Int w) {
 
 // xs.fill(from, n, x) (spec §17): slots from..from+n hold x's word (w on
 // raw slots, W1). Owned and transient, the slots are written in place;
-// otherwise the list is copied once into a fresh transient and filled.
+// otherwise the list is copied once and filled: into a fresh transient
+// when the update is owned, else into a frozen copy (fill_target).
 @export("resid_list_fill_w", "ptr(ptr,i8,i64,i64,i64)")
 pub Int rt_list_fill_w(Int l, Int owned, Int from, Int n, Int w) {
     if (lbytes(l)) { return bl_fill(l, owned, from, n, w); }
@@ -2465,12 +2470,23 @@ Int fill_target(Int l, Int owned, Int from, Int n) {
     if (from < 0 || from > c) { return rt_index_abort(from, c, 0); }
     if (n < 0 || n > c - from) { return rt_index_abort(from + n, c, 0); }
     if (n == 0 || (owned != 0 && ltransient(l))) { return l; }
-    return with_fresh(l, 0);
+    // A copy for an update that is not owned is an ordinary value, as
+    // with_shared's is: left transient, a callee's owned update of it would
+    // write in place what every name bound to the fill sees.
+    Int t = with_fresh(l, 0);
+    return (if (owned == 0) { st32(t + 8, 0 - 1) } else { 0 }) * 0 + t;
 }
 
-// xs.grow(n, x): a new transient list of xs's elements then n copies of
-// w. k is the raw slot kind of the element type (0 for tagged words); an
-// empty list may not know its kind yet (`[]`), so it takes k.
+// xs.grow(n, x): xs's elements then n copies of w. k is the raw slot kind
+// of the element type (0 for tagged words); an empty list may not know its
+// kind yet (`[]`), so it takes k. A flat list that is its buffer's tip
+// shares the buffer as an append does (append_core): the new slots are
+// claimed atomically past every header's count, so xs still sees only its
+// own elements, and a buffer without room is copied doubled. A run of grows
+// is so amortized O(1) an element, as concat is, and leaves no copy behind
+// per call. Any other list (empty, transient, a trie) is copied into a
+// fresh buffer, doubled, that the next grow can share; a list of inline
+// records into a copy of its own (frozen: a grow is never owned).
 @export("resid_list_grow_w", "ptr(ptr,i64,i64,i64)")
 pub Int rt_list_grow_w(Int l, Int n, Int w, Int k) { return if (k == 4 || k == 5 || lbytes(l)) { bl_grow_list(l, n, w) } else { list_grow(l, n, w, k) }; }
 
@@ -2483,11 +2499,24 @@ Int list_grow(Int l, Int n, Int w, Int k) {
     // c + n stays within flat_new's largest capacity.
     if (n > 1152921504606846972 - c) { return rt_index_abort(n, c, 0); }
     if (n == 0) { return l; }
+    if (rec_words(ltype(l)) == 0) { return grow_tip(l, c, n, w, k); }
+    // A grow is never owned: its copy is frozen, as grow_tip's result is.
     Int t = with_fresh(l, n);
     Int f = lroot(t);
     _ = words_fill(f + 24 + c * 8, n, w);
-    _ = st64(f, c + n) + st64(f + 16, c + n) + st64(t, c + n);
+    _ = st64(f, c + n) + st64(f + 16, c + n) + st64(t, c + n) + st32(t + 8, 0 - 1);
     return sync_elems(if (c == 0 && k != 0) { st64(t + 24, k) * 0 + t } else { t });
+}
+
+Int grow_tip(Int l, Int c, Int n, Int w, Int k) {
+    Int f = if (c > 0 && lflat(l)) { lroot(l) } else { 0 };
+    Bool tip = f != 0 && !ltransient(l) && c + n <= ld64(f + 8) && resid_raw_cas(f, c, c + n);
+    Int dst = if (tip) { f } else { flat_new((c + n) * 2) };
+    _ = if (!tip && f != 0) { mcopy(dst + 24, f + 24, c * 8) } else { 0 };
+    _ = if (!tip && f == 0) { with_fill(l, dst, 0, c) } else { 0 };
+    _ = if (!tip) { st64(dst, c + n) } else { 0 };
+    _ = words_fill(dst + 24 + c * 8, n, w);
+    return set_list(list_hdr(), c + n, 0 - 1, dst, if (c == 0 && k != 0) { k } else { ltype(l) });
 }
 
 // n words at p, all w: the first stored, then doubled by copies of at
@@ -2510,7 +2539,7 @@ Int words_dup(Int p, Int have, Int n) {
 Int list_with_slow(Int l, Int owned, Int i, Int v) {
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    if (owned != 0 && no_thaw(l)) { return mark_frozen(with_shared(l, i, v)); }
+    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return frozen_from(with_shared(l, i, v), l, path_cost(l)); }
     Int t = if (owned == 0 || ltransient(l)) { l } else { with_fresh(l, 0) };
     if (owned == 0) { return with_shared(l, i, v); }
     Int f = lroot(t);
@@ -2547,7 +2576,7 @@ pub Int rt_list_with_fh(Int l, Int owned, Int i, Int v, Int ek) {
 Int list_with_fh_slow(Int l, Int owned, Int i, Int v, Int ek) {
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    if (owned != 0 && no_thaw(l)) { return mark_frozen(with_shared(l, i, v)); }
+    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return frozen_from(with_shared(l, i, v), l, path_cost(l)); }
     if (owned == 0) { return with_shared(l, i, v); }
     Int t = if (ltransient(l)) { l } else { with_fresh_f(l, 0) };
     Int f = lroot(t);
@@ -2574,11 +2603,45 @@ pub Bool no_thaw(Int l) { return !ltransient(l) && lcount(l) > fresh_max() && (l
 
 pub Int mark_frozen(Int l) { return st32(l + 12, ld32(l + 12) | 2147483648) * 0 + l; }
 
+// An owned update of a list frozen before takes the persistent path only
+// while what those copies have cost this list stays below its size; the
+// update that reaches it thaws the list instead (one whole copy into a
+// transient, written in place from then on). A loop updating a large list
+// it owns, which a call boundary froze, so stops copying after about one
+// copy's worth of paths (before, every update copied a path, and the old
+// paths stayed in a loop without a region); a parser's node list, thawed
+// and refrozen by every call, still mostly copies a path, and the thaws
+// cost at most what the paths did. `cost` is the persistent copy's size
+// in words: a path, or the whole list when that copy is whole.
+//
+// The debt is the list's own: bits 0..30 of its header's word at 12 (bit
+// 31 is the frozen mark), carried to each persistent result by
+// frozen_from. Only a trie keeps one: a flat list's copy is whole, so it
+// thaws at once, and an inline-record list (whose element count those
+// bits hold) is always flat. A debt kept per thread let one list's thaw
+// reset another's, which then copied a path at every update for good. A
+// list a map stamped (resid_map_list_push) before it froze starts with
+// that stamp as its debt, which only thaws it sooner.
+pub Int thaw_debt(Int l) { return ld32(l + 12) & 2147483647; }
+
+pub Bool no_thaw_cost(Int l, Int cost) { return no_thaw(l) && thaw_debt(l) + cost < min(lcount(l), 2147483647); }
+
+// The frozen persistent result r of an owned update of l that copied
+// `cost` words: marked, with l's debt and that cost.
+pub Int frozen_from(Int r, Int l, Int cost) {
+    if (rec_words(ltype(r)) != 0) { return mark_frozen(r); }
+    return st32(r + 12, 2147483648 | min(thaw_debt(l) + cost, 2147483647)) * 0 + r;
+}
+
+// What with_shared copies: a flat list becomes a trie (all of it), a
+// trie copies a leaf and a node a level above it.
+pub Int path_cost(Int l) { return if (lflat(l)) { lcount(l) } else { 40 + lshift(l) * 8 }; }
+
 @noinline
 Int list_with_f_slow(Int l, Int owned, Int i, Int v, Int ek) {
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
-    if (owned != 0 && no_thaw(l)) { return mark_frozen(with_shared(l, i, v)); }
+    if (owned != 0 && no_thaw_cost(l, path_cost(l))) { return frozen_from(with_shared(l, i, v), l, path_cost(l)); }
     if (owned == 0) { return with_shared(l, i, v); }
     Int t = if (ltransient(l)) { l } else { with_fresh(l, 0) };
     Int f = lroot(t);
@@ -2607,7 +2670,7 @@ pub Int rt_list_concat_own(Int a, Int owned, Int b0) {
     if (lbytes(a) || lbytes(b0)) { return bl_concat_own(a, owned, b0); }
     Int b = cat_like(a, b0);
     Int m = lcount(b);
-    if (owned != 0 && no_thaw(a)) { return mark_frozen(rt_list_concat(a, b)); }
+    if (owned != 0 && no_thaw(a)) { return frozen_from(rt_list_concat(a, b), a, 0); }
     if (owned == 0) { return rt_list_concat(a, b); }
     if (m == 0) { return a; }
     Int n = lcount(a);
@@ -2640,7 +2703,7 @@ pub Int rt_list_push_own(Int a, Int w, Int k) {
 @noinline
 Int list_push_own_slow(Int a, Int w, Int k) {
     if (k == 4 || k == 5 || lbytes(a)) { return rt_bl_push_own(a, w); }
-    if (no_thaw(a)) { return mark_frozen(rt_list_push_k(a, w, k)); }
+    if (no_thaw(a)) { return frozen_from(rt_list_push_k(a, w, k), a, 0); }
     Int n = lcount(a);
     Int t = if (ltransient(a)) { a } else { with_fresh(a, max(4, n)) };
     _ = if (n == 0 && !raw_kind(ltype(a))) { st64(t + 24, k) } else { 0 };
@@ -2675,7 +2738,7 @@ Int with_grow(Int t, Int f0, Int n, Int need) {
 @export("resid_list_concat_own_f", "ptr(ptr,i8,ptr,ptr)")
 pub Int rt_list_concat_own_f(Int a, Int owned, Int b, Int ek) {
     Int m = lcount(b);
-    if (owned != 0 && no_thaw(a)) { return mark_frozen(rt_list_concat(a, b)); }
+    if (owned != 0 && no_thaw(a)) { return frozen_from(rt_list_concat(a, b), a, 0); }
     if (owned == 0) { return rt_list_concat(a, b); }
     if (m == 0) { return a; }
     Int n = lcount(a);
@@ -2692,7 +2755,7 @@ pub Int rt_list_concat_own_f(Int a, Int owned, Int b, Int ek) {
 @export("resid_list_concat_own_fh", "ptr(ptr,i8,ptr,ptr)")
 pub Int rt_list_concat_own_fh(Int a, Int owned, Int b, Int ek) {
     Int m = lcount(b);
-    if (owned != 0 && no_thaw(a)) { return mark_frozen(rt_list_concat(a, rt_list_share_f(b))); }
+    if (owned != 0 && no_thaw(a)) { return frozen_from(rt_list_concat(a, rt_list_share_f(b)), a, 0); }
     if (owned == 0) { return rt_list_concat(a, rt_list_share_f(b)); }
     if (m == 0) { return a; }
     Int n = lcount(a);

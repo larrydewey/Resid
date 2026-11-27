@@ -1,0 +1,10 @@
+fill Int: 9 5 0 | -21 -26
+fill Str: s0 f s5 s1 | x x
+fill Float: 2.25 5 0 | 0.5 0.5
+fill Bool: true true true false | false false
+fill UInt(8): 9 5 0 | 250 250
+fill Int(32): 9 5 0 | -7 -7
+fill held: 8 0 | -23
+records: 0 5 2 1 | 99 21
+grow: 0 9 0 23 0 9 0 | -47 250
+others: 0 5 0 2 2 0 5 0 1 | -21 -44 -9 250

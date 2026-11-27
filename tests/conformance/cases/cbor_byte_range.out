@@ -1,0 +1,10 @@
+err invalid value 256, expected a byte
+ok [65, 0]
+err invalid value -1, expected a byte
+ok [67, 0, 128, 255]
+err invalid value -1, expected a byte
+err invalid value 256, expected a byte
+ok [67, 7, 0, 255]
+err invalid value 300, expected a byte
+err invalid value -1, expected a code point; err invalid value 55296, expected a code point; err invalid value 57343, expected a code point; err invalid value 1114112, expected a code point; err invalid value 68157441, expected a code point; err invalid value 9223372036854775807, expected a code point
+ok [97, 65]; ok [98, 195, 169]; ok [99, 237, 159, 191]; ok [99, 238, 128, 128]; ok [100, 244, 143, 191, 191]

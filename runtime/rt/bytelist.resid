@@ -265,7 +265,8 @@ pub Int bl_set_slow(Int l0, Int owned, Int i, Int w) {
     Int n = lcount(l0);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
     Int l = bl_norm(l0);
-    if (owned != 0 && no_thaw(l)) { return mark_frozen(bl_with_copy(l, i, w)); }
+    // A copy is whole either way: thawed (no_thaw_cost), it is the last.
+    if (owned != 0 && no_thaw_cost(l, lcount(l))) { return mark_frozen(bl_with_copy(l, i, w)); }
     if (owned == 0) { return bl_with_copy(l, i, w); }
     Int t = if (ltransient(l)) { l } else { bl_fresh(l, 0) };
     return st8(bl_data(t) + i, w) * 0 + t;
@@ -326,6 +327,8 @@ pub Int bl_fill(Int l0, Int owned, Int from, Int n, Int w) {
     Int l = bl_norm(l0);
     if (n == 0) { return l; }
     Int t = if (owned != 0 && ltransient(l)) { l } else { bl_fresh(l, 0) };
+    // Not owned: the copy is frozen (fill_target in map.resid).
+    _ = if (owned == 0) { st32(t + 8, 0 - 1) } else { 0 };
     return resid_raw_fill(bl_data(t) + from, w & 255, n) * 0 + t;
 }
 
@@ -337,11 +340,17 @@ pub Int bl_grow_list(Int l0, Int n, Int w) {
     if (n > 4611686018427387904 - c) { return rt_index_abort(n, c, 0); }
     Int l = bl_norm(l0);
     if (n == 0) { return l; }
-    Int t = bl_fresh(l, n);
-    Int f = lroot(t);
-    _ = resid_raw_fill(f + 24 + c, w & 255, n);
-    _ = st64(f, c + n) + st64(f + 16, c + n);
-    return st64(t, c + n) * 0 + t;
+    // A tip shares its buffer, as an append does (map.resid, list_grow).
+    return bl_grow_tip(l, c, n, w, bl_kind(l0));
+}
+
+Int bl_grow_tip(Int l, Int c, Int n, Int w, Int k) {
+    Int f = if (c > 0) { lroot(l) } else { 0 };
+    Bool tip = f != 0 && !ltransient(l) && c + n <= ld64(f + 8) && resid_raw_cas(f, c, c + n);
+    Int dst = if (tip) { f } else { bl_flat_new((c + n) * 2) };
+    _ = if (!tip) { (if (c > 0) { mcopy(dst + 24, f + 24, c) } else { 0 }) + st64(dst, c + n) } else { 0 };
+    _ = resid_raw_fill(dst + 24 + c, w & 255, n);
+    return bl_hdr(c + n, 0 - 1, dst, k);
 }
 
 // ─── Builders ──────────────────────────────────────────────────────────

@@ -1,0 +1,62 @@
+// CBOR byte strings take bytes, 0..255 (lib/cbor.resid, ce_bytes and
+// ce_byte): a value outside that range is refused with invalid_value, as
+// the decoders refuse one, rather than wrapped into a valid-looking
+// encoding that another value also has. In-range bytes encode as before.
+// Text streamed a code point at a time (ce_str_char) takes Unicode scalar
+// values only: a negative one, a surrogate or one past U+10FFFF is refused
+// the same way. Before, 0x4100001 encoded as U+100001 does and -1 as the
+// byte 255.
+import "cbor.resid";
+import "serial_value.resid";
+
+// A byte string streamed one byte at a time (write_byte).
+type Raw = { Int a; Int b; };
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_raw(Raw x, F s) {
+    F s1 = write_bytes_begin(s, 3)?;
+    F s2 = write_byte(s1, x.a)?;
+    F s3 = write_byte(s2, x.b)?;
+    F s4 = write_byte(s3, 255)?;
+    return write_bytes_end(s4);
+}
+Encode(Raw, F) = enc_raw;
+
+// One code point streamed as a text string (write_str_char).
+type Cp = { Int c; };
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_cp(Cp x, F s) {
+    F s1 = write_str_begin(s, 1, utf8_width(x.c))?;
+    F s2 = write_str_char(s1, x.c)?;
+    return write_str_end(s2);
+}
+Encode(Cp, F) = enc_cp;
+
+Str shw(Result(List(Int), SerialError) r) {
+    return match (r) { Ok(b) => f"ok {b}", Err(e) => "err " + e.msg };
+}
+
+Str cps_text(List(Int) cs, Int i, Str acc) {
+    if (i >= cs.len()) { return acc; }
+    return cps_text(cs, i + 1, acc + (if (i > 0) { "; " } else { "" }) + shw(to_cbor(Cp {.c = cs[i]})));
+}
+
+// k is 1 (the program's own name): values the compiler cannot fold.
+@requires(args)
+Int main() {
+    Int k = args.count();
+    println(shw(to_cbor(VBytes([256 * k]))));
+    println(shw(to_cbor(VBytes([0 * k]))));
+    println(shw(to_cbor(VBytes([1, 2, 0 - k, 255]))));
+    println(shw(to_cbor(VBytes([0, 128 * k, 255]))));
+    println(shw(to_cbor(Raw {.a = 0 - k, .b = 1})));
+    println(shw(to_cbor(Raw {.a = 1, .b = 255 + k})));
+    println(shw(to_cbor(Raw {.a = 7 * k, .b = 0})));
+    println(shw(to_cbor(VSeq([VInt(k), VBytes([300])]))));
+    List(Int) cps = [0 - k, 0xD800 * k, 0xDFFF * k, 0x110000 * k, 0x4100001 * k, 0x7FFFFFFFFFFFFFFF * k];
+    List(Int) good = [0x41 * k, 0xE9 * k, 0xD7FF * k, 0xE000 * k, 0x10FFFF * k];
+    println(cps_text(cps, 0, ""));
+    println(cps_text(good, 0, ""));
+    return 0;
+}

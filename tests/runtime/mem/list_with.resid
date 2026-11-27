@@ -1,0 +1,47 @@
+// Owned xs.with on a large list a call boundary froze (runtime/rt/map.resid,
+// no_thaw_cost). The loops are written `return if ... else { loop(...) }`,
+// which gets no loop region, so what a step leaves behind is never freed:
+// after about one copy's worth of path copies the list is thawed and then
+// written in place. Before, every update of a frozen list of more than 256
+// elements copied a path for good (375-650 bytes a step: 374 MB for the
+// first loop). run.sh sets RESID_MEM_LIMIT=32.
+List(Int) mk(List(Int) xs, Int i, Int n) { return if (i >= n) { xs } else { mk(xs.concat([i]), i + 1, n) }; }
+List(Int) with_loop(List(Int) xs, Int i, Int n, Int len) { return if (i >= n) { xs } else { with_loop(xs.with(i % len, i), i + 1, n, len) }; }
+List(UInt(8)) with_bytes(List(UInt(8)) xs, Int i, Int n) { return if (i >= n) { xs } else { with_bytes(xs.with(i % 1000, (UInt(8)) (i % 251)), i + 1, n) }; }
+List(UInt(8)) zeros(List(UInt(8)) xs, Int n) { return if (xs.len() >= n) { xs } else { zeros(xs.concat([(UInt(8)) 0]), n) }; }
+
+// Each owned update of a frozen list counts against that list's own debt.
+// touch thaws a small frozen list s (more than 256 elements, flat: its copy
+// is whole) every 25 steps of an update loop on a large frozen trie (an
+// owned concat of a frozen list that is no longer its buffer's tip, as a
+// parser's node list beside a long-lived table). Before, the debt was one
+// per thread and s's thaw reset it, so the trie never thawed and copied a
+// path at every step, for good (about 750 bytes a step: 87 MB here, over
+// the limit; red team memRT-lists-1). Now the whole run takes 3 MB.
+List(Int) oc(List(Int) xs) { return xs.concat([7]); }
+Int touch(List(Int) xs, Int v) { List(Int) ys = xs.with(v % 3, v); return ys[0]; }
+List(Int) with_touch(List(Int) xs, List(Int) s, Int i, Int n, Int len) {
+    Int z = if (i % 25 == 0) { touch(s, i) * 0 } else { 0 };
+    return if (i >= n) { xs } else { with_touch(xs.with(i % len, i + z), s, i + 1, n, len) };
+}
+
+// The loops run inside an if expression, whose branches freeze the list
+// they pass (as BurrowDB's did). The sizes come from the argument count
+// (1), so the compiler cannot work the loops out ahead.
+@requires(args)
+Int main() {
+    Int k = args.count();
+    List(UInt(8)) z = [];
+    List(Int) a = if (k > 0) { with_loop(mk([], 0, 257 * k), 0, 1000000 * k, 257) } else { [] };
+    List(Int) b = if (k > 0) { with_loop(mk([], 0, 5000 * k), 0, 1000000 * k, 5000) } else { [] };
+    List(UInt(8)) g = if (k > 0) { with_bytes(zeros(z, 1000 * k), 0, 1000000 * k) } else { z };
+    List(Int) sa = if (k > 0) { mk([], 0, 300 * k) } else { [] };
+    List(Int) sa_tip = sa.concat([1]);
+    List(Int) s = if (k > 0) { oc(sa) } else { [] };
+    List(Int) ta = if (k > 0) { mk([], 0, 5000 * k) } else { [] };
+    List(Int) ta_tip = ta.concat([1]);
+    List(Int) t = if (k > 0) { with_touch(oc(ta), s, 0, 100000 * k, 5000) } else { [] };
+    println(f"{a.len()} {a[7]} {b[4999]} {g[999]}");
+    println(f"{t.len()} {t[4999]} {t[5000]} {s[0]} {sa_tip[300]} {ta_tip[5000]}");
+    return 0;
+}

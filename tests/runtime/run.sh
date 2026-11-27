@@ -459,6 +459,140 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/iter_loops.resid -o "$W/iter_loo
 else
     fail=$((fail + 1)); echo "FAIL for and while loop regions: $(grep -m1 -i error "$W/iter_loops.log")"
 fi
+# str_repeat's result is region memory (strutil.resid), so a loop and a
+# scoped recursion that pad with it keep none of it. Measured: 4 MB; the
+# runtime that took it from the heap kept every one (250 MB).
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/str_repeat.resid -o "$W/str_repeat") > "$W/str_repeat.log" 2>&1 \
+    && RESID_MEM_LIMIT=24 timeout 120 "$W/str_repeat" > "$W/str_repeat.out" 2>&1 \
+    && [ "$(tr '\n' ' ' < "$W/str_repeat.out")" = "137500000 23976000 xyxyxy " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL str_repeat in a loop: $(tail -1 "$W/str_repeat.out" "$W/str_repeat.log" 2>/dev/null | tr '\n' ' ')"
+fi
+# Spawned regions in a loop (ctl.resid, Structured spawn): control blocks,
+# each job's garbage and an aborted job's memory are given back at the
+# join, and a job past the memory budget fails alone. Measured: 66 MB, the
+# budget the memory bomb runs into; before, the first loop alone kept
+# 120 MB and the bomb aborted the process.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/spawn_jobs.resid -o "$W/spawn_jobs") > "$W/spawn_jobs.log" 2>&1 \
+    && RESID_MEM_LIMIT=64 timeout 120 "$W/spawn_jobs" > "$W/spawn_jobs.out" 2>&1 \
+    && [ "$(tr '\n' ' ' < "$W/spawn_jobs.out")" = "599997 -100000 40000780 4999950000 -2 3003 " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL spawned regions in a loop: $(tail -1 "$W/spawn_jobs.out" "$W/spawn_jobs.log" 2>/dev/null | tr '\n' ' ')"
+fi
+# Spawns made at depth 0 whose results point into the job's region
+# (ctl.resid, resid_spawn_out): the job's return moves the result to the
+# heap and the job frees its region, and the join frees the control
+# block. 300k string results, 20k lists and 20k records: 35 MB; before,
+# each join kept the job's region page (the budget ran out after about
+# 12k spawns; without one, the region range ran out at 262k, 1.6 GB).
+# 5k options and 5k lists of closures too: a container of closures was
+# moved as a closure (a list crashed; an option kept the job's region).
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/spawn_depth0.resid -o "$W/spawn_depth0") > "$W/spawn_depth0.log" 2>&1 \
+    && RESID_MEM_LIMIT=48 timeout 300 "$W/spawn_depth0" > "$W/spawn_depth0.out" 2>&1 \
+    && [ "$(cat "$W/spawn_depth0.out")" = "ok ok ok ok ok" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL depth-0 spawns returning region values: $(tail -1 "$W/spawn_depth0.out" "$W/spawn_depth0.log" 2>/dev/null | tr '\n' ' ')"
+fi
+# Owned updates of a large list a call froze (map.resid, no_thaw_cost):
+# after about one copy's worth of path copies the list is thawed and then
+# written in place, in loops that have no region. Measured: under 1 MB;
+# before, each update copied a path for good (1.2 GB). The debt is each
+# list's own: another list's thaw every 25 steps does not reset it (3 MB;
+# with one debt per thread, 87 MB).
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/list_with.resid -o "$W/list_with") > "$W/list_with.log" 2>&1 \
+    && RESID_MEM_LIMIT=32 timeout 120 "$W/list_with" > "$W/list_with.out" 2>&1 \
+    && [ "$(tr '\n' ' ' < "$W/list_with.out")" = "257 999994 999999 15 5001 99999 7 0 1 1 " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL owned updates of a frozen list: $(tail -1 "$W/list_with.out" "$W/list_with.log" 2>/dev/null | tr '\n' ' ')"
+fi
+# xs.grow shares its buffer's tip as an append does (map.resid,
+# list_grow), so a run of grows is amortized and leaves no copies behind.
+# Measured: 30 MB; before, every grow copied the list (over 13 GB here).
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/list_grow.resid -o "$W/list_grow") > "$W/list_grow.log" 2>&1 \
+    && RESID_MEM_LIMIT=48 timeout 120 "$W/list_grow" > "$W/list_grow.out" 2>&1 \
+    && [ "$(tr '\n' ' ' < "$W/list_grow.out")" = "50000 49999 101000 999 140010 19999 900000 223 " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL grow in a loop: $(tail -1 "$W/list_grow.out" "$W/list_grow.log" 2>/dev/null | tr '\n' ' ')"
+fi
+# RESID_MEM_LIMIT charges memory as it is handed out (malloc.resid,
+# mem_charge): 1-1.2 GB allocations (str_repeat, str_replace, grow) are
+# refused before they are touched, as Err(RegionError) in a spawn and by
+# the budget's abort at the top level, and the peak stays under the limit:
+# 20 MB. Before, a large fresh mapping was not resident yet and went
+# through (1.1 GB resident under a 100 MB limit).
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/big_alloc.resid -o "$W/big_alloc") > "$W/big_alloc.log" 2>&1 \
+    && python3 -I -c '
+import resource, subprocess, sys, os
+r = subprocess.run([sys.argv[1]], capture_output=True, text=True, timeout=120, env=dict(os.environ, RESID_MEM_LIMIT="100"))
+peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+ok = r.returncode != 0 and r.stdout == "refused refused refused ok 20000000 ok 20000000\n" and "memory budget exceeded (100 MB)" in r.stdout + r.stderr and peak < 100 * 1024
+print(f"rc {r.returncode} peak {peak} KB: {r.stdout.strip()} {r.stderr.strip()}")
+sys.exit(0 if ok else 1)' "$W/big_alloc" > "$W/big_alloc.out" 2>&1; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL large allocations under RESID_MEM_LIMIT: $(tail -1 "$W/big_alloc.out" "$W/big_alloc.log" 2>/dev/null | tr '\n' ' ')"
+fi
+# RESID_MEM_LIMIT under concurrent spawns (malloc.resid mem_take,
+# region.resid page_charge): 100 jobs that each fill a fresh region page
+# after a sleep; the ones past the budget get Err(RegionError) and the
+# peak stays under the limit plus 8 MB. The 8 MB is this test's slack for
+# what the budget does not charge (its jobs' small thread stacks, the
+# runtime's tables), not a general bound: stacks are outside the budget,
+# up to RESID_SPAWN_STACK_MB for each concurrent spawn. Measured 31-38
+# MB. Then three sequential 20 MB jobs must run: once half the budget is
+# charged, no idle worker keeps freed pages charged.
+# Before: every job ran, 83 MB resident under 50, and the three were
+# refused.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/spawn_budget.resid -o "$W/spawn_budget") > "$W/spawn_budget.log" 2>&1 \
+    && python3 -I -c '
+import re, resource, subprocess, sys, os
+r = subprocess.run([sys.argv[1]], capture_output=True, text=True, timeout=120, env=dict(os.environ, RESID_MEM_LIMIT="50"))
+peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+m = re.fullmatch(r"burst 100 ok (\d+) refused (\d+)\nafter ok 3 refused 0\n", r.stdout)
+ok = r.returncode == 0 and m is not None and int(m.group(1)) > 0 and int(m.group(2)) > 0 and int(m.group(1)) + int(m.group(2)) == 100 and peak < 58 * 1024
+print(f"rc {r.returncode} peak {peak} KB: {r.stdout.strip()} {r.stderr.strip()}")
+sys.exit(0 if ok else 1)' "$W/spawn_budget" > "$W/spawn_budget.out" 2>&1; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL concurrent spawns under RESID_MEM_LIMIT: $(tail -1 "$W/spawn_budget.out" "$W/spawn_budget.log" 2>/dev/null | tr '\n' ' ')"
+fi
+# The compiler builds the runtime with freed big blocks unmapped at once
+# (malloc.resid, RESID_UNMAP_FREED=1), so a value read after its arena is
+# freed faults instead of finding the old bytes. Before, --runtime-module
+# printed a file name made in the code generator's arena after the arena
+# was popped (driver.resid), and crashed this way (exit 139).
+if (cd "$ROOT" && RESID_UNMAP_FREED=1 timeout 600 "$COMPILER" runtime/rt/rt.resid --runtime-module -o "$W/rt_unmapped") > "$W/rt_unmapped.log" 2>&1 \
+    && grep -q "^wrote $W/rt_unmapped.ll$" "$W/rt_unmapped.log"; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL runtime build with freed blocks unmapped: $(tail -1 "$W/rt_unmapped.log" 2>/dev/null)"
+fi
+# A large object whose page charge the budget refuses (region.resid,
+# lg_new) is linked into its region first, so the pop frees its page.
+# Under ulimit -v the region range is 1024 pages; 1100 jobs are refused
+# for the budget, all of them. Before, each refusal lost a page: after
+# 986 jobs the rest were refused for "region address space exhausted".
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/lg_refused.resid -o "$W/lg_refused") > "$W/lg_refused.log" 2>&1 \
+    && (ulimit -v 2500000; RESID_MEM_LIMIT=40 RESID_SPAWN_STACK_MB=8 timeout 300 "$W/lg_refused") > "$W/lg_refused.out" 2>&1 \
+    && [ "$(cat "$W/lg_refused.out")" = "budget 1100 other 0 then 20" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL refused large objects keep the region range: $(tail -1 "$W/lg_refused.out" "$W/lg_refused.log" 2>/dev/null | tr '\n' ' ')"
+fi
+# CBOR encoding appends packed bytes (lib/cbor.resid): 2 MB encoded in
+# 54 MB. The encoder that kept a cons cell per output byte took 486 MB.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/cbor_bytes.resid -o "$W/cbor_bytes") > "$W/cbor_bytes.log" 2>&1 \
+    && RESID_MEM_LIMIT=96 timeout 120 "$W/cbor_bytes" > "$W/cbor_bytes.out" 2>&1 \
+    && [ "$(cat "$W/cbor_bytes.out")" = "2000005 90 128 0 31 995216952 [162, 97, 97, 131, 1, 33, 98, 195, 188, 97, 98, 66, 0, 255]" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL CBOR encoding of a large byte string: $(tail -1 "$W/cbor_bytes.out" "$W/cbor_bytes.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # Volatile raw loads and stores (lower.resid): two processes pass a counter
 # through a shared page, each polling with resid_raw_loadv64; a plain load
 # is hoisted out of the loop and the program never ends. Built from its own

@@ -1,0 +1,24 @@
+// xs.grow in a loop (runtime/rt/map.resid, list_grow): a list that is its
+// buffer's tip grows into the buffer as an append does, doubled when it is
+// full, so a run of grows costs what a run of concats does and leaves no
+// copy behind. The loops are written `return if ... else { loop(...) }`,
+// which gets no loop region. Before, every grow copied the whole list
+// (quadratic: 1.5 GB and a second for 20000 grows by one, 790 MB for 1000
+// grows of a 100000-element list). run.sh sets RESID_MEM_LIMIT=40.
+List(Int) mk(List(Int) xs, Int i, Int n) { return if (i >= n) { xs } else { mk(xs.concat([i]), i + 1, n) }; }
+List(Int) grow_loop(List(Int) xs, Int i, Int n, Int by) { return if (i >= n) { xs } else { grow_loop(xs.grow(by, i), i + 1, n, by) }; }
+List(UInt(8)) grow_bytes(List(UInt(8)) xs, Int i, Int n) { return if (i >= n) { xs } else { grow_bytes(xs.grow(3, (UInt(8)) (i % 256)), i + 1, n) }; }
+
+// The sizes come from the argument count (1), so the compiler cannot work
+// the loops out ahead.
+@requires(args)
+Int main() {
+    Int k = args.count();
+    List(Int) c = grow_loop(mk([], 0, 0), 0, 50000 * k, 1);
+    List(Int) d = grow_loop(mk([], 0, 100000 * k), 0, 1000, 1);
+    List(Int) e = grow_loop(mk([], 0, 10), 0, 20000 * k, 7);
+    List(UInt(8)) z = [];
+    List(UInt(8)) f = grow_bytes(z, 0, 300000 * k);
+    println(f"{c.len()} {c[49999]} {d.len()} {d[100999]} {e.len()} {e[140009]} {f.len()} {f[899999]}");
+    return 0;
+}

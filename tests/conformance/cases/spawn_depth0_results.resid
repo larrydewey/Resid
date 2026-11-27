@@ -1,0 +1,148 @@
+// Results of spawns made at scope depth 0 (no function here pushes a
+// region): the job's return moves its result out of the job's region to
+// the heap, and the job frees the region (runtime/rt/ctl.resid, Structured
+// spawn; resid_spawn_out). Every kind of result is read back after later
+// jobs have reused the freed pages: strings, lists of words, strings,
+// bytes and records, records holding lists, maps, sums, wide and float
+// scalars, a large string (a run of its own), values the job captured, a
+// closure (moved by its environment's mover), and a result that cannot
+// move (a closure without a mover), whose region the join keeps.
+type Item = { Str name; List(Int) xs; };
+type Shape = Circle(Float) | Label(Str) | Empty;
+
+Str big_text(Int k) {
+    Result(Str, RegionError) r = spawn () { return str_repeat("ab", 400000 * k) + "!"; };
+    return r else { "ERR" };
+}
+
+Str text(Int k, Str cap) {
+    Result(Str, RegionError) r = spawn () { return f"t{k}-" + cap + str_repeat("x", k * 3); };
+    return r else { "ERR" };
+}
+
+List(Int) words(Int k) {
+    Result(List(Int), RegionError) r = spawn () { return [k, k * 2, k * 3].concat([k * 4]); };
+    return r else { [] };
+}
+
+List(Str) strs(Int k, List(Str) cap) {
+    Result(List(Str), RegionError) r = spawn () { return cap.concat([f"s{k}", str_repeat("y", k + 2)]); };
+    return r else { [] };
+}
+
+List(UInt(8)) bytes(Int k) {
+    Result(List(UInt(8)), RegionError) r = spawn () {
+        List(UInt(8)) b = [1, 2, 3];
+        return b.grow(5 * k, (UInt(8)) 9).with(0, (UInt(8)) 200);
+    };
+    return r else { [] };
+}
+
+Item item(Int k) {
+    Result(Item, RegionError) r = spawn () { return Item {.name = f"item{k}", .xs = [k, k + 1, k + 2]}; };
+    return r else { Item {.name = "ERR", .xs = []} };
+}
+
+List(Item) items(Int k) {
+    Result(List(Item), RegionError) r = spawn () { return [Item {.name = f"a{k}", .xs = [1]}, Item {.name = f"b{k}", .xs = [2, 3]}]; };
+    return r else { [] };
+}
+
+List(List(Int)) nested(Int k) {
+    Result(List(List(Int)), RegionError) r = spawn () { return [[k], [k, k], [k, k, k]]; };
+    return r else { [] };
+}
+
+Map(Str, Int) table(Int k) {
+    Result(Map(Str, Int), RegionError) r = spawn () {
+        Map(Str, Int) m = {};
+        return m.insert(f"one{k}", 1).insert(f"two{k}", 2).insert(f"three{k}", 3);
+    };
+    return r else { {} };
+}
+
+Shape shape(Int k) {
+    Result(Shape, RegionError) r = spawn () { return Label(f"label{k}"); };
+    return r else { Empty };
+}
+
+Option(Str) maybe(Int k) {
+    Result(Option(Str), RegionError) r = spawn () { return Some(f"some{k}"); };
+    Option(Str) none = None;
+    return r else { none };
+}
+
+Float frac(Int k) {
+    Result(Float, RegionError) r = spawn () { return (Float) k / 7.0; };
+    return r else { 0.0 - 1.0 };
+}
+
+Int huge(Int k) {
+    Result(Int, RegionError) r = spawn () { return 1152921504606846976 * k + 5; };
+    return r else { 0 - 1 };
+}
+
+Int(128) wide(Int k) {
+    Result(Int(128), RegionError) r = spawn () { return (Int(128)) k * i128(170141183460469231731687303715884105) + i128(7); };
+    return r else { i128(0) };
+}
+
+Str closure(Int) suffixer(Str inner) { return lambda(n) { inner + f":{n}" }; }
+
+Str fn_text(Int k) {
+    Str tag = f"cl{k}";
+    Result(Str closure(Int), RegionError) r = spawn () {
+        return suffixer(tag + str_repeat("z", k));
+    };
+    Str closure(Int) f = r else { suffixer("ERR") };
+    return f(k * 10);
+}
+
+// A fixed-capacity result has no move: the join keeps the job's region.
+Bytes(4) quad(Int k) {
+    Result(Bytes(4), RegionError) r = spawn () { return b"wxyz"; };
+    return r else { b"----" };
+}
+
+// Garbage and more jobs after the joins, so freed pages are reused.
+Str churn(Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    Str s = text(i, "c");
+    return churn(i + 1, n, if (i == n - 1) { s } else { acc });
+}
+
+Str sum_words(List(Int) xs, Int i, Int acc) { return if (i >= xs.len()) { f"{acc}" } else { sum_words(xs, i + 1, acc + xs[i]) }; }
+
+@requires(args)
+Int main() {
+    Int k = args.count();
+    Str cap = f"cap{k}";
+    List(Str) caps = [cap, "shared"];
+    Str bt = big_text(k);
+    Str t = text(k, cap);
+    List(Int) w = words(k);
+    List(Str) ss = strs(k, caps);
+    List(UInt(8)) b = bytes(k);
+    Item it = item(k);
+    List(Item) its = items(k);
+    List(List(Int)) ns = nested(k);
+    Map(Str, Int) m = table(k);
+    Shape sh = shape(k);
+    Option(Str) mb = maybe(k);
+    Float fr = frac(k);
+    Int hu = huge(k);
+    Int(128) wd = wide(k);
+    Str ft = fn_text(k);
+    Bytes(4) q = quad(k);
+    Str last = churn(0, 2000, "");
+    println(f"{bt.len()} {str_slice(bt, 0, 4)} {str_slice(bt, 799998, 800001)} {t} {last.len()} {str_slice(last, 0, 7)}");
+    println(f"{w} {sum_words(w, 0, 0)} {ss} {b.len()} {b[0]} {b[1]} {b[7]}");
+    println(f"{it.name} {it.xs} {its[0].name} {its[1].name} {its[1].xs} {ns}");
+    Int m1 = m.get(f"one{k}") else { 0 };
+    Int m3 = m.get(f"three{k}") else { 0 };
+    println(f"{m1} {m3} {m.len()}");
+    Str shs = match (sh) { Circle(x) => f"circle {x}", Label(s) => "label " + s, Empty => "empty" };
+    Str mbs = match (mb) { Some(s) => s, None => "none" };
+    println(f"{shs} {mbs} {fr} {hu} {wd} {ft} {q}");
+    return 0;
+}

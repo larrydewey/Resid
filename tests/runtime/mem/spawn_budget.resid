@@ -1,0 +1,54 @@
+import "clock.resid";
+// RESID_MEM_LIMIT under concurrent spawns (runtime/rt/malloc.resid,
+// mem_take; region.resid, page_charge). run.sh sets RESID_MEM_LIMIT=50.
+//
+// Phase 1: 100 jobs start before any is joined; each takes its region's
+// first page, sleeps, then fills about 1 MB with small strings. A single
+// page is charged as it fills, so the jobs past the budget get
+// Err(RegionError) and the peak stays under the limit. Before, a single
+// page was charged whole but counted for no more than resident memory,
+// which it was not yet: every job ran, 83 MB resident under 50 (300 jobs:
+// 250 MB; red team final-memRT-1).
+//
+// Phase 2, after every job is joined: one job at a time, each with about
+// 20 MB live, must run. Before, the pages the burst freed stayed in the
+// idle workers' page caches, charged and resident, and every one was
+// refused (final-memRT-2). Under a budget no thread keeps a cache.
+List(Str) fill(Int i, Int n, Str seed, List(Str) acc) {
+    return if (i >= n) { acc } else { fill(i + 1, n, seed, acc.concat([seed + str_repeat("z", 2000) + f"{i}"])) };
+}
+
+@requires(clock)
+Int burst(Int i, Int n, Int ms, Int per) {
+    if (i >= n) { return 0; }
+    Result(Int, RegionError) r = spawn (clock) {
+        Str s = f"j{i}";
+        Int w = clock_sleep_ms(ms);
+        List(Str) xs = fill(0, per, s, []);
+        Int w2 = clock_sleep_ms(ms);
+        return if (xs.len() == per) { 1 } else { 0 } + w * 0 + w2 * 0;
+    };
+    Int rest = burst(i + 1, n, ms, per);
+    Int v = r else { 1000 };
+    return v + rest;
+}
+
+Int seq(Int i, Int n, Int per) {
+    if (i >= n) { return 0; }
+    Result(Int, RegionError) r = spawn () {
+        List(Str) xs = fill(0, per, "s", []);
+        return if (xs.len() == per) { 1 } else { 0 };
+    };
+    Int v = r else { 1000 };
+    return v + seq(i + 1, n, per);
+}
+
+@requires(args, clock)
+Int main() {
+    Int k = args.count();
+    Int got = burst(0, 100 * k, 500, 200);
+    println(f"burst {100 * k} ok {got % 1000} refused {got / 1000}");
+    Int after = seq(0, 3, 5000 * k);
+    println(f"after ok {after % 1000} refused {after / 1000}");
+    return 0;
+}

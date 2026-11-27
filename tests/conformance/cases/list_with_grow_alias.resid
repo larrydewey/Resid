@@ -1,0 +1,93 @@
+// xs.with on a large list a call boundary froze, and xs.grow, with every
+// list that shares storage read back afterwards (runtime/rt/map.resid,
+// no_thaw_cost and list_grow): an owned update that thaws a frozen list
+// copies it whole, and a grow shares a buffer only past every holder's
+// count, so no other name ever sees a write.
+type Box = { List(Int) xs; Str tag; };
+
+List(Int) mk(List(Int) xs, Int i, Int n) { if (i >= n) { return xs; } return mk(xs.concat([i]), i + 1, n); }
+
+Int sum(List(Int) xs, Int i, Int acc) { if (i >= xs.len()) { return acc; } return sum(xs, i + 1, acc + xs[i]); }
+
+// Owned updates past the thaw point, with a snapshot kept every 97 steps:
+// each snapshot keeps the values it had.
+Str snapshots(List(Int) xs, Int i, Int n, List(List(Int)) snaps) {
+    if (i >= n) {
+        List(Int) s0 = snaps[0];
+        List(Int) s1 = snaps[1];
+        List(Int) last = snaps[snaps.len() - 1];
+        return f"{snaps.len()} {s0[0]} {s0[1]} {s1[0]} {s1[96]} {s1[97]} {last[5]} {xs[5]} {sum(xs, 0, 0)}";
+    }
+    List(Int) ys = xs.with(i % xs.len(), 0 - i);
+    List(List(Int)) s2 = if (i % 97 == 0) { snaps.concat([ys]) } else { snaps };
+    return snapshots(ys, i + 1, n, s2);
+}
+
+// The list is updated in a loop the caller does not own: the caller's
+// name keeps the old list.
+List(Int) bump(List(Int) xs, Int i, Int n) {
+    if (i >= n) { return xs; }
+    return bump(xs.with(i % xs.len(), xs[i % xs.len()] + 1), i + 1, n);
+}
+
+Str two_names() {
+    List(Int) a = mk([], 0, 600);
+    List(Int) b = a;
+    List(Int) c = bump(b, 0, 5000);
+    List(Int) d = bump(a, 0, 3);
+    return f"{a[0]} {b[1]} {c[0]} {c[599]} {d[0]} {d[3]} {sum(a, 0, 0)} {sum(b, 0, 0)}";
+}
+
+// Two grows of one list: each sees its own new elements, the list none.
+Str grows() {
+    List(Int) a = mk([], 0, 300);
+    List(Int) g1 = a.grow(5, 7);
+    List(Int) g2 = a.grow(3, 9);
+    List(Int) g3 = g1.grow(2, 11);
+    List(Int) g4 = g1.with(301, 0 - 1);
+    List(Int) g5 = g1.concat([42]);
+    return f"{a.len()} {g1.len()} {g2.len()} {g3.len()} {g1[304]} {g2[302]} {g3[306]} {g4[301]} {g1[301]} {g5[305]} {g3[305]} {g1.len()}";
+}
+
+// Grown in a loop, the list kept at each step by a closure and in a map
+// and a record: each holder keeps its own length and contents.
+Str holders() {
+    List(Int) base = mk([], 0, 10);
+    List(Int) g = base.grow(4, 1);
+    Int closure() seen = lambda() { g.len() * 100 + g[13] };
+    Map(Str, List(Int)) m = {};
+    Map(Str, List(Int)) m2 = m.insert("g", g);
+    Box bx = Box { .xs = g, .tag = "g" };
+    List(Int) h = g.grow(6, 2);
+    List(Int) h2 = h.with(13, 5);
+    List(Int) i2 = g.grow(1, 3);
+    List(Int) mg = m2.get("g") else { [] };
+    return f"{seen()} {mg.len()} {mg[13]} {bx.xs.len()} {bx.xs[13]} {h.len()} {h[19]} {h2[13]} {h[13]} {i2.len()} {i2[14]} {g.len()}";
+}
+
+// The same on packed bytes.
+Str bytes() {
+    List(UInt(8)) a = [1, 2, 3];
+    List(UInt(8)) b = a.grow(4, 9);
+    List(UInt(8)) c = a.grow(2, 5);
+    List(UInt(8)) d = b.grow(1, 6);
+    List(UInt(8)) e = b.with(3, 0);
+    return f"{a.len()} {b.len()} {c.len()} {d.len()} {b[6]} {c[4]} {d[7]} {e[3]} {b[3]} {d[3]}";
+}
+
+Str big_bytes(List(UInt(8)) xs, Int i, Int n, List(UInt(8)) first) {
+    if (i >= n) { return f"{xs[0]} {xs[299]} {first[0]} {first[299]} {xs.len()}"; }
+    List(UInt(8)) ys = xs.with(i % 300, (UInt(8)) (i % 256));
+    return big_bytes(ys, i + 1, n, if (i == 3) { ys } else { first });
+}
+
+Int main() {
+    println(snapshots(mk([], 0, 500), 0, 3000, []));
+    println(two_names());
+    println(grows());
+    println(holders());
+    println(bytes());
+    List(UInt(8)) z = [];
+    println(big_bytes(z.grow(300, 1), 0, 2000, z));
+    return 0;
+}

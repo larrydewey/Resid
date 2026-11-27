@@ -1,0 +1,32 @@
+// A large object (more than half a region page) whose page charge the
+// memory budget refuses (region.resid, lg_new) is linked into its region
+// before it is charged, so the job's pop frees the page. Before, the page
+// was taken and never linked: each refusal lost a page of the region
+// range for good (red team rc-memrt-1). run.sh runs this under ulimit -v,
+// so the range is 1024 pages, with RESID_MEM_LIMIT=40: each job takes
+// 700 KB blocks until the budget refuses one, 1100 times. With the leak,
+// the range ran out after about a thousand jobs and later jobs were
+// refused for "region address space exhausted" instead of the budget.
+List(Str) bigs(Int i, Int n, List(Str) acc) {
+    return if (i >= n) { acc } else { bigs(i + 1, n, acc.concat([str_repeat("B", 700000 + i)])) };
+}
+
+// Jobs refused for the budget, and for anything else.
+Int hogs(Int i, Int n, Int budget, Int other) {
+    if (i >= n) { return budget * 100000 + other; }
+    Result(Int, RegionError) r = spawn () { List(Str) b = bigs(0, 1000, []); return b.len(); };
+    Int kind = match (r) { Ok(x) => 0, Err(e) => if (str_contains(e.message, "memory budget")) { 1 } else { 2 } };
+    return hogs(i + 1, n, budget + (if (kind == 1) { 1 } else { 0 }), other + (if (kind == 2) { 1 } else { 0 }));
+}
+
+Int fits() {
+    Result(Int, RegionError) r = spawn () { List(Str) b = bigs(0, 20, []); return b.len(); };
+    return r else { 0 - 1 };
+}
+
+@requires(args)
+Int main() {
+    Int v = hogs(0, 1100 * args.count(), 0, 0);
+    println(f"budget {v / 100000} other {v % 100000} then {fits()}");
+    return 0;
+}

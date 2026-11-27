@@ -1,0 +1,32 @@
+// RESID_MEM_LIMIT charges memory when it is handed out, by its mapped
+// size (runtime/rt/malloc.resid, mem_charge). Before, past the count the
+// budget asked how much of the process was resident, and a fresh large
+// mapping is not resident yet: a 1 GB str_replace reached 977 MB resident
+// under a 100 MB limit (RB-19). run.sh sets RESID_MEM_LIMIT=100 and checks
+// the peak resident memory stays under it.
+//
+// Each large allocation below is refused before it is touched: inside a
+// spawn as Err(RegionError), as before for an allocation the budget
+// refuses; at the top level by the budget's abort. Memory a refused job
+// took is given back, so a job that fits still runs afterwards.
+List(Int) grow_big(Int k) { List(Int) xs = [k]; return xs.grow(150000000 * k, k); }
+
+Str job(Int mode, Int k) {
+    Result(Str, RegionError) r = spawn () {
+        Str s = if (mode == 0) { str_repeat("ab", 500000000 * k) } else {
+            if (mode == 1) { str_replace(str_repeat("a", 1000 * k), "a", str_repeat("b", 1000000 * k)) } else {
+                if (mode == 2) { f"{grow_big(k).len()}" } else { str_repeat("c", 20000000 * k) } } };
+        return f"{s.len()}";
+    };
+    return match (r) { Ok(s) => "ok " + s, Err(e) => "refused" };
+}
+
+@requires(args)
+Int main() {
+    Int k = args.count();
+    println(f"{job(0, k)} {job(1, k)} {job(2, k)} {job(3, k)} {job(3, k)}");
+    Str base = str_repeat("a", 1000 * k);
+    Str big = str_replace(base, "a", str_repeat("b", 1000000 * k));
+    println(f"not refused {big.len()}");
+    return 0;
+}

@@ -102,7 +102,7 @@ directly. What differs on AArch64:
 | `RESID_SIGNING_KEY` | the signing key for release builds (else `keys/resid-ed25519.key`, then `$RESID_HOME/keys/resid-ed25519.key`) |
 | `RESID_PROV_ENCRYPT`, `RESID_PROV_KEY` | `RESID_PROV_ENCRYPT=1` conceals the provenance payload under `RESID_PROV_KEY`, which `verify` then needs |
 | `RESID_VERIFY_PUB` | a supplied verification key, as `--pub` |
-| `RESID_MEM_LIMIT` | the compiler's memory budget in MB (default 4096); one compile-time evaluation may meter a quarter of it |
+| `RESID_MEM_LIMIT` | a memory budget in MB, for the compiler (default 4096; one compile-time evaluation may meter a quarter of it) and for a built program (none by default). It counts heap and region memory only, charged as it is handed out; past it an allocation is refused (`Err(RegionError)` in a `spawn`, else the program stops). Thread stacks are outside it: the main thread may use up to `RESID_STACK_MB`, and each concurrent `spawn` up to `RESID_SPAWN_STACK_MB`, of stack on top of the budget |
 | `RESID_TEST_FILTER`, `RESID_TEST_FORMAT` | the test binary's `--filter` and `--format` |
 | `RESID_STACK_MB` | the stack of a program's main thread in MB (default 1024); for the compiler, how deep compile-time evaluation may nest before E0902 |
 | `RESID_SPAWN_STACK_MB` | the stack of each `spawn` region's thread in MB (default 256, at least 8); a region that passes large fixed-capacity values (a 16 MB `Bytes` to a native module) needs room for them |

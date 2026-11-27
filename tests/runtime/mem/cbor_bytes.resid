@@ -1,0 +1,23 @@
+// to_cbor of a large byte string (lib/cbor.resid): the encoder appends
+// packed bytes, a head or a payload at a time, so encoding 2 MB costs a
+// few bytes a byte beyond the input and the output. The encoder that kept
+// a cons cell per output byte peaked near 235 bytes a byte (about 480 MB
+// here). run.sh sets RESID_MEM_LIMIT=96.
+import "cbor.resid";
+import "serial_value.resid";
+
+List(Int) chunk(Int i, Int n, ListBuf(Int) b) { if (i >= n) { return b.finish(); } return chunk(i + 1, n, b.push(i % 251)); }
+
+Int ck(List(Int) xs, Int i, Int acc) { if (i >= xs.len()) { return acc; } return ck(xs, i + 1, (acc * 31 + xs[i]) % 1000000007); }
+
+// The size comes from the argument count (1), so the compiler cannot
+// encode ahead.
+@requires(args)
+Int main() {
+    Int n = 2000000 * args.count();
+    List(Int) enc = match (to_cbor(VBytes(chunk(0, n, ListBuf())))) { Ok(b) => b, Err(e) => [] };
+    Value small = VMap([ventry(VStr("a"), VSeq([VInt(1), VInt(0 - 2), VStr("ü")])), ventry(VStr("b"), VBytes([0, 255]))]);
+    List(Int) se = match (to_cbor(small)) { Ok(b) => b, Err(e) => [] };
+    println(f"{enc.len()} {enc[0]} {enc[4]} {enc[5]} {enc[2000004]} {ck(enc, 0, 0)} {se}");
+    return 0;
+}

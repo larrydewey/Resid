@@ -14,7 +14,7 @@ Int small_max() { return 131072; }
 
 // Per thread: 48 list heads, the slab bump pointer and end, the big block
 // cache (its list, count and bytes), then the number of slabs mapped.
-Int heap_tls() { return resid_raw_tls("rt_heap", 432); }
+Int heap_tls() { return resid_raw_tls("rt_heap", 440); }
 
 // Class sizes: 16..128 by 16, then (4 + i) * 2^k / 4 for k = 7...
 pub Int class_size(Int c) {
@@ -168,7 +168,7 @@ pub Int sys_munmap(Int p, Int n) { return resid_raw_syscall(11, p, n, 0, 0, 0, 0
 Int mem_used() { return resid_raw_global("rt_mem_used", 8); }
 Int mem_lim() { return resid_raw_global("rt_mem_limit", 8); }   // 0 unread, -1 none
 
-Int limit_bytes() {
+pub Int limit_bytes() {
     Int l = ld64(mem_lim());
     if (l != 0) { return l; }
     _ = st64(mem_lim(), 0 - 1);           // no recursion while reading
@@ -184,36 +184,68 @@ pub Int rt_mem_limit_set(Int mb) {
     return st64(mem_lim(), if (mb > 0) { mb * 1048576 } else { 0 - 1 }) * 0;
 }
 
-// Count n more heap bytes (or region pages); past the budget, abort. A
-// region page is counted whole when taken, but a deep nest of regions
-// barely touches each of its pages, so past the count the process's
-// resident memory decides.
+// Count n more heap bytes (or region pages); past the budget, abort.
+// Memory is charged before it is handed out, and the total charged
+// (bytes handed out minus bytes given back) never passes the limit
+// without a refusal, whatever runs at the same time: every byte a program
+// can touch on the heap or in a region was charged first, so the total
+// bounds the program's heap and region memory. It does not bound resident
+// memory as a whole: thread stacks are not charged (the main thread's up
+// to RESID_STACK_MB, each concurrent spawn's up to RESID_SPAWN_STACK_MB,
+// where frames hold fixed-capacity values inline), nor are the runtime's
+// own tables (residc.md says so too). Big blocks, realloc growth and runs
+// of more than one region page are charged whole when mapped. Memory that is filled a bit
+// at a time is charged as it fills, a step ahead of its high-water mark:
+// a single region page 64 KB first, then doubling (region.resid,
+// page_charge), and a
+// heap slab in 64 KB steps (carve), so a deep nest of regions that
+// barely touches each of its pages costs a step a region, not a page.
+// Before, those were charged whole but counted for no more than resident
+// memory, which a page not yet touched is not: concurrent jobs each took
+// one and then filled it with no further charge, five times past the
+// limit.
 pub Int mem_take(Int n) {
     Int now = resid_raw_fetch_add(mem_used(), n) + n;
     Int lim = limit_bytes();
-    if (lim > 0 && now > lim && resident_bytes() > lim) { return over_budget(lim); }
+    // Refused: the bytes were never taken, so they are not counted (an
+    // abort caught by a spawned region leaves the budget as it was).
+    if (lim > 0 && now > lim) { return mem_give(n) + mem_retry(n, lim); }
     return 0;
 }
 
-// Resident bytes (/proc/self/statm's second field), or 2^62 when unreadable.
+// Past the budget: this thread's cached free pages and big blocks
+// (charged while cached) go back first, then the charge is tried once more.
 @cold
-Int resident_bytes() {
-    Int b = resid_raw_tls("statm_buf", 128);
-    Int fd = sys_open(resid_raw_addr("/proc/self/statm"), o_rdonly(), 0);
-    if (fd < 0) { return 4611686018427387904; }
-    Int n = resid_raw_syscall(0, fd, b, 127, 0, 0, 0);
-    _ = sys_close(fd);
-    if (n <= 0) { return 4611686018427387904; }
-    Int sp = statm_skip(b, 0, n);
-    return statm_num(b, sp + 1, n, 0) * page_size();
+Int mem_retry(Int n, Int lim) {
+    Int big = ld64(heap_tls() + 408);
+    _ = cache_flush(heap_tls());
+    if (rg_cache_flush() + big == 0) { return over_budget(lim); }
+    Int now = resid_raw_fetch_add(mem_used(), n) + n;
+    if (now > lim) { return mem_give(n) + over_budget(lim); }
+    return 0;
 }
 
-Int statm_skip(Int b, Int i, Int n) { return if (i >= n || ld8(b + i) == 32) { i } else { statm_skip(b, i + 1, n) }; }
+// Whether a budget is set. Memory a thread caches for itself (free region
+// pages, freed big blocks) stays charged, as it is resident, and can
+// refuse other threads' work. So under a budget the region page cache is
+// kept small (region.resid, cache_cap), a thread about to be refused gives
+// its caches back first (mem_retry), and once half the budget is charged
+// an idle worker gives its caches back before it parks (ctl.resid,
+// pool_main, mem_pressed). The caches stay otherwise: dropping either one
+// under every budget made the compiler, which sets one, much slower (the
+// page cache 5 times, the big-block cache 1.4 times on the runtime
+// build). The compiler's runtime build read a string from a freed arena
+// chunk after its arena was popped (fixed in driver.resid), which only
+// the big-block cache had kept readable.
+pub Bool mem_limited() { return limit_bytes() > 0; }
 
-Int statm_num(Int b, Int i, Int n, Int acc) {
-    Int c = if (i < n) { ld8(b + i) } else { 0 };
-    return if (c >= 48 && c <= 57) { statm_num(b, i + 1, n, acc * 10 + c - 48) } else { acc };
+pub Bool mem_pressed() {
+    Int lim = limit_bytes();
+    return lim > 0 && ld64(mem_used()) > lim / 2;
 }
+
+// This thread's cached big blocks given back (pool_main).
+pub Int heap_cache_flush() { return cache_flush(heap_tls()); }
 
 pub Int mem_give(Int n) { return resid_raw_fetch_add(mem_used(), 0 - n) * 0; }
 
@@ -235,8 +267,11 @@ Int huge() { return 2097152; }
 
 // Mappings of whole 2 MB pages start on a 2 MB boundary and ask for
 // transparent huge pages: one fault per 2 MB instead of 512.
-Int heap_map(Int n) {
-    _ = mem_take(n);
+Int heap_map(Int n) { return heap_map_c(n, true); }
+
+// `charge`: n is charged first (a slab is charged by carve as it fills).
+Int heap_map_c(Int n, Bool charge) {
+    _ = if (charge) { mem_take(n) } else { 0 };
     if (n < huge() || (n & (huge() - 1)) != 0) { return sys_mmap(n); }
     Int p = sys_mmap(n + huge());
     if (p == 0) { return 0; }
@@ -273,25 +308,40 @@ Int carve(Int c) {
     Int need = class_size(c) + 16;
     Int bp = ld64(t + 384);
     Int end = ld64(t + 392);
-    Int p = if (bp != 0 && end - bp >= need) { bp } else { new_slab(t, need) };
+    Int p = if (bp != 0 && end - bp >= need) { bp } else { if (bp != 0 && ld64(t + 432) - bp >= need) { slab_step(t, bp, need) } else { new_slab(t, need) } };
     if (p == 0) { return 0; }
     _ = st64(t + 384, p + need);
     _ = st64(p, c);
     return p + 16;
 }
 
+// The slab's charged end (t + 392) moved on by whole steps past the bump
+// plus need, up to its mapped end (t + 432); the bump, bp.
+Int slab_step(Int t, Int bp, Int need) {
+    Int end = ld64(t + 392);
+    Int to = min(ld64(t + 432), end + (((bp + need - end) + slab_step_size() - 1) & (0 - slab_step_size())));
+    _ = mem_take(to - end);
+    _ = st64(t + 392, to);
+    return bp;
+}
+
+Int slab_step_size() { return 65536; }
+
 // A new slab: a cached big block when there is one (memory a popped
-// region gave back), else a fresh mapping.
+// region gave back, charged whole already), else a fresh mapping, charged
+// as it fills (slab_step).
 Int new_slab(Int t, Int need) {
     Int k = ld64(t + 424);
     _ = st64(t + 424, k + 1);
     Int want = max(1048576 << min(k, 3), need * 8);
     Int c = cache_take(t, want);
     Int sz = if (c != 0) { ld64(c) } else { want };
-    Int s = if (c != 0) { c } else { heap_map(sz) };
+    Int s = if (c != 0) { c } else { heap_map_c(sz, false) };
     if (s == 0) { return 0; }
-    _ = st64(t + 392, s + sz);
-    return s;
+    _ = st64(t + 432, s + sz);
+    _ = st64(t + 392, if (c != 0) { s + sz } else { s });
+    _ = st64(t + 384, s);
+    return if (c != 0) { s } else { slab_step(t, s, need) };
 }
 
 // Page-rounded; from 2 MB, rounded to whole huge pages.
@@ -361,9 +411,23 @@ pub Int c_free_wiped(Int p) {
     return if (h < 64) { c_free(p) } else { big_keep(p - 16, h) };
 }
 
+// RESID_UNMAP_FREED=1: freed big blocks are unmapped at once, never
+// cached, so a read of one after it is freed faults instead of finding
+// the old bytes. A test setting (tests/runtime/run.sh builds the runtime
+// with the compiler under it: an arena string read after its pop crashed
+// it, driver.resid).
+Bool unmap_freed() {
+    Int g = resid_raw_global("rt_unmap_freed", 8);
+    Int v = ld64(g);
+    if (v != 0) { return v == 1; }
+    Int e = c_getenv(resid_raw_addr("RESID_UNMAP_FREED"));
+    Bool on = e != 0 && ld8(e) == 49 && ld8(e + 1) == 0;
+    return st64(g, if (on) { 1 } else { 2 }) * 0 == 0 && on;
+}
+
 Int big_keep(Int b, Int h) {
     Int t = heap_tls();
-    if (ld64(t + 408) >= 256 || ld64(t + 416) + h > 67108864) { return heap_unmap(b, h); }
+    if (ld64(t + 408) >= 256 || ld64(t + 416) + h > 67108864 || unmap_freed()) { return heap_unmap(b, h); }
     _ = st64(b + 8, ld64(t + 400));
     _ = st64(t + 400, b);
     _ = st64(t + 408, ld64(t + 408) + 1);

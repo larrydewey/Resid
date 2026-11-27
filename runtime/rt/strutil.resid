@@ -41,8 +41,9 @@ pub Int rt_str_repeat(Int s, Int times0) {
     Int ls = c_strlen(s);
     if (ls == 0) { return cstr_from(s, 0, 1); }
     if (times0 > 9223372036854775806 / ls) { return rt_abort("allocation size out of range"); }
-    Int p = c_malloc(ls * times0 + 1);
-    if (p == 0) { return rt_abort("out of memory"); }
+    // Region memory, as every other string verb's result: a heap block
+    // here was never freed (no scope, loop region or compaction covers it).
+    Int p = ralloc(ls * times0 + 1);
     Int e = repeat_at(p, s, ls, times0);
     _ = st8(e, 0);
     return p;

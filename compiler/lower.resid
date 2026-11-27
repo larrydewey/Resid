@@ -4643,9 +4643,19 @@ ST lw_ret(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     if (v.err != "") { return st_err(v.err, g); }
     if (g.rety == "__spawn") {
         GT hb = box_heap_("", v, env, w.fs);
-        Int tk = hb.tmp + 1;
+        // The result moved by its type's move with the job's context
+        // (resid_spawn_out): out of the job's region to the heap when the
+        // spawn was made at depth 0, which has no region to take the job's
+        // pages (runtime/rt/ctl.resid); else the context names no region and
+        // the value stays. A type with no move is not moved: the job's
+        // region is then kept.
+        Str mvt = lw_spawn_move(w.fs, v.ty);
+        Int tm = hb.tmp + 1;
+        List(Str) ml = if (mvt == "") { [] } else { [f"%t{tm} = call ptr @resid_spawn_out()", f"%t{tm + 1} = call ptr " + lr_call(mvt, hb.val, f"%t{tm}")] };
+        Str pay = if (mvt == "") { hb.val } else { f"%t{tm + 1}" };
+        Int tk = if (mvt == "") { tm } else { tm + 2 };
         Str okr = f"%t{tk}";
-        return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = hb.glines, .hlines = g.hlines, .lines = hb.lines.concat(lw_fut_waits(env, env.len() - 1, 0, nil_list())).concat([okr + " = call ptr @resid_ok_box(ptr " + hb.val + ")", "ret ptr " + okr]), .tmp = tk, .lbl = hb.lbl, .rety = g.rety};
+        return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = hb.glines, .hlines = g.hlines, .lines = hb.lines.concat(lw_fut_waits(env, env.len() - 1, 0, nil_list())).concat(ml).concat([okr + " = call ptr @resid_ok_box(ptr " + pay + ")", "ret ptr " + okr]), .tmp = tk, .lbl = hb.lbl, .rety = g.rety};
     }
     Str rwant = num_norm_cg(g.rety);
     Bool rw_int = int_fam(g.rety) && int_fam(v.ty);
@@ -4674,12 +4684,20 @@ ST lw_ret(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = v.glines, .hlines = g.hlines, .lines = lns, .tmp = ut, .lbl = v.lbl, .rety = g.rety};
 }
 
-// Waits for the running regions bound in env[lo..i] (spawn futures).
-List(Str) lw_fut_waits(List(Str) env, Int i, Int lo, List(Str) acc) {
+// Waits for the running regions bound in env[lo..i] (spawn futures), as
+// their names go out of scope: a return or a block's end releases each
+// (resid_spawn_release frees a block made at depth 0, which no region
+// holds); lw_fut_joins only waits (a break or continue, after which a
+// future bound outside the loop is read again).
+List(Str) lw_fut_waits(List(Str) env, Int i, Int lo, List(Str) acc) { return lw_fut_calls(env, i, lo, "@resid_spawn_release", acc); }
+
+List(Str) lw_fut_joins(List(Str) env, Int i, Int lo, List(Str) acc) { return lw_fut_calls(env, i, lo, "@resid_spawn_wait", acc); }
+
+List(Str) lw_fut_calls(List(Str) env, Int i, Int lo, Str f, List(Str) acc) {
     if (i < lo || i < 0) { return acc; }
     Str e = env[i];
-    List(Str) a2 = if (str_starts_with(e, "__fut_")) { acc.concat(["call ptr @resid_spawn_wait(ptr " + str_split(e, ":")[1] + ")"]) } else { acc };
-    return lw_fut_waits(env, i - 1, lo, a2);
+    List(Str) a2 = if (str_starts_with(e, "__fut_")) { acc.concat(["call ptr " + f + "(ptr " + str_split(e, ":")[1] + ")"]) } else { acc };
+    return lw_fut_calls(env, i - 1, lo, f, a2);
 }
 
 // sg_block / sg_stmts: statements after a dead one are not emitted.
@@ -5053,7 +5071,7 @@ ST lw_stmt(LW w, Int id, List(Str) env, Bool in_main, ST g) {
         if (le == "") { return st_err("break or continue outside a loop", g); }
         List(Str) lp = str_split(le, ":");
         Str target = if (k == "brk") { lp[2] } else { lp[1] };
-        return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = g.glines, .hlines = g.hlines, .lines = g.lines.concat(lw_fut_waits(env, env.len() - 1, 0, nil_list())).concat(["br label %" + target]), .tmp = g.tmp, .lbl = g.lbl, .rety = g.rety};
+        return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = g.glines, .hlines = g.hlines, .lines = g.lines.concat(lw_fut_joins(env, env.len() - 1, 0, nil_list())).concat(["br label %" + target]), .tmp = g.tmp, .lbl = g.lbl, .rety = g.rety};
     }
     if (k == "letpat") { return lw_letpat(w, id, env, g); }
     if (k == "with") { return lw_with_binds(w, id, 0, env, env, in_main, g); }
@@ -7959,6 +7977,17 @@ List(Str) lr_evac_tys(Funcs fs, List(Str) tyl, Int i, List(Str) acc) {
     Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(tyl[i]));
     Str e = if (t == "Str" && !lr_user_ty(fs, t)) { "" } else { lr_move(fs, t, []) };
     return lr_evac_tys(fs, tyl, i + 1, acc.concat([if (e == "-") { "" } else { e }]));
+}
+
+// A spawn's result's move (lw_ret), on its boxed slot value: a scalar's
+// box moves as a list's scalar element does; "" for a type with none, a
+// fixed-capacity value, or the runtime's own module.
+Str lw_spawn_move(Funcs fs, Str ty) {
+    if (resid_rtmod() || is_fixed_type(ty)) { return ""; }
+    Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(ty));
+    if (lw_fx_size(t) > 0) { return ""; }
+    if (ll_ty(t) != "ptr") { return "@resid_mv_word(ptr %V, ptr %C)"; }
+    return lr_ret_evac(fs, ty);
 }
 
 // A returned value's move, or "" (a scalar, or a type with none).

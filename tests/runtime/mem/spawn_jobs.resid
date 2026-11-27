@@ -1,0 +1,48 @@
+// Spawned regions in a long-running loop (runtime/rt/ctl.resid, Structured
+// spawn): a job's control block lives in its spawn's region, its own
+// garbage in a region of its own that the join frees (or moves to the
+// spawn's region with the result), and an abort -- one that runs out of
+// memory too -- frees what the job made and fails only that job. run.sh
+// sets RESID_MEM_LIMIT=64. Before: about 600 bytes a spawn stayed (800 with
+// an abort), each 8 MB job's garbage stayed, and the job past the budget
+// took the whole process down.
+ListBuf(Int) fill(Int i, Int n, ListBuf(Int) acc) { if (i >= n) { return acc; } return fill(i + 1, n, acc.push(i)); }
+
+List(Int) bomb(Int i, List(Int) acc) { if (i >= 100000000) { return acc; } return bomb(i + 1, acc.concat([i])); }
+
+Int job(Int i, Int kind) {
+    Result(Int, RegionError) r = spawn () {
+        List(Int) xs = [i, i + 1, i + 2];
+        if (kind == 1) { _ = xs[5]; }
+        if (kind == 2) { return fill(0, 1000000, ListBuf()).finish().len() + i; }
+        if (kind == 3) { return bomb(0, []).len(); }
+        return xs[1] % 7;
+    };
+    return r else { 0 - 1 };
+}
+
+// A job returning a list: the list lives on in the loop's region.
+List(Int) listed(Int i) {
+    Result(List(Int), RegionError) r = spawn () { return [i, i * 2, i * 3]; };
+    return r else { [] };
+}
+
+Int run(Int i, Int n, Int kind, Int acc) {
+    if (i >= n) { return acc; }
+    return run(i + 1, n, kind, acc + job(i, kind));
+}
+
+Int run_lists(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    List(Int) l = listed(i);
+    return run_lists(i + 1, n, acc + l[2] - l[1]);
+}
+
+Int main() {
+    println(f"{run(0, 200000, 0, 0)}");
+    println(f"{run(0, 100000, 1, 0)}");
+    println(f"{run(0, 40, 2, 0)}");
+    println(f"{run_lists(0, 100000, 0)}");
+    println(f"{run(0, 2, 3, 0)} {run(0, 1000, 0, 0)}");
+    return 0;
+}

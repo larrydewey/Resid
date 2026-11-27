@@ -1,0 +1,113 @@
+// A spawned region's result moves into the region its spawn was made in
+// (runtime/rt/ctl.resid, Structured spawn): a list, a string, a record and
+// a map made by the child stay intact through the parent's later scopes,
+// loop compactions and writes; a scalar result is made again there and the
+// child's region is freed. Each check reads a value after the parent made
+// garbage over where a freed child region would have been.
+type Pair = { List(Int) xs; Str name; };
+
+List(Int) build(Int n, List(Int) acc) { if (acc.len() >= n) { return acc; } return build(n, acc.concat([acc.len() * 3])); }
+
+Int sum(List(Int) xs, Int i, Int acc) { if (i >= xs.len()) { return acc; } return sum(xs, i + 1, acc + xs[i]); }
+
+// Garbage in every region the parent has, over what was freed.
+Int churn(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    List(Int) junk = build(50, [i]);
+    return churn(i + 1, n, acc + junk[49] % 7);
+}
+
+// A list result, used twice: both reads see the same list.
+Int list_twice() {
+    Result(List(Int), RegionError) r = spawn () { return build(3000, []); };
+    List(Int) a = r else { [] };
+    Int c = churn(0, 2000, 0);
+    List(Int) b = r else { [] };
+    // A write to one name leaves the other as it was.
+    List(Int) a2 = a.with(5, 0 - 1);
+    return sum(a, 0, 0) + sum(b, 0, 0) + a2[5] + a[5] + b[5] + c * 0;
+}
+
+// A captured list: the child appends to it (sharing its buffer's tip), the
+// parent appends to it too, and neither sees the other's element.
+Str captured() {
+    List(Int) base = build(10, []);
+    Result(List(Int), RegionError) r = spawn () { return base.concat([100]); };
+    List(Int) mine = base.concat([200]);
+    List(Int) theirs = r else { [] };
+    Int c = churn(0, 500, 0);
+    return f"{base.len()} {mine[10]} {theirs[10]} {mine.len()} {theirs.len()} {c * 0}";
+}
+
+// A record holding a list and a string, and a map of lists.
+Str record_and_map() {
+    Result(Pair, RegionError) r = spawn () { return Pair { .xs = build(700, []), .name = str_repeat("ab", 300) }; };
+    Result(Map(Str, List(Int)), RegionError) m = spawn () {
+        Map(Str, List(Int)) acc = {};
+        return acc.insert("a", build(40, [])).insert("b", build(400, []));
+    };
+    Int c = churn(0, 1500, 0);
+    Pair p = r else { Pair { .xs = [], .name = "" } };
+    Map(Str, List(Int)) mm = m else { {} };
+    List(Int) bs = mm.get("b") else { [] };
+    return f"{sum(p.xs, 0, 0)} {str_len(p.name)} {str_slice(p.name, 0, 4)} {bs.len()} {sum(bs, 0, 0)} {c * 0}";
+}
+
+// A spawn in a helper called from a loop with a region: the results are
+// carried through the loop's compactions.
+List(Int) job(Int i) {
+    Result(List(Int), RegionError) r = spawn () { return build(20 + i % 5, [i]); };
+    return r else { [] };
+}
+
+Int carry(Int i, Int n, List(List(Int)) kept, Int acc) {
+    if (i >= n) { return acc + kept.len() * 1000000 + sum(kept[kept.len() - 1], 0, 0); }
+    List(Int) got = job(i);
+    List(List(Int)) k2 = if (i % 50 == 0) { kept.concat([got]) } else { kept };
+    return carry(i + 1, n, k2, acc + got[0] + got.len());
+}
+
+// Scalars, a long abort message and a short one.
+Str scalars() {
+    Result(Int, RegionError) a = spawn () { return 41 + 1; };
+    Result(Int, RegionError) big = spawn () { return 4611686018427387903; };
+    Result(Bool, RegionError) t = spawn () { return true; };
+    Result(Int, RegionError) e1 = spawn () { List(Int) xs = [1]; return xs[3]; };
+    Result(Int, RegionError) e2 = spawn () {
+        Str long = str_repeat("m", 700);
+        Int n = str_len(long);
+        return if (n > 0) { [1][n] } else { 0 };
+    };
+    Int c = churn(0, 300, 0);
+    Str m1 = match e1 { Ok(v) => "ok", Err(e) => e.message };
+    Str m2 = match e2 { Ok(v) => "ok", Err(e) => e.message };
+    Int av = a else { 0 };
+    Int bv = big else { 0 };
+    Bool tv = t else { false };
+    return f"{av} {bv} {tv} {str_len(m1) > 0} {str_len(m2) > 0} {c * 0}";
+}
+
+// A region whose parent aborts while it still runs: the parent's unwind
+// waits for it before freeing the block it writes.
+Int slow(Int i, Int n, Int acc) { if (i >= n) { return acc; } return slow(i + 1, n, acc + build(30, [i])[29] % 3); }
+
+Str abort_while_running() {
+    Result(Int, RegionError) outer = spawn () {
+        Result(Int, RegionError) inner = spawn () { return slow(0, 20000, 0); };
+        List(Int) xs = [1, 2];
+        Int bad = xs[2];
+        return bad + (inner else { 0 });
+    };
+    Int c = churn(0, 300, 0);
+    return match outer { Ok(v) => "ok", Err(e) => "outer failed" } + f" {c * 0}";
+}
+
+Int main() {
+    println(f"{list_twice()}");
+    println(captured());
+    println(record_and_map());
+    println(f"{carry(0, 3000, [[0]], 0)}");
+    println(scalars());
+    println(abort_while_running());
+    return 0;
+}
