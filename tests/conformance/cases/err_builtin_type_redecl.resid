@@ -1,0 +1,13 @@
+// A program's own declaration of a built-in record replaces the built-in
+// one, but the runtime still makes a spawn's RegionError with the built-in
+// fields: a different layout would read a field that is not there (E0299).
+type RegionError = { Int a; Int b; List(Str) xs; Str message; };
+
+Int boom(Int i) { List(Int) xs = [1, 2]; return xs[i]; }
+
+Int main() {
+    Int k = rt 5;
+    Result(Int, RegionError) r = spawn () { return boom(k); };
+    println(match r { Ok(n) => f"ok {n}", Err(e) => f"err {e.a} {e.b} {e.xs.len()} " + e.message });
+    return 0;
+}

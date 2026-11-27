@@ -1,0 +1,91 @@
+// A function that allocates only through an f-string is not a leaf
+// (codegen.resid's leaf_calls, lower.resid's lf_node): a tail loop calling
+// one gets a region, a scalar binding of one a scope, and so does a
+// recursion that returns an Int. run.sh runs each at n and 10 n under
+// RESID_MEM_LIMIT; the compiler that took such helpers for leaves kept
+// every call's string (79 to 220 MB at a million steps, 0.8 to 2.2 GB at
+// ten million).
+//
+// Usage: fstr_leaf SHAPE N; prints the shape's total.
+
+Str key_f(Int i) { return f"user:{i}:session"; }
+Int klen(Int i) { return str_len(f"request {i} from client {i % 97}"); }
+
+// A tail loop with a scalar carry.
+Int count_f(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Str k = key_f(i);
+    return count_f(i + 1, n, acc + str_len(k) % 3);
+}
+
+// A scalar binding of a helper in a tail loop.
+Int sum_f(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Int z = klen(i);
+    return sum_f(i + 1, n, acc + z % 5);
+}
+
+// Divide and conquer returning an Int, its leaves formatting.
+Int walk(Int lo, Int hi) {
+    if (hi - lo <= 1) { return str_len(f"leaf{lo}"); }
+    Int mid = (lo + hi) / 2;
+    Int a = walk(lo, mid);
+    Int b = walk(mid, hi);
+    return a + b;
+}
+
+// Helpers that allocate through a concatenation in brackets, a list's
+// `with` and a list slice (lower.resid's lf_scalar and lf_node) are not
+// leaves either; each is recursive, so it is not inlined. The compiler
+// that took them for leaves gave this loop no region and its scalar
+// binding no scope: 60 to 90 bytes a step, never freed.
+Int pcat(Str s, Int d) { if (d > 0) { return pcat(s, d - 1) + 1; } return str_len((s) + (s)); }
+Int lwith(List(Int) xs, Int i, Int d) { if (d > 0) { return lwith(xs, i, d - 1) + 1; } return xs.with(0, i)[0]; }
+Int lslice(List(Int) xs, Int d) { if (d > 0) { return lslice(xs, d - 1) + 1; } return xs[1..d + 9].len(); }
+
+Int helpers(Int w, Str s, List(Int) xs, Int d, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Int k = if (w == 0) { pcat(s, d) } else { if (w == 1) { lwith(xs, i, d) } else { lslice(xs, d) } };
+    return helpers(w, s, xs, d, i + 1, n, acc + k % 7);
+}
+
+Int run_helpers(Int w, Int n) {
+    List(Int) xs = [n % 5, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    return helpers(w, f"ab-{n % 3}-cd", xs, n % 2 + 1, 0, n, 0);
+}
+
+// Nor are helpers that concatenate two calls' pointer results, multiply
+// or negate a Dec, concatenate a match arm's binding, or call a closure
+// parameter named like a leaf function (lf_scalar, lf_ptr_binds): each
+// tail loop below kept 20 to 100 bytes a step when they were taken for
+// leaves.
+Str first(List(Str) xs) { return xs[0]; }
+Int both(List(Str) xs, List(Str) ys, Int d) { if (d > 0) { return both(xs, ys, d - 1) + 1; } return str_len(first(xs) + first(ys)); }
+Int dmul(Dec a, Dec b, Int d) { if (d > 0) { return dmul(a, b, d - 1) + 1; } return if (a * b > a) { 1 } else { 0 }; }
+Int dneg(Dec a, Dec b, Int d) { if (d > 0) { return dneg(a, b, d - 1) + 1; } return if (-a < b) { 1 } else { 0 }; }
+Int pat(Option(Str) o, Int d) { if (d > 0) { return pat(o, d - 1) + 1; } return match o { Some(s) => str_len(s + s), None => 0 }; }
+Int tick(Int x) { return x + 1; }
+Int callc(Str closure(Int) tick, Int d) { if (d > 0) { return callc(tick, d - 1) + 1; } return str_len(tick(d)); }
+
+Int more(Int w, List(Str) xs, Dec a, Option(Str) o, Str closure(Int) f, Int d, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Int k = if (w == 0) { both(xs, xs, d) } else { if (w == 1) { dmul(a, a, d) } else { if (w == 2) { dneg(a, a, d) } else { if (w == 3) { pat(o, d) } else { callc(f, d) } } } };
+    return more(w, xs, a, o, f, d, i + 1, n, acc + k % 7);
+}
+
+Int run_more(Int w, Int n) {
+    Str s = f"ab-{n % 3}-cd";
+    Str closure(Int) f = lambda(v) { f"made-{v}-" + s };
+    return more(w, [s], (Dec) (n % 5 + 2), Some(s), f, n % 2 + 1, 0, n, tick(0) - 1);
+}
+
+@requires(args)
+Int main() {
+    Str w = args.get(1);
+    Int n = str_parse_int(args.get(2));
+    Int h = if (w == "paren") { 0 } else { if (w == "with") { 1 } else { 2 } };
+    Int m = if (w == "both") { 0 } else { if (w == "dmul") { 1 } else { if (w == "dneg") { 2 } else { if (w == "pat") { 3 } else { 4 } } } };
+    Int r = if (w == "count") { count_f(0, n, 0) } else { if (w == "sum") { sum_f(0, n, 0) } else { if (w == "walk") { walk(0, n) } else { if (h < 2 || w == "slice") { run_helpers(h, n) } else { run_more(m, n) } } } };
+    println(f"{r}");
+    return 0;
+}

@@ -78,10 +78,11 @@ network]`.
 | `E0297` | a field of a packed word type that the driver owns (`DriverOwned`, or the `clear_` half of a `DeviceLatch`) is read |
 | `E0298` | a register block is malformed: `@registers` without `size = N`, with an argument other than `size`, `device` and `write`, or not on a record type, a register without `@at(offset)` or not of a `@word` type declared before it, an offset that is not a multiple of the register's size or passes the block, two registers that overlap or share a name |
 | `E0290` | a program that reaches `lib/verify/` built against a closure or runtime this compiler was not released with (or with `-rt`/`-rtr`); `--verify-lib-dev` lifts it |
+| `E0299` | a declaration of a built-in record other than the built-in one: `RegionError` must be `{ Str message; }` and `SourceLoc` `{ Str file; Int line; Int col; }`, since the runtime and the compiler make their values with those fields |
 | `E0301` | a known value violates its constraint type |
 | `E0401` | a builder is not consumed on some path |
 | `E0402` | a builder is used twice |
-| `E0403` | a builder is used inside a loop or lambda it was not created in |
+| `E0403` | a builder is used inside a loop (its body or a `while` condition) or lambda it was not created in |
 | `E0404` | a builder type nested inside another type |
 | `E0410` | a vector's lane type or lane count is not allowed |
 | `E0411` | a vector type nested inside another type, or a vector captured by a lambda or `spawn` |

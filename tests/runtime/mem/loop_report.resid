@@ -1,6 +1,6 @@
 // --loop-report names a loop that allocates and has no region, and why
-// (run.sh greps the two notes). Both reasons here are deliberate rules of
-// lr_region_ok, so they stay as movers are added.
+// (run.sh greps the three notes). The reasons here are deliberate rules of
+// lr_region_ok and lw_iter, so they stay as movers are added.
 
 // Returns a sum and carries only scalars: taken for a short call.
 Result(Int, Str) probe(Int i, Int n, Int acc) {
@@ -16,6 +16,26 @@ Str join(Int i, Int n, StrBuf b) {
     return join(i + 1, n, b.push(f"{i * 3},"));
 }
 
+// A for loop whose body spawns: no region (lw_iter), named.
+Int fan(Int n) {
+    for (Int i in 0..n) {
+        Str s = f"step {i}";
+        Result(Int, RegionError) r = spawn () { return i; };
+        Int v = match (r) { Ok(x) => x, Err(e) => 0 };
+        if (v + str_len(s) == 0) { return 1; }
+    }
+    return 0;
+}
+
+// A for loop that allocates and returns nothing it made: has a region.
+Int scan(Int n) {
+    for (Int i in 0..n) {
+        Str s = f"step {i}";
+        if (str_len(s) == 0) { return i; }
+    }
+    return n;
+}
+
 // Carries a list and returns a scalar: has a region, so no note.
 Int total(Int i, Int n, List(Int) xs) {
     if (i >= n) { return xs.len(); }
@@ -26,6 +46,6 @@ Int total(Int i, Int n, List(Int) xs) {
 Int main() {
     Int n = 1000 + clock.monotonic_ns() % 7;
     Int a = match (probe(0, n, 0)) { Ok(v) => v, Err(e) => 0 - 1 };
-    println(f"{a > 0} {str_len(join(0, n, StrBuf())) > 0} {total(0, n, [])}");
+    println(f"{a > 0} {str_len(join(0, n, StrBuf())) > 0} {total(0, n, [])} {fan(3) + scan(4)}");
     return 0;
 }

@@ -868,6 +868,8 @@ OF ow_ev_add(OF f, OEv e) { return OF {.al = f.al, .own = f.own, .ev = f.ev.conc
 
 OF ow_ret_add(OV v) { return OF {.al = v.f.al, .own = v.f.own, .ev = v.f.ev, .why = v.f.why, .rok = v.f.rok && v.owned, .rents = ow_norm(v.f.rents.concat(v.es)), .rev = v.f.rev, .route = v.f.route, .hz = v.f.hz, .cur = v.f.cur, .rcur = v.f.rcur && v.cur}; }
 
+OF ow_cur_is(OF f, Map(Int, Int) c) { return OF {.al = f.al, .own = f.own, .ev = f.ev, .why = f.why, .rok = f.rok, .rents = f.rents, .rev = f.rev, .route = f.route, .hz = f.hz, .cur = c, .rcur = f.rcur}; }
+
 OF ow_set_cur(OF f, Int b, Bool c) { return if (!c) { f } else { OF {.al = f.al, .own = f.own, .ev = f.ev, .why = f.why, .rok = f.rok, .rents = f.rents, .rev = f.rev, .route = f.route, .hz = f.hz, .cur = f.cur.insert(b, 1), .rcur = f.rcur} }; }
 
 OF ow_set_al(OF f, Int b, List(OE) es, Bool owned, Str why) {
@@ -1025,7 +1027,9 @@ OV ow_branches_lim_n(OX x, ORS r, OS s, Int id, Int i, Int n, OV acc) { return o
 OV ow_struct(OX x, ORS r, OS s, Int id, Int i, OV acc) {
     if (i >= x.g.ns[id].nk) {
         Int src = ow_rebuild_src(x, r, id, 0);
-        OF f2 = if (src >= 0) { ow_ev_add(acc.f, OEv {.node = id, .kind = "rebuild", .b = src, .path = 0, .cal = "", .arg = 0, .call = id}) } else { acc.f };
+        // arg 1: src's record lies in the innermost region here (OF.cur when the
+        // rebuild is met: a loop takes it out for its body; ow_rebuild_cur).
+        OF f2 = if (src >= 0) { ow_ev_add(acc.f, OEv {.node = id, .kind = "rebuild", .b = src, .path = 0, .cal = "", .arg = if (acc.f.cur.contains(src)) { 1 } else { 0 }, .call = id}) } else { acc.f };
         // A literal is allocated here (or rebuilds src's record in place:
         // cur when src is).
         Bool c = src < 0 || f2.cur.contains(src);
@@ -1281,13 +1285,17 @@ OF ow_stmt(OX x, ORS r, OS s, Int st, OF f) {
         OF f2 = ow_stmt(x, r, s, kg_kid(x.g, st, 1), f1);
         return if (x.g.ns[st].nk < 3) { f2 } else { ow_stmt(x, r, s, kg_kid(x.g, st, 2), f2) };
     }
+    // A for or while loop runs in a region of its own (lower.resid's
+    // lw_iter), so inside it nothing bound before it lies in the innermost
+    // region: its writes keep their region tests. After it, the same
+    // binders are cur again (the loop's region is gone).
     if (k == "for") {
         OF f1 = ow_val(x, r, s, kg_kid(x.g, st, 1), f).f;
         OV iv = ow_val(x, r, s, kg_kid(x.g, st, 1), f);
         OF f2 = ow_set_al(f1, st, ow_sub_ents(iv.es, ow_papp(0, ow_any()), 0, ListBuf()), false, "for");
-        return ow_stmt(x, r, s, kg_kid(x.g, st, 2), f2);
+        return ow_cur_is(ow_stmt(x, r, s, kg_kid(x.g, st, 2), ow_cur_is(f2, ow_noim())), f2.cur);
     }
-    if (k == "while") { return ow_stmt(x, r, s, kg_kid(x.g, st, 1), ow_val(x, r, s, kg_kid(x.g, st, 0), f).f); }
+    if (k == "while") { return ow_cur_is(ow_stmt(x, r, s, kg_kid(x.g, st, 1), ow_val(x, r, s, kg_kid(x.g, st, 0), ow_cur_is(f, ow_noim())).f), f.cur); }
     if (k == "with") { return ow_stmts(x, r, s, st, 0, x.g.ns[st].nk, f); }
     if (k == "ret") { return if (x.g.ns[st].nk > 0) { ow_ret_add(ow_val(x, r, s, kg_kid(x.g, st, 0), f)) } else { f }; }
     if (k == "estmt" || k == "discard") { return if (x.g.ns[st].nk > 0) { ow_val(x, r, s, kg_kid(x.g, st, 0), f).f } else { f }; }
@@ -3562,13 +3570,13 @@ Map(Int, Str) ow_rebuild_evs(OFn o, Int i, Map(Int, Str) acc) {
 Map(Int, Str) ow_rebuild_evs_n(OFn o, Int i, Map(Int, Str) acc) { return ow_rebuild_evs(o, i + 1, acc); }
 
 // ow_rebuild_evs for lowering: a source whose record lies in the innermost
-// region (OF.cur) is named with a \x02 first, so the rebuild needs no
+// region where it is rebuilt (OF.cur then: the event's arg) is named with a \x02 first, so the rebuild needs no
 // young test.
 Map(Int, Str) ow_rebuild_cur(OFn o, Int i, Map(Int, Str) acc) {
     if (i >= o.f.ev.len()) { return acc; }
     OEv e = o.f.ev[i];
     Bool ok = e.kind == "rebuild" && o.x.g.ns[e.node].kc == 11 && ow_judge(o.x, o.r, o.f, o.l, e) == "";
-    Str nm = (if (o.f.cur.contains(e.b)) { "\x02" } else { "" }) + ow_bname(o.x, e.b);
+    Str nm = (if (e.arg == 1) { "\x02" } else { "" }) + ow_bname(o.x, e.b);
     return ow_rebuild_cur_n(o, i, if (ok) { acc.insert(e.node, nm) } else { acc });
 }
 

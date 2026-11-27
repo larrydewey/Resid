@@ -369,12 +369,13 @@ fi
 # --loop-report (lower.resid, The loop report): a loop that allocates and
 # has no region is named with its reason; without the flag nothing is said.
 if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/loop_report.resid -o "$W/loop_report" --loop-report) > "$W/loop_report.log" 2>&1 \
-    && [ "$(grep -c '^note: loop: ' "$W/loop_report.log")" = 2 ] \
+    && [ "$(grep -c '^note: loop: ' "$W/loop_report.log")" = 3 ] \
     && grep -q '^note: loop: probe keeps .*: it returns Result(Int, Str) and carries no heap value that changes' "$W/loop_report.log" \
     && grep -q '^note: loop: join keeps .*: it carries a StrBuf' "$W/loop_report.log" \
+    && grep -q '^note: loop: fan keeps each step.s garbage of its for loop over i until it returns: its body spawns' "$W/loop_report.log" \
     && (cd "$ROOT" && "$COMPILER" tests/runtime/mem/loop_report.resid -o "$W/loop_report2") > "$W/loop_report2.log" 2>&1 \
     && ! grep -q '^note: loop: ' "$W/loop_report2.log" \
-    && [ "$("$W/loop_report")" = "true true 3" ]; then
+    && [ "$("$W/loop_report")" = "true true 3 4" ]; then
     pass=$((pass + 1))
 else
     fail=$((fail + 1)); echo "FAIL loop report: $(grep '^note: loop: \|rror' "$W/loop_report.log" | head -3 | tr '\n' ' ')"
@@ -402,6 +403,61 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/generations.resid -o "$W/generat
     pass=$((pass + 1))
 else
     fail=$((fail + 1)); echo "FAIL loop generations: $(tail -1 "$W/generations.out" "$W/generations.log" 2>/dev/null | tr '\n' ' ')"
+fi
+# Helpers that only format with an f-string are not leaves (codegen.resid's
+# leaf_calls, lower.resid's lf_node): a tail loop calling one gets a region,
+# a scalar binding a scope, an Int recursion a scope per call; each at n
+# and 10 n. Measured: 8 MB; taken for leaves, 126, 220 and 79 MB at a
+# million steps and 1.25 GB, 2.2 GB and 781 MB at ten million. So are
+# helpers concatenating in brackets, calling a list's `with` or slicing a
+# list (paren, with, slice; lf_scalar): 0.3 MB at both sizes, where taken
+# for leaves they passed 40 MB within a million steps (with, slice) or
+# ten million (paren). And helpers concatenating two calls' pointer
+# results, multiplying or negating a Dec, concatenating a match arm's
+# binding, or calling a closure parameter named like a leaf (both, dmul,
+# dneg, pat, clo): taken for leaves, each passed 40 MB by ten million.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/fstr_leaf.resid -o "$W/fstr_leaf") > "$W/fstr_leaf.log" 2>&1 \
+    && [ "$(for fl in "count 1000000" "count 10000000" "sum 1000000" "sum 10000000" "walk 1000000" "walk 10000000" "paren 1000000" "paren 10000000" "with 1000000" "with 10000000" "slice 1000000" "slice 10000000" "both 1000000" "both 10000000" "dmul 1000000" "dmul 10000000" "dneg 1000000" "dneg 10000000" "pat 1000000" "pat 10000000" "clo 1000000" "clo 10000000"; do RESID_MEM_LIMIT=40 timeout 120 "$W/fstr_leaf" $fl 2>&1; done | tr '\n' ' ')" = "918920 18918920 3785855 7497175 9888890 108888890 1000000 10000000 2999998 29999997 2000000 20000000 1000000 10000000 2000000 20000000 2000000 20000000 1000000 10000000 1000000 10000000 " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL f-string helpers are not leaves: $(for fl in "count 10000000" "sum 10000000" "walk 10000000" "paren 10000000" "with 10000000" "slice 10000000" "both 10000000" "dmul 10000000" "dneg 10000000" "pat 10000000" "clo 10000000"; do RESID_MEM_LIMIT=40 timeout 120 "$W/fstr_leaf" $fl 2>&1 | tail -1; done | tr '\n' ' ') $(grep -m1 -i error "$W/fstr_leaf.log")"
+fi
+# Loop regions for `for` and `while` (lower.resid, lw_iter): loops whose
+# bodies allocate and carry nothing, each run at n and at 10 n steps (the
+# while-let shape over a file of n and 10 n pieces). Measured: 8 MB at
+# both sizes; the compiler before kept every step's garbage: 13 to 47 MB
+# at 200,000 steps, 140 to 469 MB at 2 million. The list-literal shapes
+# (lit, wlit, and spawn: a for loop inline in a spawn's body) run on an
+# 8 MB stack: each literal's staging array is one slot in the entry
+# block; the compiler before took a new one each step and died of
+# SIGSEGV within 200,000 steps.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/iter_loops.resid -o "$W/iter_loops") > "$W/iter_loops.log" 2>&1; then
+    il_ok=1; il_why=""
+    il_exp() { # il_exp SHAPE N: the expected output, lines joined by |
+        local q=$(($2 / 4))
+        case "$1" in
+            bind) echo "0 200 /p/0 x: 0|$q 200 /p/0 x: $q|$((2 * q)) 200 /p/0 x: $((2 * q))|$((3 * q)) 200 /p/0 x: $((3 * q))|done 0|" ;;
+            expr) echo "done 0|" ;;
+            list) echo "0 1:one:10|$q 3:three:$(((q - 2) / 3 + 30))|$((2 * q)) 2:two:$(((2 * q - 1) / 3 + 20))|$((3 * q)) 1:one:$((3 * q / 3 + 10))|done 0|" ;;
+            nested) echo "0 row 0 col 0|$q row $((q / 100)) col 0|$((2 * q)) row $((2 * q / 100)) col 0|$((3 * q)) row $((3 * q / 100)) col 0|done 0|" ;;
+            brk) echo "0 200 /p/0 x: 0|$q 200 /p/0 x: $q|$((3 * q)) 200 /p/0 x: $((3 * q))|$2 200 /p/0 x: $2|done 0|" ;;
+            lit|spawn) local k o=""; for k in 0 $q $((2 * q)) $((3 * q)); do o="$o$k $((k + 11)) $((k % 10)):$((k + 3)) 5 $(case $((k % 3)) in 0) echo 7 ;; 1) echo 8 ;; *) echo 0 ;; esac)|"; done; echo "${o}done 0|" ;;
+        esac
+    }
+    for il_n in 200000 2000000; do
+        for il_s in bind expr list nested brk lit spawn; do
+            il_out="$(RESID_STACK_MB=8 RESID_SPAWN_STACK_MB=8 RESID_MEM_LIMIT=40 timeout 120 "$W/iter_loops" "$il_s" "$il_n" 2>&1 | tr '\n' '|')"
+            [ "$il_out" = "$(il_exp "$il_s" "$il_n")" ] || { il_ok=0; il_why="$il_why $il_s/$il_n: $il_out"; }
+        done
+        { echo F; yes 'y 2 abc' | head -n $((il_n - 1)); } | head -c $((il_n * 16)) > "$W/iter_loops_$il_n.txt"
+        il_out="$(RESID_MEM_LIMIT=40 timeout 120 "$W/iter_loops" while "$W/iter_loops_$il_n.txt" 2>&1 | tr '\n' '|')"
+        [ "$il_out" = "0 200 /p/6 x: 86|done 0|" ] || { il_ok=0; il_why="$il_why while/$il_n: $il_out"; }
+        il_out="$(RESID_STACK_MB=8 RESID_MEM_LIMIT=40 timeout 120 "$W/iter_loops" wlit "$W/iter_loops_$il_n.txt" 2>&1 | tr '\n' '|')"
+        [ "$il_out" = "0 97 6:89 5 0|done 0|" ] || { il_ok=0; il_why="$il_why wlit/$il_n: $il_out"; }
+    done
+    if [ "$il_ok" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL for and while loop regions:$il_why" | cut -c1-600; fi
+else
+    fail=$((fail + 1)); echo "FAIL for and while loop regions: $(grep -m1 -i error "$W/iter_loops.log")"
 fi
 # Volatile raw loads and stores (lower.resid): two processes pass a counter
 # through a shared page, each polling with resid_raw_loadv64; a plain load

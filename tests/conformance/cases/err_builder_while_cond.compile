@@ -1,0 +1,1 @@
+error[E0403]: builder `b` is bound outside this loop

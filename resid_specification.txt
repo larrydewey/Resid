@@ -3022,7 +3022,9 @@ parameter of a builder type (E0401-E0404):
     expression or on one path count, and so does a use
     after it was consumed.
   - E0403: a builder bound outside a loop is used inside
-    the loop body, or captured by a lambda.
+    the loop body or a `while` loop's condition (which runs
+    on every step), or captured by a lambda. A `for` loop's
+    iterable is made once, before the loop, and may use one.
   - E0404: a builder type appears inside another type (a
     struct field, a List, Map, Set, Option or Result
     element, or a closure type).

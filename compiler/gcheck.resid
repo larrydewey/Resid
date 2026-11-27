@@ -4063,11 +4063,25 @@ LS lin_stmt(GK k, Int id, LS l) {
         LS b = if (n > 2) { lin_stmt(k, kg_kid(g, id, 2), c) } else { c };
         return lin_merge(k, c, a, b, id);
     }
-    if (kd == "while" || kd == "for") {
-        Int ci = kg_kid(g, id, if (kd == "for") { 1 } else { 0 });
+    // A for loop's iterable (a list, a range's bounds) is made once, before
+    // the loop: outside its fence. A while's condition runs on every step,
+    // in the loop's region (lower.resid lw_iter), so it is inside the
+    // fence with the body: a builder bound outside the loop and pushed in
+    // the condition would hold the region's pages after they are freed.
+    if (kd == "for") {
+        Int ci = kg_kid(g, id, 1);
         LS c = if (g.ns[ci].kind == "pat") { lin_expr(k, kg_kid(g, ci, 0), l) } else { lin_expr(k, ci, l) };
         if (c.err != "") { return c; }
         return lin_fenced(k, kg_kid(g, id, n - 1), c, true);
+    }
+    if (kd == "while") {
+        Int ci = kg_kid(g, id, 0);
+        LS inner = ls_frame(l, l.locked.concat(l.live), l.live.len());
+        LS c = if (g.ns[ci].kind == "pat") { lin_expr(k, kg_kid(g, ci, 0), inner) } else { lin_expr(k, ci, inner) };
+        if (c.err != "") { return c; }
+        LS r = lin_stmt(k, kg_kid(g, id, n - 1), c);
+        if (r.err != "") { return r; }
+        return l;
     }
     return lin_kids(k, id, 0, l);
 }
@@ -5174,10 +5188,35 @@ Bool gm_unknown_types(Kg g, Int id, Map(Str, Int) known, Sigs fs, Str src, Str s
     if (ke != "") { gk_diag("E0302", ke, g, id, src, smap); }
     Bool rsv = (g.ns[id].kind == "fn" || g.ns[id].kind == "proto") && sec_reserved(g.ns[id].text);
     if (rsv) { gk_diag("E0259", "`" + g.ns[id].text + "` is a builtin of secret values (spec §48) and cannot be redefined: a function by that name would replace it in every module, libraries included", g, id, src, smap); }
+    Str bi = gm_builtin_redecl(g, id);
+    if (bi != "") { gk_diag("E0299", bi, g, id, src, smap); }
     Str near = if (u == "") { "" } else { gm_near(known.keys(), 0, u) };
     Str hint = if (near != "") { " (did you mean `" + near + "`?)" } else { "; a type parameter is a single uppercase letter (T, K, V)" };
     if (u != "") { gk_diag("E0001", "type error: unknown type `" + u + "`" + hint, g, id, src, smap); }
-    return gm_unknown_types(g, id + 1, known, fs, src, smap, acc || u != "" || sk != "" || sb != "" || sw != "" || ke != "" || rsv);
+    return gm_unknown_types(g, id + 1, known, fs, src, smap, acc || u != "" || sk != "" || sb != "" || sw != "" || ke != "" || rsv || bi != "");
+}
+
+// A declaration of a built-in record (with_builtin_types) other than the
+// built-in one: the runtime makes a spawn's RegionError, and lowering a
+// SourceLoc, with the built-in fields, while code that reads one takes
+// the declared fields by name and type. A program's own declaration
+// replaces the built-in one, so it may only repeat it.
+Str gm_builtin_redecl(Kg g, Int id) {
+    Str kd = g.ns[id].kind;
+    Str nm = g.ns[id].text;
+    Str want = if (nm == "RegionError") { "message: Str" } else { if (nm == "SourceLoc") { "file: Str, line: Int, col: Int" } else { "" } };
+    if (want == "" || !str_ends_with(kd, "_t")) { return ""; }
+    Str got = if (kd == "struct_t") { gm_field_sig(g, id, 0, "") } else { "" };
+    if (got == want) { return ""; }
+    Str decl = if (nm == "RegionError") { "{ Str message; }" } else { "{ Str file; Int line; Int col; }" };
+    return "`" + nm + "` is a built-in type, " + decl + ": its values are made with those fields, so a declaration of it must be exactly that";
+}
+
+Str gm_field_sig(Kg g, Int id, Int i, Str acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    Int f = kg_kid(g, id, i);
+    Str one = if (g.ns[f].kind == "sfield" && g.ns[f].nk > 0) { g.ns[f].text + ": " + g.ns[kg_kid(g, f, 0)].text } else { "?" };
+    return gm_field_sig(g, id, i + 1, if (acc == "") { one } else { acc + ", " + one });
 }
 
 // ─── Ambiguous imports (E0223) ──────────────────────────────────────

@@ -1451,8 +1451,9 @@ GT cg_match_payload_raw(GT sc, Str ety, Int slot, GT c) {
 // calls to leaf functions do not ask for one. A leaf returns a scalar, only
 // reads its other parameters, and calls only leaf functions (itself
 // included) and non-allocating builtins; its body has no string or byte
-// literal, list literal, method call other than `.len()`, capitalised name
-// other than a numeric type, or `+` next to a non-scalar. Leafness only
+// literal, list literal, slice, method call other than `.len()`,
+// capitalised name other than a numeric type, or arithmetic on an
+// operand not known to be a scalar (lower.resid's lf_node). Leafness only
 // decides whether a scope is worth its push and pop, never whether one is
 // sound.
 
@@ -1494,7 +1495,8 @@ Bool scope_arith_builtin(Str n) {
 List(Str) leaf_calls(Str s, Int pos, Int end, List(Str) ptrs, Str prev, Bool pdot, List(Str) acc) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof" || t.pos > end) { return acc; }
-    if (t.kind == "str" || t.kind == "raw" || t.kind == "bytes") { return ["!"]; }
+    // An f-string makes a new Str (resid_str_concat, e.itoa): never a leaf.
+    if (t.kind == "str" || t.kind == "raw" || t.kind == "bytes" || t.kind == "fstring") { return ["!"]; }
     if (t.text == "lambda" || t.text == "closure" || t.text == "spawn") { return ["!"]; }
     if (t.text == "[") {
         // Indexing follows a value; anything else opens a list literal.
@@ -1510,19 +1512,23 @@ List(Str) leaf_calls(Str s, Int pos, Int end, List(Str) ptrs, Str prev, Bool pdo
         if (f.kind != "ident") { return ["!"]; }
         if (f2.text == "(") {
             // A leaf may call `.len()` and the vector methods that stay in
-            // registers (a misjudged leaf only goes without a scope).
+            // registers (a misjudged leaf only goes without a scope); not
+            // `with`, `shuffle` or `sum`, which on a list make or walk one
+            // (lower.resid's lf_node knows the receiver).
             Tok f3 = lex_tok(s, f2.pos);
-            Bool vm = f.text == "any" || f.text == "all" || f.text == "bits" || f.text == "sum" || f.text == "with" || f.text == "shuffle" || str_starts_with(f.text, "wrapping_");
+            Bool vm = f.text == "any" || f.text == "all" || f.text == "bits" || str_starts_with(f.text, "wrapping_");
             if (vm) { return leaf_calls(s, f2.pos, end, ptrs, f.text, false, acc); }
             if (f.text != "len" || f3.text != ")") { return ["!"]; }
             return leaf_calls(s, f3.pos, end, ptrs, ")", false, acc);
         }
         return leaf_calls(s, f.pos, end, ptrs, f.text, true, acc);
     }
-    if (t.text == "+") {
+    if (list_has_str(["+", "-", "*", "/", "%"], t.text)) {
+        // A bracketed operand (`(a) + (b)`) may be a string too, and
+        // arithmetic on a pointer (a Dec) makes a new value.
         Tok nx = lex_tok(s, t.pos);
-        Bool pl = pdot || prev == "]" || list_has_str(ptrs, prev);
-        Bool nl = nx.kind == "ident" && list_has_str(ptrs, nx.text);
+        Bool pl = pdot || prev == "]" || prev == ")" || list_has_str(ptrs, prev);
+        Bool nl = (nx.kind == "ident" && list_has_str(ptrs, nx.text)) || nx.text == "(" || nx.text == "[";
         if (pl || nl) { return ["!"]; }
         return leaf_calls(s, t.pos, end, ptrs, t.text, false, acc);
     }
@@ -2000,10 +2006,23 @@ Bool can_i64_store(Str ty) {
 }
 
 Bool is_str_fixed(Str t) {
-    return str_has_prefix_cg(t, "Str(");
+    return str_has_prefix_cg(t, "Str(") && fixed_cap_named(t, 4);
 }
 Bool is_bytes_fixed(Str t) {
-    return str_has_prefix_cg(t, "Bytes(");
+    return str_has_prefix_cg(t, "Bytes(") && fixed_cap_named(t, 6);
+}
+
+// Set (lw_program) while lowering a program that declares a record or a
+// sum whose name is Str or Bytes: then only a number in the brackets
+// makes Str(N) or Bytes(N) fixed-capacity, and `Str(Row)` is the
+// program's own type, not a fixed string to be copied into a frame slot.
+// (E0222 refuses such names; this holds without it. The checker, which
+// sees Str(N) for a generic N, runs before it is set.)
+pub Int user_fixed_word() { return resid_raw_global("resid_user_fixed", 8); }
+
+Bool fixed_cap_named(Str t, Int open) {
+    if (resid_raw_load64(user_fixed_word()) == 0) { return true; }
+    return str_ends_with(t, ")") && _all_digits(str_trim(str_slice(t, open, str_len(t) - 1)), 0);
 }
 
 // Recursive helper: is substring [i,n) all digits?
@@ -5030,9 +5049,10 @@ Bool tco_is_alloca(Str line) {
 }
 
 // Argument arrays handed to the runtime (copied out before any call
-// returns) and for-loop counters (re-initialized on every loop entry).
+// returns) and for-loop counters (re-initialized on every loop entry);
+// " ; hoist" marks one a for or while loop tagged (lw_iter_hoist).
 Bool tco_alloca_ok(Str line) {
-    if (str_starts_with(line, "%lia.") || str_starts_with(line, "%k.a") || tco_is_fixed(line)) { return true; }
+    if (str_starts_with(line, "%lia.") || str_starts_with(line, "%k.a") || tco_is_fixed(line) || str_ends_with(line, " ; hoist")) { return true; }
     return str_contains(line, " = alloca [") && str_ends_with(line, " x ptr]");
 }
 
