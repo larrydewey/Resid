@@ -58,10 +58,12 @@ List(Int) ce_ints(List(UInt(8)) bs, Int i, ListBuf(Int) acc) {
 
 // Internal writes cannot fail, so they carry no Result: the verbs below
 // are the only place the format can report one. What they store is in
-// 0..255: a head, tag or simple byte, or a byte the verbs checked
-// (ce_bytes, ce_byte), so wrapping_u8 never changes a value.
+// 0..255: a head, tag or simple byte, a byte the verbs checked (ce_bytes,
+// ce_byte), or a code point's UTF-8 (ce_str_char checks the code point).
+// The conversion is checked anyway: a value out of range is a bug here,
+// and it stops the program rather than wrap into another value's bytes.
 CborEnc ce_push(CborEnc e, Int b) {
-    List(UInt(8)) one = [wrapping_u8(b)];
+    List(UInt(8)) one = [(UInt(8)) b];
     return CborEnc {.out = e.out.concat(one)};
 }
 
@@ -73,7 +75,7 @@ CborEnc ce_push_all(CborEnc e, List(Int) bs, Int i) {
 
 List(UInt(8)) ce_u8(List(Int) bs, Int i, ListBuf(UInt(8)) acc) {
     if (i >= bs.len()) { return acc.finish(); }
-    return ce_u8(bs, i + 1, acc.push(wrapping_u8(bs[i])));
+    return ce_u8(bs, i + 1, acc.push((UInt(8)) bs[i]));
 }
 
 CborEnc ce_head(CborEnc e, Int major, UInt(64) arg) { return ce_push_all(e, cb_head(major, arg), 0); }
@@ -170,7 +172,13 @@ Int ce_bad_byte(List(Int) v, Int i) {
 // A streamed string was promised its byte length up front, so its head can
 // be written before the first code point.
 Result(CborEnc, SerialError) ce_str_begin(CborEnc e, Int chars, Int bytes) { return Ok(ce_head(e, 3, (UInt(64))bytes)); }
-Result(CborEnc, SerialError) ce_str_char(CborEnc e, Int cp) { return Ok(ce_push_all(e, cb_cp_bytes(cp), 0)); }
+// A Unicode scalar value only: not negative, at most U+10FFFF, and not a
+// surrogate. Any other Int would wrap into a valid-looking encoding that
+// another value also has (cp and cp + 2^26 shared one) or be ill-formed.
+Result(CborEnc, SerialError) ce_str_char(CborEnc e, Int cp) {
+    if (cp < 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) { return Err(invalid_value(f"{cp}", "a code point")); }
+    return Ok(ce_push_all(e, cb_cp_bytes(cp), 0));
+}
 Result(CborEnc, SerialError) ce_str_end(CborEnc e) { return Ok(e); }
 Result(CborEnc, SerialError) ce_bytes_begin(CborEnc e, Int len) { return Ok(ce_head(e, 2, (UInt(64))len)); }
 Result(CborEnc, SerialError) ce_byte(CborEnc e, Int b) {
