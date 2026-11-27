@@ -1,0 +1,30 @@
+// RB-18 follow-up (red team EKEY-2): a key-analysis summary frozen in a
+// cycle must not make an `own` key pass. mix's summary alternates between
+// "holds b" and "known empty"; their meet holds nothing, which would drop
+// the agreed source a from the derived key. The key below rests on an
+// agreed value and is refused as not own.
+import "random.resid";
+
+@key(k, own)
+Int use_key(List(Secret(UInt(8))) k) { return k.len(); }
+
+@agree(priv)
+List(Secret(UInt(8))) agree(List(Secret(UInt(8))) priv) { return priv; }
+
+@key_from(x, y)
+List(Secret(UInt(8))) kdf2(List(Secret(UInt(8))) x, Secret(UInt(8)) y) { return x; }
+
+Secret(UInt(8)) mix(List(Secret(UInt(8))) b, Int n) {
+    if (n <= 0) { return classify(0); }
+    Secret(UInt(8)) y = mix(b, n - 1);
+    return b[0] ^ y;
+}
+
+Int main() {
+    List(Secret(UInt(8))) r = random_secret(32);
+    List(Secret(UInt(8))) a = agree(random_secret(32));
+    List(Secret(UInt(8))) k = kdf2(r, mix(a, random_bytes(1)[0]));
+    Int n = use_key(k);
+    println(f"{n}");
+    return 0;
+}
