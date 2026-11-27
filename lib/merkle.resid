@@ -393,17 +393,29 @@ Option(List(NoteSig)) sn_sig_lines(List(Str) l, Int i, Int end, List(NoteSig) ac
     return sn_sig_lines(l, i + 1, end, acc.concat([sig]));
 }
 
-// A key name: non-empty, no space and no '+' (and, being one field of a
-// line split on spaces, no other separator either).
+// A key name: non-empty, with no white space, no control character and
+// no '+'. White space is Unicode's White_Space property, as the
+// signed-note format says (Go's note package: unicode.IsSpace); the
+// ASCII ones could not occur in one field of a line split on spaces, the
+// others could.
 Bool sn_name_ok(Str name) {
     if (name == "") { return false; }
-    return sn_name_bytes(bytes_of(name), 0);
+    return sn_name_cps(name, 0);
 }
 
-Bool sn_name_bytes(List(Int) b, Int i) {
-    if (i >= b.len()) { return true; }
-    if (b[i] <= 32 || b[i] == 43 || b[i] == 127) { return false; }
-    return sn_name_bytes(b, i + 1);
+Bool sn_name_cps(Str name, Int i) {
+    if (i >= str_len(name)) { return true; }
+    Int c = str_char_at(name, i);
+    if (c <= 32 || c == 43 || sn_space_or_control(c)) { return false; }
+    return sn_name_cps(name, i + 1);
+}
+
+// DEL, the C1 controls (U+0085 NEL among them) and the White_Space code
+// points above U+0020.
+Bool sn_space_or_control(Int c) {
+    if (c >= 127 && c <= 160) { return true; }
+    if (c == 5760 || (c >= 8192 && c <= 8202)) { return true; }
+    return c == 8232 || c == 8233 || c == 8239 || c == 8287 || c == 12288;
 }
 
 // Canonical base64 only: decodes, and encodes back to the same text (no

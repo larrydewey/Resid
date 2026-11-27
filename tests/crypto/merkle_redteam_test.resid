@@ -1,0 +1,43 @@
+// Red-team regressions for lib/merkle.resid (issue #9). Each test failed
+// before its fix. Comparisons are on Bool only. (dc-merkle-1 needs notes
+// read from files: tests/crypto/merkle_strprobe.resid.)
+
+import "merkle.resid";
+
+// Whether a one-signature note under this key name parses.
+Bool rt_name_parses(Str name) {
+    List(Int) sig = sha256_bytes([1]).concat(sha256_bytes([2]));
+    Str note = "a note\n\n" + note_sig_line(name, 1, sig);
+    return match note_parse(note) { Some(n) => true, None => false };
+}
+
+Bool rt_any_parses(List(Int) cps, Int i) {
+    if (i >= cps.len()) { return false; }
+    if (rt_name_parses("log" + str_from_code(cps[i]) + "name") || rt_name_parses(str_from_code(cps[i]) + "log") || rt_name_parses("log" + str_from_code(cps[i]))) { return true; }
+    return rt_any_parses(cps, i + 1);
+}
+
+// dc-merkle-2: only ASCII white space was refused in a key name; the
+// signed-note format (and Go's note package, unicode.IsSpace) refuses
+// every Unicode space.
+test "dc-merkle-2: a key name holds no Unicode white space" {
+    expect(rt_name_parses("log.example/name")).toBeTrue();
+    // U+0085, U+00A0, U+1680, U+2000..U+200A, U+2028, U+2029, U+202F, U+205F, U+3000.
+    List(Int) spaces = [133, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288];
+    expect(rt_any_parses(spaces, 0)).toBeFalse();
+    expect(rt_name_parses("log" + str_from_code(160) + "name")).toBeFalse();
+    expect(rt_name_parses("log" + str_from_code(8232) + "name")).toBeFalse();
+    expect(rt_name_parses("log" + str_from_code(12288) + "name")).toBeFalse();
+}
+
+test "dc-merkle-2: a key name holds no control character or '+', and may be non-ASCII" {
+    // C1 controls (U+0080..U+009F) with the C0 ones, DEL and '+'.
+    List(Int) ctl = [128, 144, 159, 127, 43, 9, 11, 12, 13, 31];
+    expect(rt_any_parses(ctl, 0)).toBeFalse();
+    expect(rt_name_parses("")).toBeFalse();
+    // Letters outside ASCII, and characters next to the refused ranges.
+    expect(rt_name_parses("журнал.example")).toBeTrue();
+    expect(rt_name_parses("log" + str_from_code(161) + "name")).toBeTrue();
+    expect(rt_name_parses("log" + str_from_code(8203) + "name")).toBeTrue();
+    expect(rt_name_parses("log" + str_from_code(12289) + "name")).toBeTrue();
+}
