@@ -5632,7 +5632,11 @@ GT lw_spawn_mode(LW w, Int id, List(Str) env, GT c, Bool start) {
     CapPP pe = cap_enter_prologue(str_split(scaps, ","), CapPP {.lines = nil_list(), .glines = nil_list(), .n = 0});
     CapPP pi = capinject_at(b1, 0, true, CapPP {.lines = nil_list(), .glines = pe.glines, .n = pe.n});
     Str cpre = "@resid.cap." + str_slice(fnm, 1, str_len(fnm));
-    List(Str) fl = cap_rename_to(["define ptr " + fnm + "(ptr %envp) {", "entry:"].concat(pr0.lines).concat(pe.lines).concat(lw_declassify_check(w.g, lw_kid(w, id, 0))).concat(pi.lines).concat(["}"]).concat(pi.glines), cpre, 0, ListBuf());
+    // Its loops' tagged and fixed allocas go to its entry block, as a
+    // named function's do (lw_fx_hoist): left in a loop, each step would
+    // take a new slot until the spawn's stack runs out.
+    List(Str) fb = lw_fx_hoist(pr0.lines.concat(pe.lines).concat(lw_declassify_check(w.g, lw_kid(w, id, 0))).concat(pi.lines), 0);
+    List(Str) fl = cap_rename_to(["define ptr " + fnm + "(ptr %envp) {", "entry:"].concat(fb).concat(["}"]).concat(pi.glines), cpre, 0, ListBuf());
     // The region may run while this function goes on: what it captures is
     // shared from here (no in-place update or record reuse may touch it).
     LSC sc0 = lw_share_caps(w, cap0.vals, cap0.tys, 0, LSC {.g = lw_step(c, "", "", c.lines, imax(c.tmp, body.tmp)), .vals = nil_list()});

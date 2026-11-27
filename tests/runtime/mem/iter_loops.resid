@@ -116,6 +116,25 @@ Int s_lit(Int n) {
     return 0;
 }
 
+// The same in a for loop inline in a spawn's body, a function of its
+// own (lw_spawn_mode): run.sh runs it on an 8 MB spawn stack
+// (RESID_SPAWN_STACK_MB), where the compiler that left that body's
+// arrays in the loop died of SIGSEGV within 200,000 steps.
+Int s_spawn(Int n) {
+    Map(Str, Int) m = {"k0": 7, "k1": 8};
+    Result(Int, RegionError) r = spawn () {
+        for (Int i in 0..n) {
+            List(Int) xs = [i, i + 1, i + 2, i + 3, i, i, i, i];
+            List(Row) rs = [Row {.id = i, .name = "a", .score = i + 1}, Row {.id = i + 1, .name = f"{i % 10}", .score = 2}];
+            List(Pt) ps = [Pt {.x = i, .y = 1}, Pt {.x = 2, .y = i + 5}, Pt {.x = 3, .y = 4}];
+            Int v = m.get(f"k{i % 3}") else { 0 };
+            _ = mark(i, n, f"{xs[3] + xs.len()} {rs[1].name}:{rs[0].score + rs.len()} {ps[1].y - ps[0].x} {v}");
+        }
+        return 0;
+    };
+    return match r { Ok(k) => k, Err(e) => 1 };
+}
+
 @requires(filesystem(readonly))
 Int s_wlit(Str path) {
     Map(Str, Int) m = {"k0": 7, "k1": 8};
@@ -135,7 +154,7 @@ Int s_wlit(Str path) {
 Int main() {
     Str w = args.get(1);
     Int n = if (w == "while" || w == "wlit") { 0 } else { str_parse_int(args.get(2)) };
-    Int r = if (w == "bind") { s_bind(n) } else { if (w == "expr") { s_expr(n) } else { if (w == "list") { s_list(n) } else { if (w == "nested") { s_nested(n) } else { if (w == "brk") { s_brk(n) } else { if (w == "lit") { s_lit(n) } else { if (w == "wlit") { s_wlit(args.get(2)) } else { s_while(args.get(2)) } } } } } } };
+    Int r = if (w == "bind") { s_bind(n) } else { if (w == "expr") { s_expr(n) } else { if (w == "list") { s_list(n) } else { if (w == "nested") { s_nested(n) } else { if (w == "brk") { s_brk(n) } else { if (w == "lit") { s_lit(n) } else { if (w == "spawn") { s_spawn(n) } else { if (w == "wlit") { s_wlit(args.get(2)) } else { s_while(args.get(2)) } } } } } } } };
     println(f"done {r}");
     return 0;
 }
