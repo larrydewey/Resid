@@ -61,6 +61,7 @@ Int main() {
 | `ct_select(c, a, b)` with a `Secret(Bool)` `c` | methods, except a secret list's or text's `.len()` (`E0255`) |
 | `ct_nonzero(x)`: a `Secret(Bool)` that holds when the integer `x` (at most 64 bits) is not zero, by arithmetic, never a comparison | |
 | `ct_pick_bytes(c, a, b)` (`lib/word.resid`): one of two equal-length secret byte lists, chosen by `ct_select` byte by byte | |
+| `secret_str_splice(s, at, del, ins)`: secret text edited at a public position, no `declassify` | a secret position or count for it (`E0255`) |
 | | being a `Map` key or `Set` element in any type (`E0253`) |
 | | a provider argument, including `filesystem.write_secret` (`E0255`) |
 | | a `spawn` region's result (`E0255`) |
@@ -70,7 +71,7 @@ To persist key material, declassify it under the grant and write it with
 `filesystem.write_secret(path, declassify(key, "persist the key"))`.
 
 The builtins `secret`, `declassify`, `classify`, `secret_split`,
-`secret_join`, `ct_select` and `ct_nonzero` are reserved: a program cannot define a
+`secret_join`, `secret_str_splice`, `ct_select` and `ct_nonzero` are reserved: a program cannot define a
 function by those names (`E0259`), since it would replace the builtin in
 every module, libraries included.
 
@@ -89,7 +90,34 @@ every module, libraries included.
   lets it take secret ones.
 - `classify(x)` lifts a public value into secret computation, for example
   padding constants or public message bytes mixed with a key. It claims no
-  secrecy, so `E0250` does not apply to it.
+  secrecy, so `E0250` does not apply to it. `classify("")` is an empty
+  secret text.
+
+## Editing secret text
+
+`secret_str_splice(s, at, del, ins)` returns the `Secret(Str)` `s` with
+`del` characters from character `at` replaced by `ins`, without the
+`declassify` grant, so a password field can take keystrokes while its text
+stays secret:
+
+```resid
+Secret(Str) typed = secret_str_splice(pw, caret, 0, key_text);  // insert
+Secret(Str) back = secret_str_splice(pw, caret - 1, 1, "");     // backspace
+```
+
+- `at` and `del` are public `Int`s; a secret one is refused (`E0255`),
+  since it would decide which bytes are copied. `ins` is a `Str` or a
+  `Secret(Str)`.
+- Characters are Unicode scalar values, counted as `.len()` counts them.
+- Out-of-range values are clamped, never refused: `at` to `0..s.len()`,
+  `del` to `0..s.len() - at`. The call never fails (a failure would be a
+  branch on the secret) and never reads outside `s`.
+- The result is secret: printing, comparing or declassifying it is refused
+  as for any secret. It reveals nothing `.len()` does not; its time depends
+  on the lengths and the UTF-8 layout of the text, as `.len()`'s does.
+- The new text is a new string; `s` is unchanged, since other values may
+  still hold it. In secret mode the allocator zeroes the old one when its
+  region lets it go, like every other secret.
 
 ## One implementation for public and secret data
 

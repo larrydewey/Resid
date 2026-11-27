@@ -3333,12 +3333,28 @@ secret. ct_nonzero(x) gives that condition from an integer of
 at most 64 bits, secret or public: a Secret(Bool) that holds
 when x is not zero, computed by arithmetic behind an empty-asm
 barrier, never a comparison or a branch. A secret list's or text's .len() is public.
+
+  secret_str_splice(s, at, del, ins)
+                          a Secret(Str): s with del characters
+                          from character at replaced by ins
+
+secret_str_splice edits secret text without the declassify
+grant (a password field takes keystrokes this way). s is a
+Secret(Str); at and del are public Ints (a secret one is
+refused, E0255: it would decide which bytes are copied); ins
+is a Str or a Secret(Str). Characters are Unicode scalar
+values, counted as .len() counts them. at is clamped to
+0..s.len() and del to 0..s.len() - at, so the call never
+fails and never reads outside s. The result is secret; it
+reveals nothing .len() does not, and its time depends only on
+the lengths and the UTF-8 layout of the text, as .len()'s
+does. An empty secret text is classify("").
 lib/crypto.resid's ct_eq compares secret byte lists in
 constant time and publishes the one-bit verdict, so it needs
 the declassify grant.
 
 The builtin names secret, declassify, classify, secret_split,
-secret_join, ct_select and ct_nonzero are reserved (E0259): a function by
+secret_join, secret_str_splice, ct_select and ct_nonzero are reserved (E0259): a function by
 one of those names would replace the builtin in every module,
 libraries included.
 
@@ -3379,7 +3395,9 @@ Show; its body is checked like any function, so it reaches the
 secret only through declassify.
 
 After checking and reduction Secret(T) is erased: it lowers
-exactly as T, and secret(x) and declassify(x, r) as x.
+exactly as T, and secret(x) and declassify(x, r) as x;
+secret_str_splice lowers to a runtime call that copies into a
+new string, leaving s as it was (other values may hold it).
 
 The declassify grant is also checked at force time, like a
 provider call (§21.3): a function, lambda or spawn body that

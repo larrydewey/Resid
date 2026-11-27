@@ -1,3 +1,16 @@
+# Unreleased
+
+## Language
+
+- **Editing secret text** (spec §48): `secret_str_splice(s, at, del, ins)`
+  returns the `Secret(Str)` `s` with `del` characters from character `at`
+  replaced by `ins`, without the `declassify` grant. A password field can
+  now take keystrokes while its text stays secret, so a GUI program no
+  longer needs `@requires(declassify)` on `main` to have one. Positions
+  count Unicode scalar values, as `.len()` does, and are clamped to the
+  text (never refused); a secret position or count is refused (E0255).
+  The name is reserved (E0259). An empty secret text is `classify("")`.
+
 # Resid v0.5.1
 
 From v0.5.0. A security release: two red-team passes over every claim in
