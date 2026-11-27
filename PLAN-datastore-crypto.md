@@ -35,6 +35,12 @@ differs from the plan below:
   - ML-DSA refuses a message, context, mu or hint that is not bytes.
   - `tests/crypto/fuzz.resid` has mutation kinds for notes, ristretto255
     encodings and ML-DSA keys, signatures and hints.
+- **Round 2** found nothing medium or higher and three lows, fixed: the
+  byte entry points refuse a NUL (and any ASCII control but newline) and
+  account for every byte; a key name is refused only for white space or
+  '+', as the format says (DEL and C1 controls are allowed, in names and
+  text); `pc_open_vec` checks a vector opening's values and blinding are
+  canonical.
 - The ct coverage gate reports 17 `lib/dev/device*.resid` functions on
   master as well as on this branch. They predate this work; every
   function added here is covered.
