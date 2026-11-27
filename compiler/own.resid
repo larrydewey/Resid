@@ -1026,7 +1026,10 @@ OV ow_branches_lim_n(OX x, ORS r, OS s, Int id, Int i, Int n, OV acc) { return o
 // binder (decided in the backward pass; recorded here as a candidate).
 OV ow_struct(OX x, ORS r, OS s, Int id, Int i, OV acc) {
     if (i >= x.g.ns[id].nk) {
-        Int src = ow_rebuild_src(x, r, id, 0);
+        // Not when the literal holds src's own record (RB-26): written in
+        // place, it would come to hold itself.
+        Int src0 = ow_rebuild_src(x, r, id, 0);
+        Int src = if (src0 >= 0 && ow_holds_src(x, acc.f, acc.es, src0, id)) { -1 } else { src0 };
         // arg 1: src's record lies in the innermost region here (OF.cur when the
         // rebuild is met: a loop takes it out for its body; ow_rebuild_cur).
         OF f2 = if (src >= 0) { ow_ev_add(acc.f, OEv {.node = id, .kind = "rebuild", .b = src, .path = 0, .cal = "", .arg = if (acc.f.cur.contains(src)) { 1 } else { 0 }, .call = id}) } else { acc.f };
@@ -1044,6 +1047,129 @@ OV ow_struct(OX x, ORS r, OS s, Int id, Int i, OV acc) {
 }
 
 OV ow_struct_n(OX x, ORS r, OS s, Int id, Int i, OV acc) { return ow_struct(x, r, s, id, i + 1, acc); }
+
+// Whether literal id's value may hold the record of binder src, which a
+// rebuild of src would overwrite with the literal (RB-26: `T { .xs =
+// [U { .t = e }], .. }` rebuilding e made e's record hold a list holding
+// itself). src's records are its root-level locations, its own and those
+// it aliases; the literal holds whatever its entries name and whatever
+// the binders they name may point into. A record nested in a value held
+// counts as held: values are trees, so it would be a cycle either way. A
+// closure or spawn inside the literal may capture anything, so it counts
+// as holding src.
+Bool ow_holds_src(OX x, OF f, List(OE) es, Int src, Int id) {
+    // Only a type that can hold a record of its own type (through any
+    // fields, containers, sums or closures) can come to hold src's: the
+    // alias entries are coarse (a callee result may point "anywhere in"
+    // an argument), and asking them alone refused rebuilds no value could
+    // break.
+    if (!ow_self_reach(x.fs, ow_base(x.fs, x.g.ns[id].text))) { return false; }
+    if (ow_has_kind(x.g, id, "lambda") || ow_has_kind(x.g, id, "spawn")) { return true; }
+    List(OLc) w = ow_roots(ow_mem(f, src, 0), 0, ListBuf());
+    return ow_holds_any(f, es, w, 0);
+}
+
+Bool ow_holds_any(OF f, List(OE) es, List(OLc) w, Int i) {
+    if (i >= es.len()) { return false; }
+    OE e = es[i];
+    Bool hit = e.r >= 0 && ow_same_root(ow_roots(ow_mem(f, e.r, e.l), 0, ListBuf()), w, 0);
+    if (hit) { return true; }
+    return ow_holds_any_n(f, es, w, i);
+}
+
+Bool ow_holds_any_n(OF f, List(OE) es, List(OLc) w, Int i) { return ow_holds_any(f, es, w, i + 1); }
+
+// The root-level locations (a binder's record itself) among ls.
+List(OLc) ow_roots(List(OLc) ls, Int i, ListBuf(OLc) acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    return ow_roots_n(ls, i, if (ls[i].r >= 0 && ow_pn(ls[i].l) == 0) { acc.push(ls[i]) } else { acc });
+}
+
+List(OLc) ow_roots_n(List(OLc) ls, Int i, ListBuf(OLc) acc) { return ow_roots(ls, i + 1, acc); }
+
+Bool ow_same_root(List(OLc) a, List(OLc) b, Int i) {
+    if (i >= a.len()) { return false; }
+    if (ow_root_in_ls(a[i].r, b, 0)) { return true; }
+    return ow_same_root_n(a, b, i);
+}
+
+Bool ow_same_root_n(List(OLc) a, List(OLc) b, Int i) { return ow_same_root(a, b, i + 1); }
+
+Bool ow_root_in_ls(Int r, List(OLc) b, Int i) {
+    if (i >= b.len()) { return false; }
+    if (b[i].r == r) { return true; }
+    return ow_root_in_ls_n(r, b, i);
+}
+
+Bool ow_root_in_ls_n(Int r, List(OLc) b, Int i) { return ow_root_in_ls(r, b, i + 1); }
+
+// Whether a value of record type t can hold a record of type t: its field
+// types, and the records, sums and aliases they name, reach t's name or a
+// closure (whose environment may hold anything). A breadth-first search
+// over type texts, each named type expanded once.
+Bool ow_self_reach(Funcs fs, Str t) {
+    Int si = struct_index(fs, t);
+    if (si < 0) { return true; }
+    return ow_reach_at(fs, t, [fs.stf[si]], 0, [t]);
+}
+
+Bool ow_reach_at(Funcs fs, Str t, List(Str) ws, Int i, List(Str) seen) {
+    if (i >= ws.len()) { return false; }
+    List(Str) toks = ow_idents(ws[i], 0, 0, []);
+    if (toks.contains(t) || toks.contains("closure")) { return true; }
+    List(Str) more = ow_reach_more(fs, toks, seen, 0, []);
+    List(Str) names = ow_new_names(toks, seen, 0, seen);
+    return ow_reach_at(fs, t, ws.concat(more), i + 1, names);
+}
+
+List(Str) ow_new_names(List(Str) toks, List(Str) seen, Int i, List(Str) acc) {
+    if (i >= toks.len()) { return acc; }
+    return ow_new_names(toks, seen, i + 1, if (acc.contains(toks[i])) { acc } else { acc.concat([toks[i]]) });
+}
+
+// The texts named by toks not yet seen: a record's fields, a sum's
+// variants, an alias's target.
+List(Str) ow_reach_more(Funcs fs, List(Str) toks, List(Str) seen, Int i, List(Str) acc) {
+    if (i >= toks.len()) { return acc; }
+    Str n = toks[i];
+    if (seen.contains(n)) { return ow_reach_more(fs, toks, seen, i + 1, acc); }
+    Int a = ow_name_at(fs.stn, n, 0);
+    Int b = ow_name_at(fs.sun, n, 0);
+    Int c = ow_name_at(fs.ctn, n, 0);
+    List(Str) a1 = if (a >= 0) { acc.concat([fs.stf[a]]) } else { acc };
+    List(Str) a2 = if (b >= 0 && b < fs.suv.len()) { a1.concat([fs.suv[b]]) } else { a1 };
+    List(Str) a3 = if (c >= 0 && c < fs.ctb.len()) { a2.concat([fs.ctb[c]]) } else { a2 };
+    return ow_reach_more(fs, toks, seen, i + 1, a3);
+}
+
+Int ow_name_at(List(Str) ns, Str n, Int i) {
+    if (i >= ns.len()) { return -1; }
+    if (ns[i] == n) { return i; }
+    return ow_name_at(ns, n, i + 1);
+}
+
+// The identifiers of a type text (letters, digits, `_`); a token starts at b.
+List(Str) ow_idents(Str t, Int i, Int b, List(Str) acc) {
+    if (i >= str_len(t)) { return if (i > b) { acc.concat([str_slice(t, b, i)]) } else { acc }; }
+    Int ch = str_char_at(t, i);
+    Bool w = (ch >= 48 && ch <= 57) || (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95;
+    if (w) { return ow_idents(t, i + 1, b, acc); }
+    return ow_idents(t, i + 1, i + 1, if (i > b) { acc.concat([str_slice(t, b, i)]) } else { acc });
+}
+
+// Whether the subtree at id has a node of kind k.
+Bool ow_has_kind(Kg g, Int id, Str k) {
+    if (g.ns[id].kind == k) { return true; }
+    return ow_has_kind_kids(g, id, k, 0);
+}
+
+Bool ow_has_kind_kids(Kg g, Int id, Str k, Int i) {
+    if (i >= g.ns[id].nk) { return false; }
+    if (ow_has_kind(g, kg_kid(g, id, i), k)) { return true; }
+    return ow_has_kind_kids_n(g, id, k, i);
+}
+
+Bool ow_has_kind_kids_n(Kg g, Int id, Str k, Int i) { return ow_has_kind_kids(g, id, k, i + 1); }
 
 // The binder a literal of type T rebuilds: the first binder of type T
 // mentioned anywhere inside it (its fields are read before the literal
