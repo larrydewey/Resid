@@ -64,8 +64,13 @@ Str secret_uniform(List(Int) b) {
 Bool check(List(Str) f) {
     if (f[0] == "B") { return enc(r255_base_mul(dec_int(f[1], 0, 0))) == f[2]; }
     if (f[0] == "V") {
-        Bool ok = match r255_decode(unhex(f[1])) { Some(p) => enc(p) == f[1], None => false, };
-        return ok == (f[2] == "1");
+        // A valid encoding decodes and encodes back; an invalid one is
+        // refused outright. (Comparing "decodes and encodes back" with the
+        // expectation let a decoder that accepts a non-canonical encoding
+        // pass: what it accepted encodes back differently, which reads as
+        // the expected 0.)
+        if (f[2] == "1") { return match r255_decode(unhex(f[1])) { Some(p) => enc(p) == f[1], None => false, }; }
+        return match r255_decode(unhex(f[1])) { Some(p) => false, None => true, };
     }
     if (f[0] == "U") { return enc(r255_from_uniform(unhex(f[1]))) == f[2] && secret_uniform(unhex(f[1])) == f[2]; }
     if (f[0] == "A") {
