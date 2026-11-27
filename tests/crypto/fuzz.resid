@@ -1,8 +1,10 @@
 // fuzz.resid — mutation fuzzing of every parser that reads untrusted
 // bytes: DER, X.509 (strict and positional), CRLs, OCSP responses, keys,
 // signatures, CBOR/COSE, TLS handshake messages, SPDM messages and
-// transport frames, TPM responses and public areas, and CoRIMs (parsed,
-// then applied to their own reference values as evidence).
+// transport frames, TPM responses and public areas, CoRIMs (parsed,
+// then applied to their own reference values as evidence), signed notes
+// and checkpoints, ristretto255 encodings, and ML-DSA public keys,
+// signatures and hints.
 //
 //   fuzz <kind> <seed-file> <iterations> <rng-seed> [<extra-file>...]
 //
@@ -16,6 +18,18 @@
 //
 // The extra files are the other inputs a parser needs (an issuer for a
 // child, a certificate for a CRL). Exit status 1 when anything crashed.
+//
+// The kinds note, r255, mldsasig, mldsapk and mldsahint also assert, per
+// input, that whatever is accepted is canonical (it encodes back to the
+// very input) and, where a signature is checked, that nothing but the
+// signed original is accepted; a broken assertion is reported as a CRASH.
+// Their seeds are made by this program from fixed keys:
+//
+//   fuzz --mkseed <name>        prints the seed in hex (xxd -r -p)
+//
+// with <name> one of note, r255-point, r255-scalar, r255-uniform,
+// mldsa<44|65|87>-<pk|sig|hint>; tests/crypto/seeds/gen_datastore.sh
+// writes them all.
 
 import "chain.resid";
 import "instant.resid";
@@ -30,6 +44,9 @@ import "spdm_transport.resid";
 import "dev/tpm_wire.resid";
 import "verify/core.resid";
 import "verify/corim.resid";
+import "merkle.resid";
+import "ristretto255g.resid";
+import "mldsa.resid";
 
 // ─── Randomness: xorshift64*, deterministic from the seed ───────────
 
@@ -262,6 +279,289 @@ List(CorimClaim) corim_as_claims(List(CorimTriple) ts, Int i, List(CorimClaim) a
     return corim_as_claims(ts, i + 1, acc.concat(corim_evidence(ts[i].env, ts[i].meas)));
 }
 
+// ─── Datastore primitives: notes, ristretto255, ML-DSA ───────────────
+
+// UTF-8 bytes as text, totally: a malformed or truncated sequence becomes
+// '?' (the notes hold an em dash, so the lossy reader above will not do).
+Str fz_text(List(Int) b, Int i, StrBuf acc) {
+    Int n = b.len();
+    if (i >= n) { return acc.finish(); }
+    Int c = b[i];
+    if (c < 128) { return fz_text(b, i + 1, acc.push_char(if (c == 0) { 63 } else { c })); }
+    if (c >= 194 && c < 224 && i + 1 < n && fz_cont(b[i + 1])) {
+        return fz_text(b, i + 2, acc.push_char(((c & 31) << 6) | (b[i + 1] & 63)));
+    }
+    if (c >= 224 && c < 240 && i + 2 < n && fz_cont(b[i + 1]) && fz_cont(b[i + 2])) {
+        Int v = ((c & 15) << 12) | ((b[i + 1] & 63) << 6) | (b[i + 2] & 63);
+        if (v >= 2048 && (v < 55296 || v > 57343)) { return fz_text(b, i + 3, acc.push_char(v)); }
+    }
+    return fz_text(b, i + 1, acc.push_char(63));
+}
+
+Bool fz_cont(Int c) { return c >= 128 && c < 192; }
+
+Bool fz_same(List(Int) a, List(Int) b) { return a.len() == b.len() && hex_encode(a) == hex_encode(b); }
+
+List(Int) fz_seed(Str label) { return sha256_bytes(bytes_of("resid fuzz " + label)); }
+
+// The fixed checkpoint, its log key and two witnesses.
+Checkpoint fz_ckpt() {
+    List(Str) ext = ["extension one", "x=2"];
+    return Checkpoint {.origin = "fuzz.example/log", .size = 1234567, .root = fz_seed("root"), .ext = ext};
+}
+NoteKey fz_log() { return NoteKey {.name = "fuzz.example/log", .kind = 1, .pubk = pub_key(fz_seed("log"))}; }
+NoteKey fz_wit(Int i) { return NoteKey {.name = f"witness{i}.example", .kind = 4, .pubk = pub_key(fz_seed(f"witness{i}"))}; }
+Int fz_now() { return 1800000000; }
+
+// The seed note: the checkpoint signed by the log, a signature by a key
+// nobody lists, and two witness cosignatures.
+Str fz_note() {
+    Checkpoint c = fz_ckpt();
+    Str signed = note_sign(ckpt_text(c), "fuzz.example/log", fz_seed("log"));
+    Str other = note_sig_line("stranger.example", 305419896, fz_seed("stranger").concat(fz_seed("stranger2")));
+    return signed + other + cosig_line(c, 1700000000, "witness1.example", fz_seed("witness1")) + cosig_line(c, 1700000001, "witness2.example", fz_seed("witness2"));
+}
+
+Str fz_sig_text(List(NoteSig) sigs, Int i, Str acc) {
+    if (i >= sigs.len()) { return acc; }
+    return fz_sig_text(sigs, i + 1, acc + note_sig_line(sigs[i].name, sigs[i].id, sigs[i].sig));
+}
+
+// An accepted checkpoint can only be the one that was signed.
+Int fz_is_signed(Option(Checkpoint) got, Str what) {
+    return match got {
+        Some(c) => fz_must(ckpt_text(c) == ckpt_text(fz_ckpt()), what + " accepted a checkpoint the log did not sign"),
+        None => 0,
+    };
+}
+
+Int fz_must(Bool ok, Str msg) {
+    if (!ok) { eprintln("ASSERT " + msg); }
+    assert(ok, msg);
+    return 1;
+}
+
+Int fz_names(Option(List(Str)) v) { return match v { Some(n) => 1 + n.len(), None => 0 }; }
+
+// A signed note, and its text as a checkpoint. A parsed note writes back
+// to its input, a parsed checkpoint to its text, and whatever opens or
+// counts as cosigned is the signed checkpoint. 4096 is set when the note
+// is accepted with both witnesses, as the seed must be.
+Int run_note(List(Int) m) {
+    Str s = fz_text(m, 0, StrBuf());
+    NoteKey log = fz_log();
+    List(NoteKey) wit = [fz_wit(1), fz_wit(2)];
+    Option(Note) pn = note_parse(s);
+    Int a = match pn {
+        Some(n) => fz_must(n.text + "\n" + fz_sig_text(n.sigs, 0, "") == s, "note_parse accepted a note that does not write back to itself") + n.sigs.len() + fz_names(note_verified(n, [log])),
+        None => 0,
+    };
+    Str body = match pn { Some(n) => n.text, None => s };
+    Int b = match ckpt_parse(body) {
+        Some(c) => fz_must(ckpt_text(c) == body, "ckpt_parse accepted a non-canonical checkpoint") + fz_must(c.size >= 0 && c.root.len() == 32, "ckpt_parse: size or root out of range"),
+        None => 0,
+    } + match ckpt_parse(s) { Some(c) => fz_must(ckpt_text(c) == s, "ckpt_parse accepted a non-canonical checkpoint"), None => 0 };
+    Option(Checkpoint) two = ckpt_cosigned(s, log, wit, 2, fz_now());
+    Int c = fz_is_signed(ckpt_open(s, log), "ckpt_open") + fz_is_signed(ckpt_cosigned(s, log, wit, 1, fz_now()), "ckpt_cosigned") + fz_is_signed(two, "ckpt_cosigned");
+    // Before either witness's time nothing is cosigned; a threshold above
+    // the witnesses listed is never met; one witness is not two.
+    Int d = match ckpt_cosigned(s, log, wit, 1, 1699999999) { Some(x) => fz_must(false, "ckpt_cosigned accepted a cosignature from the future"), None => 0 }
+        + match ckpt_cosigned(s, log, wit, 3, fz_now()) { Some(x) => fz_must(false, "ckpt_cosigned met a threshold above its witnesses"), None => 0 }
+        + match ckpt_cosigned(s, log, [fz_wit(1)], 2, fz_now()) { Some(x) => fz_must(false, "ckpt_cosigned counted one witness twice"), None => 0 }
+        + match ckpt_open(s, fz_wit(1)) { Some(x) => fz_must(false, "ckpt_open accepted a witness as the log"), None => 0 };
+    Int e = match pn { Some(n) => fz_twice(n, s) + fz_twice_again(n, s), None => 0 };
+    return ((a + b + c + d + e) & 4095) + match two { Some(x) => 4096, None => 0 };
+}
+
+// How many signature lines of the note are from this key (name and ID).
+Int fz_lines_of(List(NoteSig) sigs, NoteKey k, Int i, Int acc) {
+    if (i >= sigs.len()) { return acc; }
+    return fz_lines_of(sigs, k, i + 1, acc + bit(sigs[i].name == k.name && sigs[i].id == note_key_id(k)));
+}
+
+// A listed key that signs twice rejects the whole note, whatever the
+// signatures are.
+Int fz_twice(Note n, Str s) {
+    List(NoteKey) wit = [fz_wit(1), fz_wit(2)];
+    Bool log2 = fz_lines_of(n.sigs, fz_log(), 0, 0) > 1;
+    Bool wit2 = fz_lines_of(n.sigs, fz_wit(1), 0, 0) > 1 || fz_lines_of(n.sigs, fz_wit(2), 0, 0) > 1;
+    Int a = match ckpt_open(s, fz_log()) { Some(x) => fz_must(!log2, "ckpt_open accepted a note its log signed twice"), None => 0 };
+    Int b = match ckpt_cosigned(s, fz_log(), wit, 1, fz_now()) { Some(x) => fz_must(!log2 && !wit2, "ckpt_cosigned accepted a note a listed key signed twice"), None => 0 };
+    return a + b;
+}
+
+// The same with each signature line in turn said again at the end (a
+// mutation the byte-level ones are too short to make).
+Int fz_twice_again(Note n, Str s) { return fz_again_at(n, s, 0, 0); }
+
+Int fz_again_at(Note n, Str s, Int i, Int acc) {
+    if (i >= n.sigs.len() || i >= 8) { return acc; }
+    Str s2 = s + note_sig_line(n.sigs[i].name, n.sigs[i].id, n.sigs[i].sig);
+    Int r = match note_parse(s2) { Some(n2) => fz_twice(n2, s2), None => 0 };
+    return fz_again_at(n, s, i + 1, acc + r);
+}
+
+// ristretto255: an element, a scalar and (at 64 bytes) the uniform map.
+// What decodes encodes back to the input; the map's result is a canonical
+// encoding. 4096 is set when the input decodes as an element or a scalar,
+// or maps, as each seed must.
+Int run_r255(List(Int) m) {
+    Int a = match r255_decode(m) {
+        Some(p) => fz_point(p, m),
+        None => 0,
+    };
+    Int b = match r255_sc_decode(m) {
+        Some(x) => fz_scalar(x, m),
+        None => 0,
+    };
+    Int c = if (m.len() == 64) { fz_uniform(m) } else { 0 };
+    return a + b + c + if (a + b + c > 0) { 4096 } else { 0 };
+}
+
+Int fz_point(EgPt(Int(512)) p, List(Int) m) {
+    EgPt(Int(512)) id = r255_identity();
+    EgPt(Int(512)) same = r255_add(p, id);
+    return fz_must(fz_same(r255_encode(p), m), "r255_decode accepted a non-canonical encoding") + fz_must(r255_eq(p, p) && fz_same(r255_encode(same), m), "r255_decode: element is not itself");
+}
+
+Int fz_scalar(Int(512) x, List(Int) m) {
+    List(Int) back = r255_sc_encode_b(x);
+    return fz_must(fz_same(back, m), "r255_sc_decode accepted a non-canonical scalar");
+}
+
+Int fz_uniform(List(Int) m) {
+    EgPt(Int(512)) u = r255_from_uniform(m);
+    List(Int) e = r255_encode(u);
+    return match r255_decode(e) {
+        Some(p) => fz_must(fz_same(r255_encode(p), e), "r255_from_uniform: encoding is not canonical"),
+        None => fz_must(false, "r255_from_uniform: result does not decode"),
+    };
+}
+
+// ML-DSA. The message and context every seed signature covers.
+List(Int) fz_msg() { return bytes_of("resid fuzz: ML-DSA message"); }
+List(Int) fz_ctx() { return bytes_of("ctx"); }
+
+MldsaParams fz_params(Int level) { return if (level == 44) { mldsa44() } else if (level == 65) { mldsa65() } else { mldsa87() }; }
+
+// The parameter set a public key or signature of this length belongs to
+// (ML-DSA-44 for any other length).
+MldsaParams fz_params_of(List(Int) pk, List(Int) sig) {
+    if (pk.len() == mldsa_pk_len(mldsa65()) || sig.len() == mldsa_sig_len(mldsa65())) { return mldsa65(); }
+    if (pk.len() == mldsa_pk_len(mldsa87()) || sig.len() == mldsa_sig_len(mldsa87())) { return mldsa87(); }
+    return mldsa44();
+}
+
+Int fz_hint_len(MldsaParams p) { return p.omega + p.k; }
+
+// A hint that unpacks packs back to the same bytes (HintBitPack, written
+// here independently: the positions of the ones polynomial by polynomial,
+// zeros up to omega, then the running count after each polynomial).
+Int fz_hint(MldsaParams p, List(Int) y) {
+    if (y.len() != fz_hint_len(p)) { return 0; }
+    return match md_hint_unpack(p, y) {
+        Some(h) => fz_must(h.len() == p.k && fz_same(fz_hint_pack(p, h, 0, 0, ListBuf(), ListBuf()), y), "md_hint_unpack accepted a non-canonical hint"),
+        None => 0,
+    };
+}
+
+List(Int) fz_hint_pack(MldsaParams p, List(List(Int)) h, Int i, Int n, ListBuf(Int) pos, ListBuf(Int) counts) {
+    if (i >= p.k) { return fz_pad(pos, n, p.omega).finish().concat(counts.finish()); }
+    Int n2 = fz_ones(h[i], 0, n);
+    return fz_hint_pack(p, h, i + 1, n2, fz_push_ones(h[i], 0, pos), counts.push(n2));
+}
+
+Int fz_ones(List(Int) h, Int j, Int n) { return if (j >= 256) { n } else { fz_ones(h, j + 1, n + bit(h[j] != 0)) }; }
+
+ListBuf(Int) fz_push_ones(List(Int) h, Int j, ListBuf(Int) pos) {
+    if (j >= 256) { return pos; }
+    return fz_push_ones(h, j + 1, if (h[j] != 0) { pos.push(j) } else { pos });
+}
+
+ListBuf(Int) fz_pad(ListBuf(Int) pos, Int n, Int omega) { return if (n >= omega) { pos } else { fz_pad(pos.push(0), n + 1, omega) }; }
+
+// Every verifier on (pk, sig): only the original pair verifies, and only
+// for the message and context it signed. 4096 when it does.
+Int fz_verify(MldsaParams p, List(Int) pk, List(Int) sig, List(Int) pk0, List(Int) sig0) {
+    Bool orig = fz_same(pk, pk0) && fz_same(sig, sig0);
+    Bool v = mldsa_verify(p, pk, fz_msg(), fz_ctx(), sig);
+    Int a = fz_must(!v || orig, "mldsa_verify accepted a mutated key or signature");
+    List(Int) head = [0, 3];
+    List(Int) mp = head.concat(fz_ctx()).concat(fz_msg());
+    Bool vi = mldsa_verify_internal(p, pk, mp, sig);
+    Bool vm = mldsa_verify_mu(p, pk, mldsa_mu(pk, mp), sig);
+    Int b = fz_must(vi == v && vm == v, "mldsa_verify, _internal and _mu disagree");
+    List(Int) none = [];
+    Int c = fz_must(!mldsa_verify(p, pk, fz_msg(), none, sig), "mldsa_verify ignored the context");
+    Int tail = sig.len() - fz_hint_len(p);
+    Int d = if (tail >= 0) { fz_hint(p, sig[tail..sig.len()]) } else { 0 };
+    return a + b + c + d + if (v) { 4096 } else { 0 };
+}
+
+// The other parameter sets and odd arguments: lengths that do not fit
+// are refused, never read.
+Int fz_misfit(MldsaParams p, List(Int) pk, List(Int) sig) {
+    MldsaParams q = if (p.k == 4) { mldsa65() } else { mldsa44() };
+    MldsaParams r = if (p.k == 8) { mldsa65() } else { mldsa87() };
+    Int a = bit(mldsa_verify(q, pk, fz_msg(), fz_ctx(), sig)) + bit(mldsa_verify(r, pk, fz_msg(), fz_ctx(), sig)) + bit(mldsa_verify(p, sig, fz_msg(), fz_ctx(), pk));
+    Int b = bit(mldsa_verify_mu(p, pk, sig, sig)) + bit(mldsa_verify_mu(p, pk, pk[0..min(63, pk.len())], sig)) + bit(mldsa_verify(p, pk, fz_msg(), sig[0..min(256, sig.len())], sig));
+    return fz_must(a + b == 0, "mldsa_verify accepted arguments that do not fit");
+}
+
+// A mutated signature against its key (x1) and original (x2).
+Int run_mldsasig(List(Int) m, List(Int) pk, List(Int) sig0) {
+    MldsaParams p = fz_params_of(pk, sig0);
+    return fz_verify(p, pk, m, pk, sig0) + fz_misfit(p, pk, m);
+}
+
+// A mutated public key against its signature (x1) and original (x2).
+Int run_mldsapk(List(Int) m, List(Int) sig, List(Int) pk0) {
+    MldsaParams p = fz_params_of(pk0, sig);
+    return fz_verify(p, m, sig, pk0, sig) + fz_misfit(p, m, sig);
+}
+
+// A mutated hint (the last omega + k bytes) in the signature x2 of key
+// x1: mutations of a whole signature seldom land there.
+Int run_mldsahint(List(Int) m, List(Int) pk, List(Int) sig0) {
+    MldsaParams p = fz_params_of(pk, sig0);
+    Int tail = sig0.len() - fz_hint_len(p);
+    if (tail < 0) { return 0; }
+    Int a = fz_hint(p, m);
+    return a + if (m.len() == fz_hint_len(p)) { fz_verify(p, pk, sig0[0..tail].concat(m), pk, sig0) } else { 0 };
+}
+
+// What the unmutated seed of a kind must reach (0: nothing asked).
+Int seed_floor(Str kind) {
+    if (kind == "note" || kind == "r255" || kind == "mldsasig" || kind == "mldsapk" || kind == "mldsahint") { return 4096; }
+    return 0;
+}
+
+@requires(declassify)
+Str mkseed(Str name) {
+    if (name == "note") { return hex_encode(bytes_of(fz_note())); }
+    if (name == "r255-point") {
+        Int(512) z = 0;
+        Int(512) k = eg_le(fz_seed("point"), 0, 31, 0, z);
+        EgPt(Int(512)) pt = r255_base_mul(k);
+        return hex_encode(r255_encode(pt));
+    }
+    if (name == "r255-scalar") {
+        Int(512) sc = r255_sc_reduce64(fz_seed("scalar").concat(fz_seed("scalar2")));
+        List(Int) scb = r255_sc_encode_b(sc);
+        return hex_encode(scb);
+    }
+    if (name == "r255-uniform") { return hex_encode(fz_seed("uniform").concat(fz_seed("uniform2"))); }
+    Int level = if (str_starts_with(name, "mldsa44-")) { 44 } else if (str_starts_with(name, "mldsa65-")) { 65 } else if (str_starts_with(name, "mldsa87-")) { 87 } else { 0 };
+    if (level == 0) { return ""; }
+    MldsaParams p = fz_params(level);
+    MldsaKeys k = mldsa_keygen_internal(p, secret_bytes(fz_seed(f"mldsa{level}")));
+    if (str_ends_with(name, "-pk")) { return hex_encode(k.pk); }
+    List(Int) sig = mldsa_sign_deterministic(p, k.sk, fz_msg(), fz_ctx());
+    if (str_ends_with(name, "-sig")) { return hex_encode(sig); }
+    if (str_ends_with(name, "-hint")) { return hex_encode(sig[sig.len() - fz_hint_len(p)..sig.len()]); }
+    return "";
+}
+
 @requires(declassify, provision)
 Int exercise(Str kind, List(Int) m, List(Int) x1, List(Int) x2) {
     if (kind == "spdm") { return run_spdm(m); }
@@ -276,6 +576,11 @@ Int exercise(Str kind, List(Int) m, List(Int) x1, List(Int) x2) {
     if (kind == "cose") { return run_cose(m); }
     if (kind == "tls") { return run_tls(m, x1); }
     if (kind == "pem") { return run_pem(m); }
+    if (kind == "note") { return run_note(m); }
+    if (kind == "r255") { return run_r255(m); }
+    if (kind == "mldsasig") { return run_mldsasig(m, x1, x2); }
+    if (kind == "mldsapk") { return run_mldsapk(m, x1, x2); }
+    if (kind == "mldsahint") { return run_mldsahint(m, x1, x2); }
     return 0;
 }
 
@@ -301,6 +606,11 @@ Int fuzz_loop(Str kind, List(Int) seed, List(Int) x1, List(Int) x2, Int i, Int n
 @requires(args, filesystem(readonly), declassify, provision)
 Int main() {
     Str kind = args.get(1);
+    if (kind == "--mkseed") {
+        Str h = mkseed(args.get(2));
+        println(h);
+        return if (h == "") { 2 } else { 0 };
+    }
     // fuzz <kind> --hex <hex> [<extra-file>...]: one input, no region, so
     // an abort shows where it happened.
     if (args.get(2) == "--hex") {
@@ -318,7 +628,12 @@ Int main() {
     List(Int) x2 = if (args.count() > 6) { filesystem.read_bytes(args.get(6)) } else { none };
     // The unmutated seed must not crash either.
     Result(Int, RegionError) base = spawn (declassify, provision) { return exercise(kind, seed, x1, x2); };
-    Int c0 = match base { Ok(v) => 0, Err(e) => report(kind, "seed", e.message, seed) };
+    // And where a kind asserts on what is accepted, the seed must be accepted
+    // (a stale seed would leave every mutant refused, and prove nothing).
+    Int c0 = match base {
+        Ok(v) => if (v < seed_floor(kind)) { report(kind, "seed", "the seed is not accepted", seed) } else { 0 },
+        Err(e) => report(kind, "seed", e.message, seed),
+    };
     // A negative seed traces every input to stderr (for finding a hang).
     Int sa = if (s0 < 0) { 0 - s0 } else { s0 };
     Int crashes = c0 + fuzz_loop(kind, seed, x1, x2, 0, n, if (sa == 0) { 88172645463325252 } else { sa }, 0, s0 < 0);

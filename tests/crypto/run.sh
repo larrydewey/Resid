@@ -106,7 +106,8 @@ printf '%s\n' "$rt" | grep -q '^roundtrip: 0 failed' || { [ "$nf" != 0 ] || { ec
 # ── parsers under mutation ───────────────────────────────────────────
 # Every parser that reads untrusted bytes, on mutated certificates, CRLs,
 # OCSP responses, keys, signatures, COSE, TLS messages, PEM, HTTP/2
-# frames with HPACK blocks, SPDM messages, TPM responses and CoRIMs: an abort
+# frames with HPACK blocks, SPDM messages, TPM responses, CoRIMs, signed
+# notes, ristretto255 encodings and ML-DSA keys and signatures: an abort
 # (caught per input by fuzz.resid) or a hang (the timeout) is a failure.
 # The rng seeds are fixed, so a failure reproduces.
 (cd "$ROOT" && "$COMPILER" tests/crypto/fuzz.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/fuzz") > "$W/build.log" 2>&1 || {
@@ -152,6 +153,21 @@ fz tpm "$SD/tpm-create.bin" "$N" 75
 fz tpm "$SD/tpm-public.bin" "$N" 76
 fz corim "$SD/corim-payload.bin" "$N" 77
 fz corim "$SD/corim-keys-payload.bin" "$N" 78
+# Datastore primitives (seeds from seeds/gen_datastore.sh). These kinds
+# also assert that what is accepted is canonical, and that only the signed
+# original verifies; they are cheap, so the note and ristretto255 parsers
+# get four times the iterations.
+fz note "$SD/note.bin" $((N * 4)) 81
+fz r255 "$SD/r255-point.bin" $((N * 4)) 82
+fz r255 "$SD/r255-scalar.bin" $((N * 4)) 83
+fz r255 "$SD/r255-uniform.bin" $((N * 4)) 84
+seedn=85
+for lv in 44 65 87; do
+    fz mldsasig "$SD/mldsa$lv-sig.bin" "$N" "$seedn" "$SD/mldsa$lv-pk.bin" "$SD/mldsa$lv-sig.bin"
+    fz mldsapk "$SD/mldsa$lv-pk.bin" "$N" $((seedn + 1)) "$SD/mldsa$lv-sig.bin" "$SD/mldsa$lv-pk.bin"
+    fz mldsahint "$SD/mldsa$lv-hint.bin" $((N * 4)) $((seedn + 2)) "$SD/mldsa$lv-pk.bin" "$SD/mldsa$lv-sig.bin"
+    seedn=$((seedn + 3))
+done
 
 # bcrypt_pbkdf and AES-CTR (lib/bcrypt_pbkdf.resid) against Python's bcrypt
 # and cryptography, and a passphrase-protected ssh-keygen key
