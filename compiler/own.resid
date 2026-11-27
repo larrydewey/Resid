@@ -252,6 +252,12 @@ Str ow_elem_ty(Funcs fs, Str t) { return if (ow_is_list(t)) { ow_base(fs, elem_t
 
 ORS ow_bind(ORS r, Int id, Str ty) { return ORS {.def = r.def, .bty = r.bty.insert(id, ty)}; }
 
+// The local binder a call node calls through (a closure), else -1.
+Int ow_callee(OX x, ORS r, Int id) { return if (x.g.ns[id].kind == "call") { r.def.get(id) else { -1 } } else { -1 }; }
+
+// A call of the user function the node names (no local shadows it).
+Bool ow_ucall(OX x, ORS r, Int id) { return x.g.ns[id].kind == "call" && ow_callee(x, r, id) < 0 && ow_fi(x, x.g.ns[id].text) >= 0; }
+
 ORS or_ref(OX x, Int id, Map(Str, Int) env, ORS r) {
     Int d = env.get(x.g.ns[id].text) else { -1 };
     if (d < 0) { return r; }
@@ -263,6 +269,10 @@ ORS or_ref(OX x, Int id, Map(Str, Int) env, ORS r) {
 ORS or_expr(OX x, Int id, Map(Str, Int) env, ORS r) {
     Str k = x.g.ns[id].kind;
     if (k == "ref") { return or_ref(x, id, env, r); }
+    // `f(..)` with f a local binder calls the closure f holds (a local
+    // shadows a function of that name, as lowering resolves it): the call
+    // node resolves to f, so the call is a use of f (SW-REUSE-1).
+    if (k == "call") { return or_kids(x, id, 0, env, or_ref(x, id, env, r)); }
     if (k == "arm") { return or_arm(x, id, env, r); }
     if (k == "lambda") { return or_lambda(x, id, 0, env, r); }
     if (k == "bexpr" || k == "block") { return or_block(x, id, 0, env, r).r; }
@@ -811,7 +821,7 @@ Str ow_expr_ty(OX x, ORS r, Int e) {
     if (p.b >= 0) { return p.ty; }
     Str k = x.g.ns[e].kind;
     if (k == "struct") { return ow_base(x.fs, x.g.ns[e].text); }
-    if (k == "call") { return ow_ret_tyx(x, x.g.ns[e].text); }
+    if (k == "call") { return if (ow_callee(x, r, e) >= 0) { "" } else { ow_ret_tyx(x, x.g.ns[e].text) }; }
     return "";
 }
 
@@ -955,8 +965,10 @@ OF ow_arm_names(OX x, Int arm, Int i, List(OE) pe, Bool owned, OF f) {
 OF ow_arm_names_n(OX x, Int arm, Int i, List(OE) pe, Bool owned, OF f) { return ow_arm_names(x, arm, i + 1, pe, owned, f); }
 
 // A closure's entries: every outer binder it mentions, with its aliases.
+// A closure called by name inside it counts as mentioned.
 List(OE) ow_caps(OX x, ORS r, Int id, OF f, ListBuf(OE) acc) {
-    Int d = if (x.g.ns[id].kind == "ref") { r.def.get(id) else { -1 } } else { -1 };
+    Str k = x.g.ns[id].kind;
+    Int d = if (k == "ref" || k == "call") { r.def.get(id) else { -1 } } else { -1 };
     ListBuf(OE) a1 = if (d >= 0) { ow_push_e(acc, ow_path_ents(f, d, 0), 0) } else { acc };
     return ow_caps_kids(x, r, id, 0, f, a1).finish();
 }
@@ -964,8 +976,10 @@ List(OE) ow_caps(OX x, ORS r, Int id, OF f, ListBuf(OE) acc) {
 ListBuf(OE) ow_caps_kids(OX x, ORS r, Int id, Int i, OF f, ListBuf(OE) acc) {
     if (i >= x.g.ns[id].nk) { return acc; }
     Int k = kg_kid(x.g, id, i);
-    Int d = if (x.g.ns[k].kind == "ref") { r.def.get(k) else { -1 } } else { -1 };
-    ListBuf(OE) a1 = if (d >= 0) { ow_push_e(acc, ow_path_ents(f, d, 0), 0) } else { ow_caps_kids(x, r, k, 0, f, acc) };
+    Str kk = x.g.ns[k].kind;
+    Int d = if (kk == "ref" || kk == "call") { r.def.get(k) else { -1 } } else { -1 };
+    ListBuf(OE) a0 = if (d >= 0) { ow_push_e(acc, ow_path_ents(f, d, 0), 0) } else { acc };
+    ListBuf(OE) a1 = if (kk == "ref") { a0 } else { ow_caps_kids(x, r, k, 0, f, a0) };
     return ow_caps_kids_n(x, r, id, i, f, a1);
 }
 
@@ -1287,19 +1301,22 @@ OV ow_list_n(OX x, ORS r, OS s, Int id, Int i, OV acc) { return ow_list(x, r, s,
 // argument (keeps, conservatively) unless the callee's result is fresh.
 OV ow_call(OX x, ORS r, OS s, Int id, OF f) {
     Str cal0 = x.g.ns[id].text;
-    Bool user = ow_fi(x, cal0) >= 0;
+    Int clo = ow_callee(x, r, id);
+    Bool user = clo < 0 && ow_fi(x, cal0) >= 0;
     OV a0 = ow_args(x, r, s, id, 0, cal0, user, ow_ov([], true, f));
     // A call whose every argument at a writing parameter the write rule
     // allows goes to the owned instance, when there is one: the arguments
     // are judged again against it.
-    Str oi = x.t.inst.get(cal0) else { "" };
+    Str oi = if (user) { x.t.inst.get(cal0) else { "" } } else { "" };
     Bool rt = oi != "" && ow_call_ok(x, a0.f, id, 0);
     Str cal = if (rt) { oi } else { cal0 };
     OV a1 = if (rt) { ow_args(x, r, s, id, 0, cal, user, ow_ov([], true, f)) } else { a0 };
     OV a = if (rt) { ow_ov(a1.es, a1.owned, OF {.al = a1.f.al, .own = a1.f.own, .ev = a1.f.ev, .why = a1.f.why, .rok = a1.f.rok, .rents = a1.f.rents, .rev = a1.f.rev, .route = a1.f.route.insert(id, oi), .hz = a1.f.hz, .cur = a1.f.cur, .rcur = a1.f.rcur}) } else { a0 };
     Bool fr = user && s.fresh.contains(ow_fi(x, cal));
     Bool tr = ow_trk(x, ow_ret_tyx(x, cal));
-    // A builtin or a constructor (`Some(f)`) may hold any argument.
+    // A builtin or a constructor (`Some(f)`) may hold any argument; a
+    // closure's result may also hold anything the closure holds.
+    if (clo >= 0) { return ow_ov(a.es.concat(ow_path_ents(a.f, clo, 0)), false, a.f); }
     if (!user) { return ow_ov(a.es, false, a.f); }
     // A result that is no tracked object may still hold one (an Option, a
     // closure, a sum, a fixed list): like a builtin's, it may hold any
@@ -1391,7 +1408,7 @@ Str ow_arg_ty(OX x, Str f, Int i) {
 }
 
 Str ow_path_ty(OX x, ORS r, Int id) {
-    if (x.g.ns[id].kind == "call") { return ow_ret_tyx(x, x.g.ns[id].text); }
+    if (x.g.ns[id].kind == "call") { return if (ow_callee(x, r, id) >= 0) { "" } else { ow_ret_tyx(x, x.g.ns[id].text) }; }
     OP p = ow_path(x, r, id);
     return p.ty;
 }
@@ -1545,7 +1562,10 @@ OL ow_lv(OX x, ORS r, Map(Int, Int) evn, Int id, OL l) {
     OP p = ow_path(x, r, id);
     // Snapshots only where a write or move is judged.
     Bool snap = k == "struct" || k == "mcall" || k == "call" || (p.b >= 0 && ow_trk(x, p.ty));
-    OL l0 = if (snap) { ow_live_snap(l, id) } else { l };
+    OL ls = if (snap) { ow_live_snap(l, id) } else { l };
+    // A closure called by name is used whole until the call (SW-REUSE-1).
+    Int clo = ow_callee(x, r, id);
+    OL l0 = if (clo >= 0) { ow_live_add(ls, f"{clo}|0") } else { ls };
     if (p.b >= 0) {
         OL l1 = ow_live_add(l0, ow_use_key(x, p));
         return ow_lv_list(x, r, evn, p.idx, p.idx.len() - 1, l1);
@@ -1695,7 +1715,7 @@ Str ow_pend_key(OX x, ORS r, Int id, Int kid, Int j) {
     if (p.b < 0) { return str_join(ow_pend_deep(x, r, e, f"%{id}.{j}", ListBuf()).finish(), "\n"); }
     if (!ow_trk(x, p.ty) && !ow_hold(x, p.ty)) { return ""; }
     Str cal = x.g.ns[id].text;
-    Bool user = x.g.ns[id].kind == "call" && ow_fi(x, cal) >= 0;
+    Bool user = ow_ucall(x, r, id);
     Int wk = if (j == 0) { ow_with_key(x, r, id) } else { -1 };
     Int path = if (wk >= 0) { ow_papp(p.path, ow_kstep(wk, true)) } else { p.path };
     // The call node makes the key unique, so dropping it after its operand
@@ -1722,7 +1742,7 @@ ListBuf(Str) ow_pend_deep_kids_n(OX x, ORS r, Int id, Int i, Str tag, ListBuf(St
 // callee and position, so a write to a field the callee never reads (a
 // hole) does not conflict with it.
 Str ow_arg_key(OX x, ORS r, Int id, Int kid, Int j) {
-    if (x.g.ns[id].kind != "call" || ow_fi(x, x.g.ns[id].text) < 0) { return ""; }
+    if (!ow_ucall(x, r, id)) { return ""; }
     OP p = ow_path(x, r, kid);
     if (p.b < 0 || !ow_trk(x, p.ty)) { return ""; }
     return f"{p.b}|{p.path}@{ow_fk(x, x.g.ns[id].text, j)}";
@@ -1789,7 +1809,7 @@ Map(Str, Int) ow_union_n(Map(Str, Int) m, List(Str) ks, Int i) { return ow_union
 // A closure keeps every outer binder it mentions alive (whole).
 OL ow_lv_caps(OX x, ORS r, Int id, OL l) {
     Str k = x.g.ns[id].kind;
-    Int d = if (k == "ref") { r.def.get(id) else { -1 } } else { -1 };
+    Int d = if (k == "ref" || k == "call") { r.def.get(id) else { -1 } } else { -1 };
     OL l1 = if (d >= 0) { ow_live_add(l, f"{d}|0") } else { l };
     return ow_lv_caps_kids(x, r, id, 0, l1);
 }
@@ -3414,7 +3434,7 @@ Map(Int, Str) ow_rdm(OFn o, OS s, Int id, Map(Int, Int) pix, Map(Int, Str) acc) 
         Map(Int, Str) a1 = if (!pix.contains(pp.b)) { acc } else { acc.insert(pp.b, if (pp.path == 0) { "*" } else { ow_rd_add(acc.get(pp.b) else { "," }, ow_first_step(pp.path)) }) };
         return ow_rdm_list(o, s, pp.idx, 0, pix, a1);
     }
-    if (g.ns[id].kc == 4 && ow_fi(o.x, g.ns[id].text) >= 0) { return ow_rdm_args(o, s, id, 0, pix, acc); }
+    if (g.ns[id].kc == 4 && ow_ucall(o.x, o.r, id)) { return ow_rdm_args(o, s, id, 0, pix, acc); }
     return ow_rdm_kids(o, s, id, 0, pix, acc);
 }
 

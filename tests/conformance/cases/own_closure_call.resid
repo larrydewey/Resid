@@ -1,0 +1,120 @@
+// A closure called by its local name (`f(0)`) is a use of f, and so of
+// every record f captured: such a record is not rebuilt in place while f
+// may still be called (SW-REUSE-1). Expected values are what value
+// semantics give (and --no-ownership prints).
+type Rc = { Int n; Str s; List(Int) xs; };
+
+Rc bump(Rc r, Int k) { return Rc { .n = r.n + k, .s = r.s, .xs = r.xs }; }
+Rc loop(Rc r, Int i) { if (i <= 0) { return r; } return loop(bump(r, 1), i - 1); }
+
+// A literal rebuild, then the call.
+Int c1(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Int closure(Int) f = lambda(z) { r.n + z };
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    return f(0) * 1000 + q.n;
+}
+
+// The closure reads a Str field the rebuild replaces.
+Str c2(Int k) {
+    Rc r = Rc { .n = k, .s = f"old{k}", .xs = [1] };
+    Str closure(Int) f = lambda(z) { r.s };
+    Rc q = Rc { .n = r.n, .s = f"new{k}", .xs = r.xs };
+    return f(0) + " " + q.s;
+}
+
+// The rebuild happens in a callee handed the record.
+Int c3(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Int closure(Int) f = lambda(z) { r.n + z };
+    Rc q = bump(r, 100);
+    return f(0) * 1000 + q.n;
+}
+
+// The closure comes from a function that captured the record.
+Int closure(Int) mkf(Rc r) { return lambda(z) { r.n + z }; }
+Int c4(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [k] };
+    Int closure(Int) f = mkf(r);
+    Rc q = bump(r, 100);
+    return f(0) * 1000 + q.n;
+}
+
+// The record goes through a tail loop that rebuilds it each round.
+Int c5(Int k) {
+    Rc r = loop(Rc { .n = k, .s = "a", .xs = [1] }, 2);
+    Int closure(Int) f = lambda(z) { r.n + z };
+    Rc q = loop(r, 5);
+    return f(0) * 1000 + q.n;
+}
+
+// The call is in a loop after the rebuild.
+Int c6(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Int closure(Int) f = lambda(z) { r.n + z };
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    for (Int i in 0..3) { println(f"c6 f({i}) {f(i)}"); }
+    return q.n;
+}
+
+// A local closure named like a function: the call is the closure's.
+Int g(Int z) { return z + 1; }
+Int c7(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Int closure(Int) g = lambda(z) { r.n + z };
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    return g(0) * 1000 + q.n;
+}
+
+// Another closure calls f: it holds what f holds.
+Int c8(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Int closure(Int) f = lambda(z) { r.n + z };
+    Int closure(Int) h = lambda(z) { f(z) + 1 };
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    return h(0) * 1000 + q.n;
+}
+
+// The closure returns the captured record itself.
+Int c9(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Rc closure(Int) f = lambda(z) { r };
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    return f(0).n * 1000 + q.n;
+}
+
+// The closure's result, taken before the rebuild, still holds the record.
+Int c10(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Rc closure(Int) f = lambda(z) { r };
+    Rc a = f(0);
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    return a.n * 1000 + q.n;
+}
+
+// A tail loop that rebuilds its state and calls a closure over the first.
+Int c11(Rc r, Int closure(Int) f, Int i) {
+    if (i <= 0) { return f(0) * 1000 + r.n; }
+    return c11(Rc { .n = r.n + 1, .s = r.s, .xs = r.xs }, f, i - 1);
+}
+Int c11s(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Int closure(Int) f = lambda(z) { r.n + z };
+    return c11(r, f, 3);
+}
+
+Int main() {
+    Int k = rt 7;
+    println(f"c1 {c1(k)}");
+    println(f"c2 {c2(k)}");
+    println(f"c3 {c3(k)}");
+    println(f"c4 {c4(k)}");
+    println(f"c5 {c5(k)}");
+    println(f"c6 {c6(k)}");
+    println(f"c7 {c7(k)}");
+    println(f"c8 {c8(k)}");
+    println(f"c9 {c9(k)}");
+    println(f"c10 {c10(k)}");
+    println(f"c11 {c11s(k)}");
+    return 0;
+}
