@@ -677,6 +677,30 @@ Int str_slice_slow(Int s, Int start0, Int end0) {
     return cstr_from(s + ba, bb - ba, 1);
 }
 
+// secret_str_splice (spec §48), after the checker has erased the secret:
+// s with `del` codepoints from codepoint `at` replaced by ins, in a new
+// string. at is clamped to 0..len and del to 0..len - at, so no byte
+// outside s is read and nothing fails. s itself is left as it is: other
+// values may still hold it, and in secret mode the allocator zeroes it
+// when its region lets it go, as for every other secret.
+@export("resid_str_splice", "ptr(ptr,i64,i64,ptr)")
+pub Int rt_str_splice(Int s, Int at, Int del, Int ins) {
+    Int sl = idx_slot(s);
+    Int len = sl_len(sl);
+    Int a = if (at < 0) { 0 } else { if (at > len) { len } else { at } };
+    Int d = if (del < 0) { 0 } else { if (del > len - a) { len - a } else { del } };
+    Int ba = slot_off(sl, a);
+    Int bb = slot_off(sl, a + d);
+    Int bn = slot_off(sl, len);
+    Int li = c_strlen(ins);
+    Int p = ralloc(ba + li + (bn - bb) + 1);
+    _ = mcopy(p, s, ba);
+    _ = mcopy(p + ba, ins, li);
+    _ = mcopy(p + ba + li, s + bb, bn - bb);
+    _ = st8(p + ba + li + (bn - bb), 0);
+    return p;
+}
+
 // Frequency class of a byte in text (higher is commoner).
 Int byte_common(Int c) {
     if ((c >= 97 && c <= 122) || c == 32 || c == 10) { return 3; }

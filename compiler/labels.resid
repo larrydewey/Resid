@@ -151,7 +151,7 @@ Int lb_builtin(Str n) {
     if (n == "assert" || n == "rt_assert" || n == "known" || n == "rt_known" || n == "expect" || n == "comptime_print" || n == "todo" || n == "unimplemented") { return 1; }
     if (n == "provisioned_key") { return 4; }
     if (n == "assumed") { return 1; }
-    if (n == "declassify" || n == "secret" || n == "secret_join" || n == "secret_split") { return 1; }
+    if (n == "declassify" || n == "secret" || n == "secret_join" || n == "secret_split" || n == "secret_str_splice" || n == "resid_str_splice") { return 1; }
     if (n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_list_str_persist_copy" || n == "resid_dec_persist") { return 1; }
     if (n == "resid_internals" || n == "resid_internals_set" || n == "resid_rtmod" || n == "resid_rtmod_set" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_mem_limit_set") { return 1; }
     if (n == "abs_i64" || n == "min_i64" || n == "max_i64" || n == "clamp_i64" || n == "sort") { return 1; }
