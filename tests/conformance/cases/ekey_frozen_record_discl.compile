@@ -1,0 +1,2 @@
+warning[E0270]: key could be known to someone else: the key of use_key (k): it has 0 unpredictable byte(s)
+ekey_frozen_record_discl.resid:25:22

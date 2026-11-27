@@ -1,0 +1,46 @@
+// RB-18 follow-up (red team EKEY-R3-1): freezing a cycling key-analysis
+// summary must not hide a constant AEAD nonce under a reused key (E0279).
+// swap's summary cycles (field a holds x / field b holds x) and is frozen
+// at their meet, which drops the draw under its argument. Both keys are
+// sha256(sha256(r) || sha256(s)) at run time: the two seals reuse key and
+// nonce, and both are reported.
+import "random.resid";
+import "chachag.resid";
+import "sha256g.resid";
+
+List(Int) zero_nonce() { return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; }
+
+type Pair = { Secret(UInt(8)) a; Secret(UInt(8)) b; };
+
+Pair swap(List(Secret(UInt(8))) x, Int i, Int n) {
+    if (n <= 0) { return Pair {.a = classify(0), .b = classify(0)}; }
+    Pair p = swap(x, i, n - 1);
+    return Pair {.a = x[i] ^ p.a, .b = p.a};
+}
+
+// z unchanged at run time when n == 1.
+List(Secret(UInt(8))) via(List(Secret(UInt(8))) z, Int n) {
+    return [swap(z, 0, n).a, swap(z, 1, n).a, swap(z, 2, n).a, swap(z, 3, n).a, swap(z, 4, n).a, swap(z, 5, n).a, swap(z, 6, n).a, swap(z, 7, n).a, swap(z, 8, n).a, swap(z, 9, n).a, swap(z, 10, n).a, swap(z, 11, n).a, swap(z, 12, n).a, swap(z, 13, n).a, swap(z, 14, n).a, swap(z, 15, n).a, swap(z, 16, n).a, swap(z, 17, n).a, swap(z, 18, n).a, swap(z, 19, n).a, swap(z, 20, n).a, swap(z, 21, n).a, swap(z, 22, n).a, swap(z, 23, n).a, swap(z, 24, n).a, swap(z, 25, n).a, swap(z, 26, n).a, swap(z, 27, n).a, swap(z, 28, n).a, swap(z, 29, n).a, swap(z, 30, n).a, swap(z, 31, n).a];
+}
+
+@requires(declassify)
+Int seal_two(List(Secret(UInt(8))) m1, List(Secret(UInt(8))) m2) {
+    List(Secret(UInt(8))) r = random_secret(32);
+    List(Secret(UInt(8))) s = random_secret(32);
+    Int n = if (random_bytes(1)[0] >= 0) { 1 } else { 2 };
+    List(Secret(UInt(8))) ka = sha256g(sha256g(r).concat(via(sha256g(s[0..32]), n)));
+    List(Secret(UInt(8))) kb = sha256g(via(sha256g(r[0..32]), n).concat(sha256g(s)));
+    List(Secret(UInt(8))) c1 = chacha20poly1305g_seal(ka, zero_nonce(), m1, []);
+    List(Secret(UInt(8))) c2 = chacha20poly1305g_seal(kb, zero_nonce(), m2, []);
+    Int diff = declassify(ka[0] ^ kb[0], "demo only") + declassify(ka[31] ^ kb[31], "demo only");
+    // Same key and nonce: c1 xor c2 = m1 xor m2 (keystream reuse).
+    Bool reused = declassify(c1[0] ^ c2[0], "demo") == declassify(m1[0] ^ m2[0], "demo");
+    println(f"same key: {diff == 0}, keystream reused: {reused}");
+    return c1.len() + c2.len();
+}
+
+@requires(declassify)
+Int main() {
+    println(f"{seal_two(random_secret(5), random_secret(5))}");
+    return 0;
+}
