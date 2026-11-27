@@ -41,6 +41,13 @@ differs from the plan below:
   '+', as the format says (DEL and C1 controls are allowed, in names and
   text); `pc_open_vec` checks a vector opening's values and blinding are
   canonical.
+- **Round 3** (lows only), fixed: `pc_open_vec` takes the number of
+  values, because a vector commitment does not bind its length; a
+  cosignature covers the checkpoint's extension lines, as
+  c2sp.org/tlog-cosignature requires (the first version signed origin,
+  size and root only); a signing key is a name and an ID, so keys sharing
+  a name may all sign, and a threshold counts witness names; `ckpt_parse`
+  refuses an origin with white space or '+', or over 255 bytes.
 - The ct coverage gate reports 17 `lib/dev/device*.resid` functions on
   master as well as on this branch. They predate this work; every
   function added here is covered.
