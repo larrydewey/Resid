@@ -49,6 +49,26 @@ Int bytes_case(Str name, List(Int) good, List(Int) bad) {
     return ck(some_n(note_parse_bytes(good)) && !some_n(note_parse_bytes(b)) && !some_n(note_parse_bytes(bad.concat(tail))), name);
 }
 
+// dc2-merkle-1: a NUL ends the text the runtime makes of the bytes, so a
+// good note followed by 0x00 and anything at all was accepted whole. Also
+// the other ASCII controls, anywhere in the bytes.
+Bool refused_bytes(List(Int) b) {
+    List(NoteKey) wit = [sp_wit(1), sp_wit(2)];
+    return !some_n(note_parse_bytes(b)) && !some_c(ckpt_open_bytes(b, sp_log())) && !some_c(ckpt_cosigned_bytes(b, sp_log(), wit, 2, 1800000000));
+}
+
+Int nul_cases(List(Int) good) {
+    List(Int) junk = [0, 106, 117, 110, 107, 10];
+    List(Int) nul = [0];
+    List(Int) cr = [13];
+    List(Int) tab_line = [9, 10];
+    Int n = good.len();
+    return ck(refused_bytes(good.concat(junk)), "NUL then junk after the note") + ck(refused_bytes(good.concat(nul)), "NUL after the note")
+        + ck(refused_bytes(good[0..n - 1].concat(nul).concat(good[n - 1..n])), "NUL inside the last signature line") + ck(refused_bytes(good[0..5].concat(nul).concat(good[5..n])), "NUL inside the text")
+        + ck(refused_bytes(good[0..n - 1].concat(cr).concat(good[n - 1..n])), "CR before the last newline") + ck(refused_bytes(good.concat(tab_line)), "a control character on a line after the note")
+        + ck(refused_bytes(good[0..n - 1].concat(tab_line)), "TAB inside the last signature line") + ck(some_c(ckpt_open_bytes(good, sp_log())), "the note itself opens");
+}
+
 @requires(args, filesystem(readonly))
 Int main() {
     Str d = args.get(1);
@@ -61,8 +81,8 @@ Int main() {
     Int e = bytes_case("overlong slash", good, [192, 175]) + bytes_case("overlong three-byte", good, [224, 128, 175]) + bytes_case("surrogate", good, [237, 160, 128])
         + bytes_case("above U+10FFFF", good, [244, 144, 128, 128]) + bytes_case("lone continuation", good, [128]) + bytes_case("truncated", good, [226, 128])
         + bytes_case("0xFF", good, [255]) + bytes_case("not a byte", good, [256]);
-    Int pass = a + b + c + e;
-    Int total = 8 * 3 + 8;
+    Int pass = a + b + c + e + nul_cases(good);
+    Int total = 8 * 3 + 8 + 8;
     println(f"SUMMARY pass={pass} fail={total - pass} skip=0");
     return if (pass == total) { 0 } else { 1 };
 }

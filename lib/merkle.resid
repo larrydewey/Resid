@@ -297,13 +297,18 @@ pub Str note_sign(Str text, Str name, List(Int) seed) {
 /// or '+', canonical base64 of at least five bytes). At most 64
 /// signatures.
 ///
-/// `s` must be exact UTF-8 (sn_exact), or it is refused: a Str read from
-/// a file or the network keeps the bytes it was given, and one holding an
-/// overlong form would be split on its stored bytes but signed over its
-/// code points (an overlong newline joined two lines into one, an
-/// overlong digit read as that digit). A caller holding the received
-/// bytes should pass them to note_parse_bytes, ckpt_open_bytes or
-/// ckpt_cosigned_bytes, which check them before any text is made.
+/// `s` must be exact UTF-8 (sn_exact), or it is refused: a Str made from
+/// a file or the network may hold bytes that are not the encoding of its
+/// code points, and one holding an overlong form would be split on its
+/// stored bytes but signed over its code points (an overlong newline
+/// joined two lines into one, an overlong digit read as that digit).
+///
+/// A Str is not the bytes that arrived: the runtime ends a text at the
+/// first NUL, so whatever followed one in a file or a message is gone
+/// before this function sees it, and cannot be refused here. A caller
+/// holding the received bytes should pass them to note_parse_bytes,
+/// ckpt_open_bytes or ckpt_cosigned_bytes, which check every byte before
+/// any text is made.
 pub Option(Note) note_parse(Str s) {
     if (!sn_exact(s)) { return None; }
     List(Str) lines = str_split(s, "\n");
@@ -323,10 +328,22 @@ pub Option(Note) note_parse(Str s) {
 
 /// note_parse on the note's bytes as received: None unless they are
 /// strict UTF-8 (RFC 3629: no overlong form, no surrogate, nothing above
-/// U+10FFFF, no truncated sequence), then as note_parse.
+/// U+10FFFF, no truncated sequence) with no ASCII control character but
+/// newline anywhere (NUL among them, at which a text would end and hide
+/// the rest), then as note_parse. Every byte is accounted for: the text
+/// made of them encodes back to as many.
 pub Option(Note) note_parse_bytes(List(Int) b) {
-    if (!sn_utf8_ok(b, 0)) { return None; }
-    return note_parse(sn_utf8_text(b, 0, StrBuf()));
+    if (!sn_utf8_ok(b, 0) || !sn_no_c0(b, 0)) { return None; }
+    Str text = sn_utf8_text(b, 0, StrBuf());
+    if (bytes_of(text).len() != b.len()) { return None; }
+    return note_parse(text);
+}
+
+// No ASCII control character (below U+0020) but newline.
+Bool sn_no_c0(List(Int) b, Int i) {
+    if (i >= b.len()) { return true; }
+    if (b[i] < 32 && b[i] != 10) { return false; }
+    return sn_no_c0(b, i + 1);
 }
 
 /// Whether the stored bytes of `s` are exactly the strict UTF-8 encoding
