@@ -1,0 +1,161 @@
+// Loop regions carrying records that reach themselves through nested
+// containers (RB-25): the mover of Node (resid.rec.evac.Node) must move
+// kids when its type is List(List(Node)), List(List(List(Node))),
+// Option(List(List(Node))), a list of lists of records holding a Node or a
+// List(Node), or reaches Node through a second record. The mover once
+// asked the field's move afresh, met List(Node) already being asked about
+// and answered "none", and the field was silently left in the freed
+// region: the reads below then found a reused page (a wrong length, or a
+// crash). Each loop runs well past a compaction, and junk() fills freed
+// pages between the move and the read.
+type Node = { Int n; List(List(Node)) kids; };
+type Node3 = { Int n; List(List(List(Node3))) kids; };
+type NodeO = { Int n; Option(List(List(NodeO))) kids; };
+type Lazy = { Int id; Ctx c; };
+type Ctx = { Int n; List(List(Lazy)) pend; Str tag; };
+type LazyL = { Int id; List(CtxL) cs; };
+type CtxL = { Int n; List(List(LazyL)) pend; };
+type Back = { Int id; List(List(Front)) back; };
+type Mid = { Int id; Back b; };
+type Front = { Int n; List(List(Mid)) pend; };
+// Shapes that moved before: kept moving.
+type NodeM = { Int n; Map(Str, List(List(NodeM))) kids; };
+type NodeL = { Int n; List(NodeL) kids; };
+type Shape = Dot(Int) | Wrap(NodeS);
+type NodeS = { Int n; List(List(Shape)) kids; };
+
+List(Str) junk(Int i, Int n, List(Str) acc) {
+    if (i >= n) { return acc; }
+    return junk(i + 1, n, acc.concat([f"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz{i}"]));
+}
+
+Node r1(Int i, Int n, Node t) {
+    if (i >= n) { return t; }
+    Str s = f"{i}-{i * 7}";
+    List(List(Node)) e = [];
+    List(List(Node)) k = if (i == 0) { [[Node { .n = 4242, .kids = e }]] } else { t.kids };
+    return r1(i + 1, n, Node { .n = t.n + s.len() % 2, .kids = k });
+}
+
+Node3 r3(Int i, Int n, Node3 t) {
+    if (i >= n) { return t; }
+    Str s = f"{i}-{i * 7}";
+    List(List(List(Node3))) e = [];
+    List(List(List(Node3))) k = if (i == 0) { [[[Node3 { .n = 4343, .kids = e }]]] } else { t.kids };
+    return r3(i + 1, n, Node3 { .n = t.n + s.len() % 2, .kids = k });
+}
+
+NodeO ro(Int i, Int n, NodeO t) {
+    if (i >= n) { return t; }
+    Str s = f"{i}-{i * 7}";
+    Option(List(List(NodeO))) k = if (i == 0) { Some([[NodeO { .n = 4444, .kids = None }]]) } else { t.kids };
+    return ro(i + 1, n, NodeO { .n = t.n + s.len() % 2, .kids = k });
+}
+
+Int ro_read(Option(List(List(NodeO))) k) { return match k { Some(l) => l[0][0].n, None => -1 }; }
+
+Int pend_sum(List(List(Lazy)) p, Int i, Int acc) {
+    if (i >= p.len()) { return acc; }
+    List(Lazy) row = p[i];
+    Lazy z = row[0];
+    return pend_sum(p, i + 1, acc + z.id + z.c.tag.len() + row.len());
+}
+
+// BurrowDB's shape: pend rebuilt from the old one every step, read after
+// junk has reused the freed pages.
+Ctx rc(Ctx c, Int i, Int n, Int sum) {
+    if (i >= n) { return Ctx { .n = sum, .pend = c.pend, .tag = c.tag }; }
+    Int s = pend_sum(c.pend, 0, 0) + junk(0, 3000, []).len();
+    List(List(Lazy)) e = [];
+    Lazy z = Lazy { .id = i, .c = Ctx { .n = i, .pend = e, .tag = f"leaf-{i}" } };
+    List(List(Lazy)) base = if (c.pend.len() >= 20) { e } else { c.pend };
+    return rc(Ctx { .n = c.n + 1, .pend = base.concat([[z, z]]), .tag = f"t{i}" }, i + 1, n, wrapping_add(sum, s));
+}
+
+CtxL rl(Int i, Int n, CtxL t) {
+    if (i >= n) { return t; }
+    Str s = f"{i}-{i * 7}";
+    List(List(LazyL)) e = [];
+    List(List(LazyL)) k = if (i == 0) { [[LazyL { .id = 7, .cs = [CtxL { .n = 4545, .pend = e }] }]] } else { t.pend };
+    return rl(i + 1, n, CtxL { .n = t.n + s.len() % 2, .pend = k });
+}
+
+Front rf(Int i, Int n, Front t) {
+    if (i >= n) { return t; }
+    Str s = f"{i}-{i * 7}";
+    List(List(Mid)) e = [];
+    Front leaf = Front { .n = 4646, .pend = e };
+    List(List(Mid)) k = if (i == 0) { [[Mid { .id = 8, .b = Back { .id = 9, .back = [[leaf]] } }]] } else { t.pend };
+    return rf(i + 1, n, Front { .n = t.n + s.len() % 2, .pend = k });
+}
+
+NodeM rm(Int i, Int n, NodeM t) {
+    if (i >= n) { return t; }
+    Str s = f"{i}-{i * 7}";
+    Map(Str, List(List(NodeM))) e = {};
+    Map(Str, List(List(NodeM))) k = if (i == 0) { e.insert("a", [[NodeM { .n = 4747, .kids = e }]]) } else { t.kids };
+    return rm(i + 1, n, NodeM { .n = t.n + s.len() % 2, .kids = k });
+}
+
+Int rm_read(Map(Str, List(List(NodeM))) k) {
+    List(List(NodeM)) nil = [];
+    List(List(NodeM)) l = k.get("a") else { nil };
+    return l[0][0].n;
+}
+
+NodeL rll(Int i, Int n, NodeL t) {
+    if (i >= n) { return t; }
+    Str s = f"{i}-{i * 7}";
+    List(NodeL) e = [];
+    List(NodeL) k = if (i == 0) { [NodeL { .n = 4848, .kids = e }] } else { t.kids };
+    return rll(i + 1, n, NodeL { .n = t.n + s.len() % 2, .kids = k });
+}
+
+NodeS rs(Int i, Int n, NodeS t) {
+    if (i >= n) { return t; }
+    Str s = f"{i}-{i * 7}";
+    List(List(Shape)) e = [];
+    List(List(Shape)) k = if (i == 0) { [[Wrap(NodeS { .n = 4949, .kids = e })]] } else { t.kids };
+    return rs(i + 1, n, NodeS { .n = t.n + s.len() % 2, .kids = k });
+}
+
+Int rs_read(List(List(Shape)) k) {
+    Shape x = k[0][0];
+    return match x { Wrap(v) => v.n, Dot(v) => v };
+}
+
+Int main() {
+    Int n = rt 200000;
+    List(List(Node)) e1 = [];
+    Node a = r1(0, n, Node { .n = 0, .kids = e1 });
+    List(Str) j1 = junk(0, 30000, []);
+    println(f"list2 {a.kids.len()} {a.kids[0].len()} {a.kids[0][0].n} {j1.len()}");
+    List(List(List(Node3))) e3 = [];
+    Node3 b = r3(0, n, Node3 { .n = 0, .kids = e3 });
+    List(Str) j2 = junk(0, 30000, []);
+    println(f"list3 {b.kids.len()} {b.kids[0][0][0].n} {j2.len()}");
+    NodeO o = ro(0, n, NodeO { .n = 0, .kids = None });
+    List(Str) j3 = junk(0, 30000, []);
+    println(f"option {ro_read(o.kids)} {j3.len()}");
+    List(List(Lazy)) ep = [];
+    Ctx c = rc(Ctx { .n = 0, .pend = ep, .tag = "start" }, 0, rt 2000, 0);
+    println(f"lazy {c.n} {c.pend.len()} {pend_sum(c.pend, 0, 0)} {c.pend[3][1].c.tag}");
+    List(List(LazyL)) el = [];
+    CtxL l = rl(0, n, CtxL { .n = 0, .pend = el });
+    List(Str) j4 = junk(0, 30000, []);
+    println(f"lazy-list {l.pend[0][0].id} {l.pend[0][0].cs[0].n} {j4.len()}");
+    List(List(Mid)) em = [];
+    Front f = rf(0, n, Front { .n = 0, .pend = em });
+    List(Str) j5 = junk(0, 30000, []);
+    println(f"two-level {f.pend[0][0].id} {f.pend[0][0].b.id} {f.pend[0][0].b.back[0][0].n} {j5.len()}");
+    Map(Str, List(List(NodeM))) e6 = {};
+    NodeM m = rm(0, n, NodeM { .n = 0, .kids = e6 });
+    println(f"map {rm_read(m.kids)}");
+    List(NodeL) e7 = [];
+    NodeL ll = rll(0, n, NodeL { .n = 0, .kids = e7 });
+    println(f"list1 {ll.kids[0].n}");
+    List(List(Shape)) e8 = [];
+    NodeS sh = rs(0, n, NodeS { .n = 0, .kids = e8 });
+    println(f"sum {rs_read(sh.kids)}");
+    return 0;
+}

@@ -7805,8 +7805,13 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
         if (lr_is_sum(fs, et) && lr_sum_ok(fs, et, seen)) { return "@resid_mv_list_f(ptr %V, ptr @" + lr_sum_fn(et) + ", ptr %C)"; }
         // A list of any other lists that move: each element by a small
         // function that calls its list's move (lr_list_def, emitted with
-        // the sum movers and named as one).
-        if (str_has_prefix(et, "List(") && !is_list_fixed(et) && !seen.contains(et)) {
+        // the sum movers and named as one). An element list already being
+        // asked about (a record reaching itself through List(List(R)))
+        // moves by that same function, as a record or sum being checked
+        // counts as moving (lr_rec_ok): its answer is the one being made.
+        // Answering "" here instead left the field unmoved (RB-25).
+        if (str_has_prefix(et, "List(") && !is_list_fixed(et) && seen.contains(et)) { return "@resid_mv_list_f(ptr %V, ptr @" + lr_sum_fn(et) + ", ptr %C)"; }
+        if (str_has_prefix(et, "List(") && !is_list_fixed(et)) {
             Str em = lr_move(fs, et, seen.concat([et]));
             if (em != "" && em != "-") { return "@resid_mv_list_f(ptr %V, ptr @" + lr_sum_fn(et) + ", ptr %C)"; }
         }
@@ -7820,7 +7825,21 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
 
 // The element mover of a list of lists of type t (a List): t's own move.
 List(Str) lr_list_def(Funcs fs, Str t) {
-    return ["define internal ptr @" + lr_sum_fn(t) + "(ptr %v, ptr %u) {", "entry:", "%r = call ptr " + lr_call(lr_move(fs, t, []), "%v", "%u"), "ret ptr %r", "}"];
+    Str mv = lr_move(fs, t, []);
+    if (mv == "" || mv == "-") { return [lr_lost(t, "its elements")]; }
+    return ["define internal ptr @" + lr_sum_fn(t) + "(ptr %v, ptr %u) {", "entry:", "%r = call ptr " + lr_call(mv, "%v", "%u"), "ret ptr %r", "}"];
+}
+
+// A mover that would leave a pointer behind: never emitted (RB-25). The
+// line is an LLVM comment, and lw_program turns it into an internal error
+// (lr_lost_err) rather than build a program that reads freed memory.
+Str lr_lost(Str t, Str what) { return "; resid.lost " + t + ": " + what; }
+
+// The first lost move in the lines, as an internal error, or "".
+Str lr_lost_err(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return ""; }
+    if (str_starts_with(ls[i], "; resid.lost ")) { return "internal compiler error: a loop region's move of " + str_slice(ls[i], 13, str_len(ls[i])) + " has no mover and would be left in freed memory"; }
+    return lr_lost_err(ls, i + 1);
 }
 
 // A list of integers of 33 to 64 bits (UInt(64), a big number's limbs):
@@ -7851,7 +7870,9 @@ Str lr_rec_fn(Str t) { return "\"resid.rec.evac." + t + "\""; }
 Str lr_mv_fn(Str t) { return "\"resid.mv." + t + "\""; }
 
 List(Str) lr_mv_def(Funcs fs, Str t) {
-    return ["define internal ptr @" + lr_mv_fn(t) + "(ptr %v, ptr %u) {", "entry:", "%c = call ptr " + lr_call(lr_move(fs, t, []), "%v", "%u"), "ret ptr %c", "}"];
+    Str mv = lr_move(fs, t, []);
+    if (mv == "" || mv == "-") { return [lr_lost(t, "a value")]; }
+    return ["define internal ptr @" + lr_mv_fn(t) + "(ptr %v, ptr %u) {", "entry:", "%c = call ptr " + lr_call(mv, "%v", "%u"), "ret ptr %c", "}"];
 }
 
 // Every `@"resid.mv.T"` in the lines: its T.
@@ -7980,7 +8001,7 @@ List(Str) lr_sum_def(Funcs fs, Str t) {
     Str sw = str_join(lr_sum_cases(vs, 0, []), " ");
     List(Str) head = ["define internal ptr @" + lr_sum_fn(t) + "(ptr %v, ptr %u) {", "entry:", "%c = call ptr @resid_mv_box(ptr %v, ptr %u)", "%m = icmp ne ptr %c, %v", "br i1 %m, label %fix, label %done", "fix:", "%tg = load i32, ptr %c", "switch i32 %tg, label %lv [ " + sw + " ]"];
     // A copy (or a forwarded one) counted one level deeper: leave it.
-    return head.concat(lr_sum_arms(fs, vs, 0, [])).concat(["lv:", "call void @resid_mv_leave()", "br label %done", "done:", "ret ptr %c", "}"]);
+    return head.concat(lr_sum_arms(fs, t, vs, 0, [])).concat(["lv:", "call void @resid_mv_leave()", "br label %done", "done:", "ret ptr %c", "}"]);
 }
 
 List(Str) lr_sum_cases(List(Str) vs, Int i, List(Str) acc) {
@@ -7989,19 +8010,21 @@ List(Str) lr_sum_cases(List(Str) vs, Int i, List(Str) acc) {
     return lr_sum_cases(vs, i + 1, acc.concat([f"i32 {tg}, label %v{i}"]));
 }
 
-List(Str) lr_sum_arms(Funcs fs, List(Str) vs, Int i, List(Str) acc) {
+// Each slot's move is asked with t seen, as lr_sum_ok asked it: the
+// checker and the emitter must agree (RB-25).
+List(Str) lr_sum_arms(Funcs fs, Str t, List(Str) vs, Int i, List(Str) acc) {
     if (i >= vs.len()) { return acc; }
     List(Str) q = str_split(vs[i], "|");
     List(Str) pays = str_split(q[3], "\x1f");
     Str slots = f"%s{i}";
     List(Str) base = [f"v{i}:", slots + " = getelementptr i8, ptr %c, i64 16"];
-    List(Str) body = if (str_parse_int(q[1]) >= 0) { lr_inline_moves(fs, pays[0], slots, i) } else { lr_slot_moves(fs, pays, lr_kinds(q[2]), slots, i, 0, []) };
-    return lr_sum_arms(fs, vs, i + 1, acc.concat(base).concat(body).concat(["br label %lv"]));
+    List(Str) body = if (str_parse_int(q[1]) >= 0) { lr_inline_moves(fs, t, pays[0], slots, i) } else { lr_slot_moves(fs, t, pays, lr_kinds(q[2]), slots, i, 0, []) };
+    return lr_sum_arms(fs, t, vs, i + 1, acc.concat(base).concat(body).concat(["br label %lv"]));
 }
 
-List(Str) lr_inline_moves(Funcs fs, Str p, Str slots, Int v) {
+List(Str) lr_inline_moves(Funcs fs, Str t, Str p, Str slots, Int v) {
     Int si = struct_index(fs, ct_base_of(fs.ctn, fs.ctb, p));
-    List(Str) ls = lr_rec_fields(fs, fs.stf[si], 0, 0, []);
+    List(Str) ls = lr_rec_fields(fs, t, fs.stf[si], [t], 0, 0, []);
     return lr_rename_rec(ls, slots, v, 0, []);
 }
 
@@ -8012,15 +8035,15 @@ List(Str) lr_rename_rec(List(Str) ls, Str slots, Int v, Int i, List(Str) acc) {
     return lr_rename_rec(ls, slots, v, i + 1, acc.concat([l]));
 }
 
-List(Str) lr_slot_moves(Funcs fs, List(Str) pays, List(Int) rk, Str slots, Int v, Int i, List(Str) acc) {
+List(Str) lr_slot_moves(Funcs fs, Str t, List(Str) pays, List(Int) rk, Str slots, Int v, Int i, List(Str) acc) {
     if (i >= pays.len()) { return acc; }
     Bool raw = i < rk.len() && rk[i] > 0;
-    Str mv = if (raw) { "-" } else { lr_slot_move(fs, pays[i], []) };
+    Str mv = if (raw) { "-" } else { lr_slot_move(fs, pays[i], [t]) };
     Str g = f"%a{v}g{i}";
     Str f = f"%a{v}f{i}";
     Str e = f"%a{v}e{i}";
-    List(Str) one = if (mv == "-" || mv == "") { [] } else { [g + " = getelementptr i8, ptr " + slots + f", i64 {i * 8}", f + " = load ptr, ptr " + g, e + " = call ptr " + lr_call(mv, f, "%u"), "store ptr " + e + ", ptr " + g] };
-    return lr_slot_moves(fs, pays, rk, slots, v, i + 1, acc.concat(one));
+    List(Str) one = if (mv == "-") { [] } else { if (mv == "") { [lr_lost(t, f"variant {v} slot {i}")] } else { [g + " = getelementptr i8, ptr " + slots + f", i64 {i * 8}", f + " = load ptr, ptr " + g, e + " = call ptr " + lr_call(mv, f, "%u"), "store ptr " + e + ", ptr " + g] } };
+    return lr_slot_moves(fs, t, pays, rk, slots, v, i + 1, acc.concat(one));
 }
 
 // The sum movers the program's lines name, each defined once; a mover may
@@ -8129,12 +8152,16 @@ List(Str) lr_rec_fns(Funcs fs, Map(Str, Str) hdr, Int i, List(Str) acc) {
 List(Str) lr_rec_def(Funcs fs, Str t, Str fields, Bool hdr) {
     Int size = struct_nfields(fields) * 8;
     List(Str) head = ["define internal ptr @" + lr_rec_fn(t) + "(ptr %v, ptr %u) {", "entry:", f"%c = call ptr @resid_mv_rec(ptr %v, i64 {size}, i8 " + (if (hdr) { "1" } else { "0" }) + ", ptr %u)", "%m = icmp ne ptr %c, %v", "br i1 %m, label %fix, label %done", "fix:"];
-    List(Str) body = lr_rec_fields(fs, fields, 0, 0, []);
+    List(Str) body = lr_rec_fields(fs, t, fields, [t], 0, 0, []);
     return head.concat(body).concat(["br label %done", "done:", "ret ptr %c", "}"]);
 }
 
-// Each pointer field of the copy, loaded, moved and stored back.
-List(Str) lr_rec_fields(Funcs fs, Str fields, Int i, Int k, List(Str) acc) {
+// Each pointer field of the copy, loaded, moved and stored back. Each
+// move is asked with the seen list lr_rec_ok (or lr_sum_ok, for a record
+// a variant inlines) checked it with, so a field the check passed gets its
+// move: asked afresh, a field reaching t again could answer "" and was
+// dropped (RB-25). A field with none is reported, never skipped.
+List(Str) lr_rec_fields(Funcs fs, Str t, Str fields, List(Str) seen, Int i, Int k, List(Str) acc) {
     Int fl = str_len(fields);
     if (i >= fl) { return acc; }
     Int ce = _find_comma_at_depth_cg(fields, i, 0, 0);
@@ -8143,10 +8170,10 @@ List(Str) lr_rec_fields(Funcs fs, Str fields, Int i, Int k, List(Str) acc) {
     Int co = str_find_char(ent, 58, 0);
     Str nm = str_slice(ent, 0, co);
     Str ty = ct_base_of(fs.ctn, fs.ctb, str_trim(str_slice(ent, co + 1, str_len(ent))));
-    Str mv = lr_move(fs, ty, []);
+    Str mv = lr_move(fs, ty, seen);
     Int off = field_slot(fields, nm) * 8;
-    List(Str) one = if (mv == "-" || mv == "") { [] } else { [f"%g{k} = getelementptr i8, ptr %c, i64 {off}", f"%f{k} = load ptr, ptr %g{k}", f"%e{k} = call ptr " + lr_call(mv, f"%f{k}", "%u"), f"store ptr %e{k}, ptr %g{k}"] };
-    return lr_rec_fields(fs, fields, end + 1, k + 1, acc.concat(one));
+    List(Str) one = if (mv == "-") { [] } else { if (mv == "") { [lr_lost(t, "field " + str_trim(nm))] } else { [f"%g{k} = getelementptr i8, ptr %c, i64 {off}", f"%f{k} = load ptr, ptr %g{k}", f"%e{k} = call ptr " + lr_call(mv, f"%f{k}", "%u"), f"store ptr %e{k}, ptr %g{k}"] } };
+    return lr_rec_fields(fs, t, fields, seen, end + 1, k + 1, acc.concat(one));
 }
 
 // The loop's lines with its region (runtime alloc.resid, Loop regions):
@@ -11435,7 +11462,8 @@ pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts,
     List(Str) ffs = if (r0.err != "") { [] } else { lo_freeze_fns(fs, lo, 0, []) };
     // Closure movers (lw_lambda) are in the global lines.
     List(Str) sfs = if (r0.err != "" || resid_rtmod()) { [] } else { lr_mv_sum_fns(fs, r0.lines.concat(rfs).concat(r0.glines)) };
-    PG r = PG {.pos = r0.pos, .err = r0.err, .glines = r0.glines, .hlines = r0.hlines, .lines = r0.lines.concat(rfs).concat(ffs).concat(sfs), .tmp = r0.tmp, .lbl = r0.lbl};
+    Str lost = if (r0.err != "") { "" } else { lr_lost_err(rfs.concat(sfs), 0) };
+    PG r = PG {.pos = r0.pos, .err = if (lost != "") { lost } else { r0.err }, .glines = r0.glines, .hlines = r0.hlines, .lines = r0.lines.concat(rfs).concat(ffs).concat(sfs), .tmp = r0.tmp, .lbl = r0.lbl};
     PG r1 = r;
     if (r1.err != "" || dbg || resid_rtmod()) { return r1; }
     return PG {.pos = r1.pos, .err = r1.err, .glines = r1.glines, .hlines = r1.hlines, .lines = rz_module(vl_module(ol_module(r1.lines))), .tmp = r1.tmp, .lbl = r1.lbl};
