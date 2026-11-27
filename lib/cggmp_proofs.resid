@@ -46,6 +46,9 @@ BnInt fac_challenge(Transcript tr, List(UInt(64)) n, Pedersen aux, List(UInt(64)
 pub Bool fac_verify(List(UInt(64)) n, Pedersen aux, FacProof pf, Transcript tr) {
     if (!zk_n_size_ok(n) || !bn_is_odd(n)) { return false; }
     if (!zk_n_size_ok(aux.n) || !pedersen_valid(aux)) { return false; }
+    // Every response is bounded before any exponentiation, so a huge one
+    // costs nothing (the exponentiations take time linear in its size).
+    if (!fac_bounds_ok(pf)) { return false; }
     BnInt e = fac_challenge(tr, n, aux, pf.p, pf.q, pf.a, pf.b, pf.t);
     if (!ped_verify(aux, pf.z1, pf.w1, e, pf.a, pf.p)) { return false; }
     if (!ped_verify(aux, pf.z2, pf.w2, e, pf.b, pf.q)) { return false; }
@@ -53,10 +56,28 @@ pub Bool fac_verify(List(UInt(64)) n, Pedersen aux, FacProof pf, Transcript tr) 
     List(UInt(64)) r = bn_modmul(bn_modexp(aux.s, n, aux.n), zi_modexp(aux.t, pf.sigma, aux.n), aux.n);
     List(UInt(64)) lhs = bn_modmul(zi_modexp(pf.q, pf.z1, aux.n), zi_modexp(aux.t, pf.v, aux.n), aux.n);
     List(UInt(64)) rhs = bn_modmul(zi_modexp(r, e, aux.n), pf.t, aux.n);
-    if (bn_cmp(lhs, rhs) != 0) { return false; }
-    // |z1|, |z2| within 2^(1 + l + epsilon + 1024).
-    Int bound = 1 + zk_l() + zk_eps() + zk_bits_n() / 2;
-    return zi_bit_len(pf.z1) <= bound && zi_bit_len(pf.z2) <= bound;
+    return bn_cmp(lhs, rhs) == 0;
+}
+
+// The fac responses' bounds. The prover's samples (fac_prove, as Taurus
+// pkg/zk/fac Prove: alpha, beta in +-2^(l+eps) sqrt(N); mu, nu in +-2^l N;
+// sigma in +-2^l N^2; r in +-2^(l+eps) N^2; x, y in +-2^(l+eps) N, with
+// N^(1/2) < 2^1024 and N < 2^2048) and |e| < 2^l give, for any honest proof:
+//   z1 = alpha + e p, z2 = beta + e q: |z| < 2^(l+eps+1024) + 2^(l+1024),
+//     under 2^(1 + l + eps + 1024) (Taurus's IsInIntervalLEpsPlus1RootN);
+//   w1 = x + e mu, w2 = y + e nu: |w| < 2^(l+eps+2048) + 2^(2l+2048),
+//     under 2^(1 + l + eps + 2048), as 2l <= l + eps;
+//   sigma, sent as drawn: |sigma| < 2^(l + 4096);
+//   v = r + e (sigma - nu p): |v| < 2^(l+eps+4096) + 2^l (2^(l+4096) + 2^(l+3072)),
+//     under 2^(1 + l + eps + 4096).
+// Taurus checks only z1 and z2; the others bound what a cheater can make
+// the verifier exponentiate.
+Bool fac_bounds_ok(FacProof pf) {
+    Int nb = zk_bits_n();
+    Int z = 1 + zk_l() + zk_eps() + nb / 2;
+    Int w = 1 + zk_l() + zk_eps() + nb;
+    return zp_in(pf.z1, z) && zp_in(pf.z2, z) && zp_in(pf.w1, w) && zp_in(pf.w2, w)
+        && zp_in(pf.sigma, zk_l() + 2 * nb) && zp_in(pf.v, 1 + zk_l() + zk_eps() + 2 * nb);
 }
 
 /// A proof for N = p q against the verifier's `aux`, bound to `tr`.
@@ -112,7 +133,7 @@ BnInt enc_challenge(Transcript tr, Pedersen aux, PaillierPub pk, List(UInt(64)) 
 pub Bool enc_verify(Pedersen aux, PaillierPub pk, List(UInt(64)) k, EncProof pf, Transcript tr) {
     if (!pedersen_valid(aux)) { return false; }
     if (!pa_ct_ok(pk, pf.a) || !zk_valid_mod_n(pf.z2, pk.n)) { return false; }
-    if (zi_bit_len(pf.z1) > zk_l() + zk_eps()) { return false; }
+    if (zi_bit_len(pf.z1) > zk_l() + zk_eps() || !zp_in(pf.z3, zp_z3())) { return false; }
     BnInt e = enc_challenge(tr, aux, pk, k, pf.s, pf.a, pf.c);
     if (!ped_verify(aux, pf.z1, pf.z3, e, pf.c, pf.s)) { return false; }
     if (!pa_msg_ok(pk, pf.z1)) { return false; }
@@ -198,6 +219,14 @@ Int zp_ln() { return zk_l() + zk_bits_n(); }
 
 Int zp_lepsn() { return zk_l() + zk_eps() + zk_bits_n(); }
 
+// The bound of the Pedersen responses z3 (enc, log*, enc-elg, aff-g,
+// aff-p) and z4 (aff-g, aff-p): z = gamma + e m with gamma drawn in
+// +-2^(l+eps) N and m in +-2^l N (Taurus's IntervalLEpsN and IntervalLN),
+// |e| < 2^l, so |z| < 2^(l+eps+2048) + 2^(2l+2048) < 2^(1 + l + eps + 2048).
+// Taurus does not bound them; checking first keeps a cheater from making
+// ped_verify exponentiate by a huge one.
+Int zp_z3() { return 1 + zp_lepsn(); }
+
 /// Writes the ElGamal ciphertext (`l`, `m`) to transcript `t`.
 pub Transcript tr_elgamal(Transcript t, CvPt l, CvPt m) { return tr_item(t, "ElGamal Ciphertext", cv_enc(l).concat(cv_enc(m))); }
 
@@ -237,6 +266,7 @@ pub Bool affg_verify(AffgPublic p, AffgProof pf, Transcript tr) {
     if (!pa_ct_ok(p.verifier, pf.a) || !pa_ct_ok(p.prover, pf.by)) { return false; }
     if (!zk_valid_mod_n(pf.wy, p.prover.n) || !zk_valid_mod_n(pf.w, p.verifier.n) || pf.bx.inf) { return false; }
     if (!zp_in(pf.z1, zp_leps()) || !zp_in(pf.z2, zp_lpeps())) { return false; }
+    if (!zp_in(pf.z3, zp_z3()) || !zp_in(pf.z4, zp_z3())) { return false; }
     BnInt e = affg_challenge(tr, p, pf.a, pf.bx, pf.by, pf.e, pf.s, pf.f, pf.t);
     if (!ped_verify(p.aux, pf.z1, pf.z3, e, pf.e, pf.s)) { return false; }
     if (!ped_verify(p.aux, pf.z2, pf.z4, e, pf.f, pf.t)) { return false; }
@@ -322,6 +352,7 @@ pub Bool affp_verify(AffpPublic p, AffpProof pf, Transcript tr) {
     if (!pa_ct_ok(p.verifier, pf.a) || !pa_ct_ok(p.prover, pf.bx) || !pa_ct_ok(p.prover, pf.by)) { return false; }
     if (!zk_valid_mod_n(pf.wx, p.prover.n) || !zk_valid_mod_n(pf.wy, p.prover.n) || !zk_valid_mod_n(pf.w, p.verifier.n)) { return false; }
     if (!zp_in(pf.z1, zp_leps()) || !zp_in(pf.z2, zp_lpeps())) { return false; }
+    if (!zp_in(pf.z3, zp_z3()) || !zp_in(pf.z4, zp_z3())) { return false; }
     BnInt e = affp_challenge(tr, p, pf.a, pf.bx, pf.by, pf.e, pf.s, pf.f, pf.t);
     List(UInt(64)) lhs1 = pa_ct_add(p.verifier, pa_enc(p.verifier, pf.z2, pf.w), pa_ct_mul(p.verifier, p.kv, pf.z1));
     List(UInt(64)) rhs1 = pa_ct_add(p.verifier, pa_ct_mul(p.verifier, p.dv, e), pf.a);
@@ -393,7 +424,7 @@ BnInt logstar_challenge(Transcript tr, LogstarPublic p, List(UInt(64)) s, List(U
 /// Whether `pf` proves that C encrypts the discrete log of X to base G, bound to `tr`.
 pub Bool logstar_verify(LogstarPublic p, LogstarProof pf, Transcript tr) {
     if (!pa_ct_ok(p.prover, pf.a) || pf.y.inf || !zk_valid_mod_n(pf.z2, p.prover.n)) { return false; }
-    if (!zp_in(pf.z1, zp_leps())) { return false; }
+    if (!zp_in(pf.z1, zp_leps()) || !zp_in(pf.z3, zp_z3())) { return false; }
     BnInt e = logstar_challenge(tr, p, pf.s, pf.a, pf.y, pf.d);
     if (!ped_verify(p.aux, pf.z1, pf.z3, e, pf.d, pf.s)) { return false; }
     List(UInt(64)) lhs = pa_enc(p.prover, pf.z1, pf.z2);
@@ -451,7 +482,7 @@ BnInt encelg_challenge(Transcript tr, EncelgPublic p, List(UInt(64)) s, List(UIn
 /// Also checks x is in +-2^(l+epsilon).
 pub Bool encelg_verify(EncelgPublic p, EncelgProof pf, Transcript tr) {
     if (!pa_ct_ok(p.prover, pf.d) || pf.w.len() == 0 || !bn_is_normal(pf.w) || pf.y.inf || pf.z.inf || !zk_valid_mod_n(pf.z2, p.prover.n)) { return false; }
-    if (!zp_in(pf.z1, zp_leps())) { return false; }
+    if (!zp_in(pf.z1, zp_leps()) || !zp_in(pf.z3, zp_z3())) { return false; }
     BnInt e = encelg_challenge(tr, p, pf.s, pf.d, pf.y, pf.z, pf.t);
     List(UInt(64)) es = sc_of_zi(e);
     List(UInt(64)) lhs1 = pa_enc(p.prover, pf.z1, pf.z2);
