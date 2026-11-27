@@ -193,7 +193,7 @@ fi
 
 # Red-team regressions for the datastore primitives (issue #9): one file
 # a module, each test failing before its fix.
-for t in r255_redteam merkle_redteam; do
+for t in r255_redteam merkle_redteam mldsa_redteam; do
     [ -f "$ROOT/tests/crypto/${t}_test.resid" ] || continue
     if (cd "$ROOT" && "$COMPILER" test "tests/crypto/${t}_test.resid") > "$W/$t.log" 2>&1 && grep -q "Failures: 0 " "$W/$t.log"; then
         pass=$((pass + $(sed -n 's/.*Passed: \([0-9]*\).*/\1/p' "$W/$t.log" | tail -1)))

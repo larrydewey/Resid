@@ -855,11 +855,13 @@ List(Int) md_prefix(List(Int) m, List(Int) ctx) {
 
 /// ML-DSA.Sign_internal (FIPS 204 Algorithm 7): the signature of the
 /// formatted message M' under sk with the 32 bytes rnd (all zero for the
-/// deterministic variant). Empty for a secret key of the wrong length.
+/// deterministic variant). Empty for a secret key of the wrong length,
+/// or a message with an element that is not a byte (0..255): only the
+/// low 8 bits would be hashed, and two messages would share a signature.
 @requires(declassify)
 pub List(Int) mldsa_sign_internal(MldsaParams p, List(Secret(UInt(8))) sk, List(Int) mprime, List(Secret(UInt(8))) rnd) {
     List(Int) none = [];
-    if (sk.len() != mldsa_sk_len(p) || rnd.len() != 32) { return none; }
+    if (sk.len() != mldsa_sk_len(p) || rnd.len() != 32 || !md_bytes_ok(mprime, 0)) { return none; }
     ListBuf(Secret(UInt(8))) lb71 = ListBuf();
     List(Secret(UInt(8))) mu = shake256g(sk[64..128].concat(md_lift_bytes(mprime, 0, lb71)), 64);
     return md_sign_mu(p, sk, mu, rnd);
@@ -867,10 +869,11 @@ pub List(Int) mldsa_sign_internal(MldsaParams p, List(Secret(UInt(8))) sk, List(
 
 /// Signing from a caller-computed mu (FIPS 204's external-mu interface,
 /// mu = H(tr || M', 64)): for known-answer tests and pre-hashed callers.
+/// Empty unless mu is 64 bytes (each 0..255).
 @requires(declassify)
 pub List(Int) mldsa_sign_mu(MldsaParams p, List(Secret(UInt(8))) sk, List(Int) mu, List(Secret(UInt(8))) rnd) {
     List(Int) none = [];
-    if (sk.len() != mldsa_sk_len(p) || rnd.len() != 32 || mu.len() != 64) { return none; }
+    if (sk.len() != mldsa_sk_len(p) || rnd.len() != 32 || mu.len() != 64 || !md_bytes_ok(mu, 0)) { return none; }
     ListBuf(Secret(UInt(8))) lb72 = ListBuf();
     return md_sign_mu(p, sk, md_lift_bytes(mu, 0, lb72), rnd);
 }
@@ -1023,10 +1026,11 @@ Bool md_same(List(Int) a, List(Int) b, Int i) {
 
 /// ML-DSA.Verify_internal (FIPS 204 Algorithm 8): whether sig is a
 /// signature of the formatted message M' under pk. False for a key or
-/// signature of the wrong length or a malformed hint.
+/// signature of the wrong length, a malformed hint, or any argument with
+/// an element that is not a byte (0..255).
 pub Bool mldsa_verify_internal(MldsaParams p, List(Int) pk, List(Int) mprime, List(Int) sig) {
     if (pk.len() != mldsa_pk_len(p) || sig.len() != mldsa_sig_len(p)) { return false; }
-    if (!md_bytes_ok(pk, 0) || !md_bytes_ok(sig, 0)) { return false; }
+    if (!md_bytes_ok(pk, 0) || !md_bytes_ok(sig, 0) || !md_bytes_ok(mprime, 0)) { return false; }
     List(Int) tr = shake256g(pk, 64);
     return md_verify_mu(p, pk, shake256g(tr.concat(mprime), 64), sig);
 }
@@ -1035,17 +1039,22 @@ pub Bool mldsa_verify_internal(MldsaParams p, List(Int) pk, List(Int) mprime, Li
 /// (the external-mu interface).
 pub Bool mldsa_verify_mu(MldsaParams p, List(Int) pk, List(Int) mu, List(Int) sig) {
     if (pk.len() != mldsa_pk_len(p) || sig.len() != mldsa_sig_len(p) || mu.len() != 64) { return false; }
-    if (!md_bytes_ok(pk, 0) || !md_bytes_ok(sig, 0)) { return false; }
+    if (!md_bytes_ok(pk, 0) || !md_bytes_ok(sig, 0) || !md_bytes_ok(mu, 0)) { return false; }
     return md_verify_mu(p, pk, mu, sig);
 }
 
 /// ML-DSA.Verify (FIPS 204 Algorithm 3): whether sig is a signature of
 /// m with the context string ctx under pk. False when ctx is longer
-/// than 255 bytes.
+/// than 255 bytes, or m or ctx has an element that is not a byte.
 pub Bool mldsa_verify(MldsaParams p, List(Int) pk, List(Int) m, List(Int) ctx, List(Int) sig) {
     if (ctx.len() > 255) { return false; }
     return mldsa_verify_internal(p, pk, md_prefix(m, ctx), sig);
 }
 
-/// mu = H(H(pk, 64) || M', 64) for the external-mu interface.
-pub List(Int) mldsa_mu(List(Int) pk, List(Int) mprime) { return shake256g(shake256g(pk, 64).concat(mprime), 64); }
+/// mu = H(H(pk, 64) || M', 64) for the external-mu interface. Empty when
+/// pk or M' has an element that is not a byte (0..255).
+pub List(Int) mldsa_mu(List(Int) pk, List(Int) mprime) {
+    List(Int) none = [];
+    if (!md_bytes_ok(pk, 0) || !md_bytes_ok(mprime, 0)) { return none; }
+    return shake256g(shake256g(pk, 64).concat(mprime), 64);
+}
