@@ -160,7 +160,9 @@ pub EgPt(P) r255_neg(EgPt(P) a) {
 @needs(Wide512(P, B))
 pub EgPt(P) r255_sub(EgPt(P) a, EgPt(P) b) { return eg_add(a, r255_neg(b)); }
 
-/// [k]a for a scalar 0 <= k < 2^256, in constant time.
+/// [k]a for a scalar 0 <= k < 2^256, in constant time. Bits of k above
+/// 255 are not read (and a negative k is not negated): pass a scalar
+/// reduced mod l.
 @needs(Wide512(P, B))
 pub EgPt(P) r255_mul(P k, EgPt(P) a) { return eg_mul(k, a); }
 
@@ -384,8 +386,12 @@ List(B) r255_lift_bytes(List(Int) bs, Int i, ListBuf(B) acc) {
     return r255_lift_bytes(bs, i + 1, acc.push(p_byte(v, 0)));
 }
 
-/// The commitment vG + rH to the value `v` with blinding `r` (scalars
-/// below l; secret at secret types). Constant time in both.
+/// The commitment vG + rH to the value `v` with blinding `r` (secret at
+/// secret types). Constant time in both. Both must be scalars in [0, l):
+/// the multiplication reads bits 0..255 only, so anything above them is
+/// dropped without notice, and this generic code cannot branch on a
+/// scalar to refuse it. Reduce first (r255_sc_reduce64, r255_sc_decode);
+/// pc_open makes the check itself.
 @needs(Wide512(P, B))
 pub EgPt(P) pc_commit(P v, P r) { return eg_add(eg_base_mul(v), eg_mul(r, pc_h())); }
 
@@ -413,5 +419,21 @@ pub List(Int) r255_encode(EgPt(Int(512)) e) { return r255_encode_b(e); }
 /// Whether two public elements are equal.
 pub Bool r255_eq(EgPt(Int(512)) a, EgPt(Int(512)) b) { return r255_eq_mask(a, b) != (Int(512)) 0; }
 
-/// Whether the opening (v, r) matches the public commitment `c`.
-pub Bool pc_open(EgPt(Int(512)) c, Int(512) v, Int(512) r) { return r255_eq(c, pc_commit(v, r)); }
+/// Whether the opening (v, r) matches the public commitment `c`. False
+/// unless 0 <= v < l and 0 <= r < l: a scalar out of range is refused,
+/// not reduced (the multiplication would drop its bits above 255, and a
+/// commitment would open to more than one value).
+pub Bool pc_open(EgPt(Int(512)) c, Int(512) v, Int(512) r) {
+    Int(512) z = 0;
+    if (v < z || v >= eg_l() || r < z || r >= eg_l()) { return false; }
+    return r255_eq(c, pc_commit(v, r));
+}
+
+/// pc_open on the 32-byte little-endian encodings of v and r, which must
+/// be canonical (r255_sc_decode): the form for an opening off the wire.
+pub Bool pc_open_bytes(EgPt(Int(512)) c, List(Int) v, List(Int) r) {
+    return match r255_sc_decode(v) {
+        Some(vs) => match r255_sc_decode(r) { Some(rs) => pc_open(c, vs, rs), None => false, },
+        None => false,
+    };
+}

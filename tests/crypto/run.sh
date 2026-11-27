@@ -178,6 +178,17 @@ else
     fail=$((fail + 1)); echo "FAIL bcrypt_pbkdf: $(grep -m3 -E 'error|expected|actual' "$W/bcrypt.log" | tr '\n' ' ')"
 fi
 
+# Red-team regressions for the datastore primitives (issue #9): one file
+# a module, each test failing before its fix.
+for t in r255_redteam; do
+    [ -f "$ROOT/tests/crypto/${t}_test.resid" ] || continue
+    if (cd "$ROOT" && "$COMPILER" test "tests/crypto/${t}_test.resid") > "$W/$t.log" 2>&1 && grep -q "Failures: 0 " "$W/$t.log"; then
+        pass=$((pass + $(sed -n 's/.*Passed: \([0-9]*\).*/\1/p' "$W/$t.log" | tail -1)))
+    else
+        fail=$((fail + 1)); echo "FAIL $t: $(grep -m3 -E 'error|✗|expected|actual' "$W/$t.log" | tr '\n' ' ')"
+    fi
+done
+
 # RSA signing on secret keys (lib/rsasign.resid) against cryptography,
 # faulty CRT halves refused (tools/gen_rsasign_ref.py).
 if (cd "$ROOT" && RESID_MEM_LIMIT=12000 "$COMPILER" test tests/crypto/rsasign_test.resid) > "$W/rsasign.log" 2>&1 && grep -q "Failures: 0 " "$W/rsasign.log"; then

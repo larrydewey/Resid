@@ -1,0 +1,46 @@
+// Red-team regressions for lib/ristretto255g.resid (issue #9). Each test
+// failed before its fix. Comparisons are on Bool and hex text only.
+
+import "ristretto255g.resid";
+
+Int(512) rt_two_to(Int n) {
+    Int(512) one = 1;
+    return one << (Int(512)) n;
+}
+
+EgPt(Int(512)) rt_commit(Int(512) v, Int(512) r) { return pc_commit(v, r); }
+
+List(Int) rt_sc(Int(512) s) { return r255_sc_encode_b(s); }
+
+// DC-R255-1: scalar multiplication reads bits 0..255 only, so a value
+// 2^256 (or more) away opened the same commitment although it is a
+// different value mod l.
+test "DC-R255-1: pc_open refuses openings outside [0, l)" {
+    Int(512) v = 5;
+    Int(512) r = 123456789;
+    EgPt(Int(512)) c = rt_commit(v, r);
+    expect(pc_open(c, v, r)).toBeTrue();
+    expect(pc_open(c, v + rt_two_to(256), r)).toBeFalse();
+    expect(pc_open(c, v - rt_two_to(256), r)).toBeFalse();
+    expect(pc_open(c, v + rt_two_to(300), r)).toBeFalse();
+    expect(pc_open(c, v, r + rt_two_to(256))).toBeFalse();
+    expect(pc_open(c, v, r - rt_two_to(256))).toBeFalse();
+    // A value congruent mod l is the same value, but is not canonical.
+    expect(pc_open(c, v + eg_l(), r)).toBeFalse();
+    expect(pc_open(c, v, r + eg_l())).toBeFalse();
+    Int(512) top = eg_l() - (Int(512)) 1;
+    EgPt(Int(512)) c2 = rt_commit(top, top);
+    expect(pc_open(c2, top, top)).toBeTrue();
+    expect(pc_open(c2, eg_l(), top)).toBeFalse();
+}
+
+test "DC-R255-1: pc_open_bytes takes canonical 32-byte scalars only" {
+    Int(512) v = 5;
+    Int(512) r = 123456789;
+    EgPt(Int(512)) c = rt_commit(v, r);
+    expect(pc_open_bytes(c, rt_sc(v), rt_sc(r))).toBeTrue();
+    expect(pc_open_bytes(c, rt_sc(v + eg_l()), rt_sc(r))).toBeFalse();
+    expect(pc_open_bytes(c, rt_sc(v), rt_sc(r)[0..31])).toBeFalse();
+    expect(pc_open_bytes(c, rt_sc(v).concat([0]), rt_sc(r))).toBeFalse();
+    expect(pc_open_bytes(c, rt_sc(r), rt_sc(v))).toBeFalse();
+}
