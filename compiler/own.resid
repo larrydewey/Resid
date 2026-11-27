@@ -1062,8 +1062,45 @@ Bool ow_holds_src(OX x, OF f, List(OE) es, Int src, Int id) {
     if (!ow_self_reach(x.fs, ow_base(x.fs, x.g.ns[id].text))) { return false; }
     if (ow_has_kind(x.g, id, "lambda") || ow_has_kind(x.g, id, "spawn")) { return true; }
     List(OLc) w = ow_roots(ow_mem(f, src, 0), 0, ListBuf());
-    return ow_holds_any(f, es, w, 0);
+    if (ow_holds_any(f, es, w, 0)) { return true; }
+    // The alias entries miss what a value of an untracked type holds (an
+    // Option, Result, sum or closure a call returns, a match's binding),
+    // so they cannot clear a record handed over whole (RB26-OWN-1:
+    // `T { .o = wrap(e) }`). A record whose binder, and every binder it
+    // aliases, is only ever read through its fields in this function (and
+    // not mentioned at all in a closure or spawn) was never handed to
+    // anything that could keep it.
+    return ow_whole_any(x.g, kg_kid(x.g, x.fnode, x.g.ns[x.fnode].nk - 1), ow_root_names(x.g, w, 0, [x.g.ns[src].text]), false);
 }
+
+List(Str) ow_root_names(Kg g, List(OLc) w, Int i, List(Str) acc) {
+    if (i >= w.len()) { return acc; }
+    Str n = if (w[i].r >= 0 && w[i].r < g.ns.len()) { g.ns[w[i].r].text } else { "" };
+    return ow_root_names(g, w, i + 1, if (n == "" || acc.contains(n)) { acc } else { acc.concat([n]) });
+}
+
+// Whether the subtree mentions one of the names other than as the base of
+// a field read (a closure's or spawn's body: any mention). By name, so a
+// shadowing binder counts too.
+Bool ow_whole_any(Kg g, Int id, List(Str) names, Bool cap) {
+    Str k = g.ns[id].kind;
+    Bool c2 = cap || k == "lambda" || k == "spawn";
+    if (k == "ref") { return names.contains(g.ns[id].text); }
+    if (k == "field" && g.ns[id].nk > 0 && !c2) {
+        Int b = kg_kid(g, id, 0);
+        Bool rd = g.ns[b].kind == "ref" && names.contains(g.ns[b].text);
+        return (!rd && ow_whole_any(g, b, names, c2)) || ow_whole_kids(g, id, names, c2, 1);
+    }
+    return ow_whole_kids(g, id, names, c2, 0);
+}
+
+Bool ow_whole_kids(Kg g, Int id, List(Str) names, Bool cap, Int i) {
+    if (i >= g.ns[id].nk) { return false; }
+    if (ow_whole_any(g, kg_kid(g, id, i), names, cap)) { return true; }
+    return ow_whole_kids_n(g, id, names, cap, i);
+}
+
+Bool ow_whole_kids_n(Kg g, Int id, List(Str) names, Bool cap, Int i) { return ow_whole_kids(g, id, names, cap, i + 1); }
 
 Bool ow_holds_any(OF f, List(OE) es, List(OLc) w, Int i) {
     if (i >= es.len()) { return false; }
