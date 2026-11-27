@@ -3101,6 +3101,13 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (a.len() == 3 && a[0] == "List(UInt(8))" && bx_int(a[1]) && bx_int(a[2])) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects (List(UInt(8)), Int, Int), got (" + argtys + ")"};
     }
+    // resid_str_splice(s, at, del, ins): what secret_str_splice erases to
+    // (spec §48): s with del characters at at replaced by ins, clamped.
+    if (name == "resid_str_splice") {
+        List(Str) a = str_split(argtys, ",");
+        if (a.len() == 4 && a[0] == "Str" && bx_int(a[1]) && bx_int(a[2]) && a[3] == "Str") { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Str, Int, Int, Str), got (" + argtys + ")"};
+    }
     if (name == "resid_crc32c") {
         List(Str) a = str_split(argtys, ",");
         if (a.len() == 4 && a[0] == "List(UInt(8))" && bx_int(a[1]) && bx_int(a[2]) && bx_int(a[3])) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }

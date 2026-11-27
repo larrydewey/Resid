@@ -1578,6 +1578,7 @@ GKT gk_call(GK k, Int id, Str exp) {
     if (n == "provisioned_key" && ck_fn_index(k.fs, n) < 0) { return sec_provision(k, id, exp); }
     if (n == "assumed" && ck_fn_index(k.fs, n) < 0) { return sec_assumed(k, id, exp); }
     if ((n == "secret_split" || n == "secret_join") && ck_fn_index(k.fs, n) < 0) { return sec_shape(k, id, n, exp); }
+    if (n == "secret_str_splice" && ck_fn_index(k.fs, n) < 0) { return sec_splice(k, id); }
     if (n == "ct_select" && ck_fn_index(k.fs, n) < 0) { return sec_select(k, id, exp); }
     if (n == "ct_nonzero" && ck_fn_index(k.fs, n) < 0) { return sec_nonzero(k, id, exp); }
     if (sec_liftable(n) && ck_fn_index(k.fs, n) < 0 && (argn == 2 || argn == 1 || (argn == 8 && n == "gf128_mul4_hw"))) {
@@ -5581,7 +5582,7 @@ pub Bool sec_graph_has(Kg g, Int i) {
     if (i >= g.ns.len()) { return false; }
     KN n = g.ns[i];
     Bool lit = n.kind == "lit" || n.kind == "fpart" || n.kind == "fspec";
-    Bool hit = !lit && (str_contains(n.text, "Secret(") || str_contains(n.aux, "Secret(") || ((n.kind == "call" || n.kind == "mcall") && sec_is_wrapper(n.text)));
+    Bool hit = !lit && (str_contains(n.text, "Secret(") || str_contains(n.aux, "Secret(") || ((n.kind == "call" || n.kind == "mcall") && (sec_is_wrapper(n.text) || sec_erase_call(n.text) != "")));
     return if (hit) { true } else { sec_graph_has(g, i + 1) };
 }
 
@@ -5636,7 +5637,7 @@ List(Str) sh_entries(Kg g, Int i, List(Str) acc) {
 
 Bool sl_hit(KN n) {
     Bool lit = n.kind == "lit" || n.kind == "fpart" || n.kind == "fspec";
-    return !lit && (str_contains(n.text, "Secret(") || str_contains(n.aux, "Secret(") || ((n.kind == "call" || n.kind == "mcall") && sec_is_wrapper(n.text)));
+    return !lit && (str_contains(n.text, "Secret(") || str_contains(n.aux, "Secret(") || ((n.kind == "call" || n.kind == "mcall") && (sec_is_wrapper(n.text) || sec_erase_call(n.text) != "")));
 }
 
 Bool sl_tydecl(Str k) { return k == "struct_t" || k == "sum_t" || k == "alias_t" || k == "ctype_t" || k == "cwhere_t"; }
@@ -5817,7 +5818,7 @@ Bool ir_hit_copy(Str s, Map(Str, Int) hits, Int k) {
 
 Map(Str, Int) sec_user_fns(Kg g, Int i, Map(Str, Int) acc) {
     if (i >= g.ns.len()) { return acc; }
-    Bool f = g.ns[i].kind == "fn" && sec_is_wrapper(g.ns[i].text);
+    Bool f = g.ns[i].kind == "fn" && (sec_is_wrapper(g.ns[i].text) || sec_erase_call(g.ns[i].text) != "");
     return sec_user_fns(g, i + 1, if (f) { acc.insert(g.ns[i].text, 1) } else { acc });
 }
 
@@ -5828,7 +5829,9 @@ List(KN) sec_erase_ns(Kg g, Int i, Map(Str, Int) user, ListBuf(KN) acc) {
     Bool wrap = (n.kind == "call" || n.kind == "mcall") && sec_is_wrapper(n.text) && !user.contains(n.text) && n.nk >= 1;
     Bool mark = wrap && n.text == "declassify" && !sec_known_under(g, kg_kid(g, i, 0));
     Bool pmark = wrap && n.text == "provisioned_key";
+    Str rtn = if (n.kind == "call" && !user.contains(n.text)) { sec_erase_call(n.text) } else { "" };
     KN m = if (wrap) { KN {.kind = "paren", .text = "", .aux = if (mark) { "@declassify" } else if (pmark) { "@provision" } else { "" }, .a0 = n.a0, .nk = 1, .sp = n.sp, .ep = n.ep, .kc = kg_kc("paren")} }
+           else if (rtn != "") { KN {.kind = n.kind, .text = rtn, .aux = sec_erase_text(n.aux), .a0 = n.a0, .nk = n.nk, .sp = n.sp, .ep = n.ep, .kc = n.kc} }
            else if (lit) { n }
            else { KN {.kind = n.kind, .text = sec_erase_text(n.text), .aux = sec_erase_text(n.aux), .a0 = n.a0, .nk = n.nk, .sp = n.sp, .ep = n.ep, .kc = n.kc} };
     return sec_erase_ns(g, i + 1, user, acc.push(m));
@@ -6323,6 +6326,35 @@ GKT sec_shape(GK k, Int id, Str n, Str exp) {
     return gt(a.k, "Secret(List(" + sec_inner(el) + "))", id);
 }
 
+// secret_str_splice(s, at, del, ins): the secret text s with `del`
+// characters from character `at` replaced by ins, still secret, with no
+// `declassify` (a password field takes a keystroke this way). at and del
+// are public: they decide which bytes are copied. at is clamped to
+// 0..s.len() and del to 0..s.len() - at, so it never reads out of bounds
+// and never fails (a failure would be a branch on the secret). ins may be
+// public or secret. Erased to the runtime's resid_str_splice (sec_erase).
+GKT sec_splice(GK k, Int id) {
+    if (k.g.ns[id].nk != 4) { return gterr(k, "secret_str_splice(s, at, del, ins) takes 4 arguments", id); }
+    GKT s = gk_expr(k, gk_kid(k, id, 0), "Secret(Str)");
+    if (s.err != "") { return s; }
+    if (s.ty != "Secret(Str)") { return gterr(s.k, "secret_str_splice edits a Secret(Str), got " + s.ty + " (public text can use str_slice)", id); }
+    GKT a = gk_expr(s.k, gk_kid(k, id, 1), "Int");
+    if (a.err != "") { return a; }
+    GKT d = gk_expr(a.k, gk_kid(k, id, 2), "Int");
+    if (d.err != "") { return d; }
+    Bool sa = sec_is(a.ty);
+    if (sa || sec_is(d.ty)) { return gterr(d.k, "E0255: secret_str_splice's " + (if (sa) { "position" } else { "count" }) + " is a secret (" + (if (sa) { a.ty } else { d.ty }) + "): it would decide which bytes are copied. Splice at a public position", id); }
+    if (!(a.ty == "Int" || a.ty == "Int(64)") || !(d.ty == "Int" || d.ty == "Int(64)")) { return gterr(d.k, "secret_str_splice's position and count are Int, got " + a.ty + " and " + d.ty, id); }
+    GKT i = gk_expr(d.k, gk_kid(k, id, 3), "");
+    if (i.err != "") { return i; }
+    if (i.ty != "Str" && i.ty != "Secret(Str)") { return gterr(i.k, "secret_str_splice inserts a Str or a Secret(Str), got " + i.ty, id); }
+    return gt(i.k, "Secret(Str)", id);
+}
+
+// The secret builtins that erase to a runtime call of their own rather
+// than to their first argument: the runtime name, or "" for none.
+pub Str sec_erase_call(Str n) { return if (n == "secret_str_splice") { "resid_str_splice" } else { "" }; }
+
 // Builtins that compute on a secret's payload without branching on it.
 // ct_hide is the optimizer barrier for a mask built from a secret (a sign
 // mask, say): the value is unchanged and stays secret. The AES round and
@@ -6403,7 +6435,7 @@ Bool sec_wide_scan(GK k, List(Int) keys, List(Str) tys, Int i, Str src, Str smap
 }
 
 // Builtin names of secret values that no program may define (E0259).
-Bool sec_reserved(Str n) { return sec_is_wrapper(n) || n == "ct_select" || n == "ct_nonzero"; }
+Bool sec_reserved(Str n) { return sec_is_wrapper(n) || sec_erase_call(n) != "" || n == "ct_select" || n == "ct_nonzero"; }
 
 // A cast of a secret integer that keeps every value (the same or a wider
 // width of the same signedness, or unsigned to a wider signed type) lowers
