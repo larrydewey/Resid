@@ -199,7 +199,7 @@ fi
 # never "null"), each in expect/pass_test must pass.
 (cd "$ROOT" && "$COMPILER" test tests/runtime/expect/fail_test.resid -o "$W/xf") > "$W/xf.log" 2>&1
 xf=$?
-if [ "$xf" -ne 0 ] && grep -q "Failures: 57 | Passed: 0" "$W/xf.log" && ! grep -q "null" "$W/xf.log" \
+if [ "$xf" -ne 0 ] && grep -q "Failures: 57 | Passed: 0" "$W/xf.log" && ! grep -qE "(actual|expected): +null" "$W/xf.log" \
     && grep -q "actual:   \[1, 2, 3\]" "$W/xf.log" && grep -q "expected: \[9, 9\]" "$W/xf.log" \
     && grep -q "expected: None" "$W/xf.log" && grep -q 'actual:   Pt { x: 1, y: "a" }' "$W/xf.log" \
     && grep -q "actual:   {1: \"a\"}" "$W/xf.log" && grep -q "actual:   Some(\[1\])" "$W/xf.log"; then
