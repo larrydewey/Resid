@@ -39,6 +39,66 @@ This plan adds the pieces that are missing, in the order the datastore
 needs them. Each piece is a new module and replaces nothing. No compiler,
 runtime or seed changes are planned.
 
+## The datastore design these primitives serve
+
+These decisions came out of the design discussion (2026-11-27) and are
+recorded here so a later session has them. The datastore is a standalone
+product, BurrowDB's successor, written in Resid.
+
+- **Goal:** replace relational databases with one designed for security
+  from the start. Keep relational semantics for querying, and redesign
+  what sits underneath: authority, storage, custody and query
+  construction.
+- **Truth:** an append-only log of signed facts, and tables are
+  materialized views over it (D1). The database stays the **ultimate
+  authority over order, validity and history** and enforces constraints.
+  That authority is *verifiable*: data owners, independent witnesses,
+  replicas and the public (all four) can check that history was never
+  rewritten.
+- **No TEEs.** Confidential computing is rejected as a foundation (too
+  broad an attack surface), so the engine checks *proofs about* data it
+  cannot read and does not read the data itself. Owners hold the
+  meaning: they are the ones who can read the values.
+- **Owner-first custody:** data is encrypted under its owners' keys, and
+  servers store ciphertext.
+- **Columns state what they leak**, and `SEALED` is the default: `SEALED`
+  (the engine learns nothing), `EQUALITY` (owner-keyed blind indexes
+  support joins and uniqueness), `ORDER` (ranges; deferred, since it leaks
+  the most), `CLEAR`.
+- **Foundational layers (all chosen):** the leakage-explicit schema;
+  zero-knowledge constraint proofs made by the client (ranges, foreign
+  keys as Merkle membership, well-formedness), built on D3; query
+  results authenticated against the signed log root; and secret sharing
+  across 2-3 independent operators (MPC) for aggregates over sealed data.
+- **Access:** capabilities from day one (unforgeable, attenuable,
+  expiring, revocable), plus information-flow labels that travel with the
+  data.
+- **Clients:** both a Resid client library for apps and an owner-run
+  gateway for SQL consoles and legacy tools. Both do the encryption and
+  proof generation.
+- **Query language:** a SQL dialect that SQL experts recognize, compiled
+  and type-checked against the schema with values only as bound
+  parameters (injection is impossible by construction).
+  - An operation a column's leakage class cannot support (`LIKE` on a
+    `SEALED` column, say) is a **compile error** with a hint.
+  - **Typed optionals:** `NOT NULL` by default, nullable written `T?`,
+    and no three-valued logic.
+  - **`GRANT` mints a capability** (`... TO app EXPIRES '30d'` returns an
+    attenuable token).
+  - **History in SQL:** `AS OF` (time or log position); `UPDATE` and
+    `DELETE` record superseding facts, so old versions stay provable;
+    every row has a `_provenance` column (writer, time, proof); `SHRED`
+    erases by destroying keys, and the log's proofs still verify because
+    the log holds commitments, not values.
+  - The SQL deep dive (dialect, typing, label and capability clauses)
+    was requested "in depth" and is the next design topic.
+- **Open questions:** the capability model in detail (grants,
+  delegation, revocation); storage and log format (compaction, view
+  maintenance, crypto-shredding); performance of client-side proofs over
+  sealed columns, which needs early benchmarking; the product's name.
+- **Next primitives after this plan:** Bulletproofs and membership proofs
+  (on D3), AES-GCM-SIV for EQUALITY columns, SPDZ-style MPC, HashML-DSA.
+
 ## D1 — Merkle transparency log (`lib/merkle.resid`)
 
 RFC 9162 §2.1, the Certificate Transparency v2 tree, with SHA-256 by
