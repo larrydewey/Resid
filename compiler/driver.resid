@@ -1451,8 +1451,9 @@ GT cg_match_payload_raw(GT sc, Str ety, Int slot, GT c) {
 // calls to leaf functions do not ask for one. A leaf returns a scalar, only
 // reads its other parameters, and calls only leaf functions (itself
 // included) and non-allocating builtins; its body has no string or byte
-// literal, list literal, method call other than `.len()`, capitalised name
-// other than a numeric type, or `+` next to a non-scalar. Leafness only
+// literal, list literal, slice, method call other than `.len()`,
+// capitalised name other than a numeric type, or `+` next to an operand
+// not known to be a scalar (lower.resid's lf_node). Leafness only
 // decides whether a scope is worth its push and pop, never whether one is
 // sound.
 
@@ -1511,9 +1512,11 @@ List(Str) leaf_calls(Str s, Int pos, Int end, List(Str) ptrs, Str prev, Bool pdo
         if (f.kind != "ident") { return ["!"]; }
         if (f2.text == "(") {
             // A leaf may call `.len()` and the vector methods that stay in
-            // registers (a misjudged leaf only goes without a scope).
+            // registers (a misjudged leaf only goes without a scope); not
+            // `with`, `shuffle` or `sum`, which on a list make or walk one
+            // (lower.resid's lf_node knows the receiver).
             Tok f3 = lex_tok(s, f2.pos);
-            Bool vm = f.text == "any" || f.text == "all" || f.text == "bits" || f.text == "sum" || f.text == "with" || f.text == "shuffle" || str_starts_with(f.text, "wrapping_");
+            Bool vm = f.text == "any" || f.text == "all" || f.text == "bits" || str_starts_with(f.text, "wrapping_");
             if (vm) { return leaf_calls(s, f2.pos, end, ptrs, f.text, false, acc); }
             if (f.text != "len" || f3.text != ")") { return ["!"]; }
             return leaf_calls(s, f3.pos, end, ptrs, ")", false, acc);
@@ -1521,9 +1524,10 @@ List(Str) leaf_calls(Str s, Int pos, Int end, List(Str) ptrs, Str prev, Bool pdo
         return leaf_calls(s, f.pos, end, ptrs, f.text, true, acc);
     }
     if (t.text == "+") {
+        // A bracketed operand (`(a) + (b)`) may be a string too.
         Tok nx = lex_tok(s, t.pos);
-        Bool pl = pdot || prev == "]" || list_has_str(ptrs, prev);
-        Bool nl = nx.kind == "ident" && list_has_str(ptrs, nx.text);
+        Bool pl = pdot || prev == "]" || prev == ")" || list_has_str(ptrs, prev);
+        Bool nl = (nx.kind == "ident" && list_has_str(ptrs, nx.text)) || nx.text == "(" || nx.text == "[";
         if (pl || nl) { return ["!"]; }
         return leaf_calls(s, t.pos, end, ptrs, t.text, false, acc);
     }

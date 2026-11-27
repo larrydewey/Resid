@@ -11888,10 +11888,11 @@ List(Str) lf_node(Kg g, Int id, List(Str) ptrs, Funcs fs, List(Str) acc) {
         return lf_kids(g, id, 1, n, ptrs, fs, a1);
     }
     if (k == "mcall") {
-        // Vector methods stay in registers (a misjudged leaf only goes
-        // without a scope).
+        // Vector methods stay in registers, on a vector: a list's `with`
+        // makes a copy (resid_list_set_w), so a receiver not known to be
+        // a scalar or vector register makes the function no leaf.
         Bool vm = t == "any" || t == "all" || t == "bits" || t == "sum" || t == "with" || t == "shuffle" || str_starts_with(t, "wrapping_");
-        if (vm) { return lf_kids(g, id, 0, n, ptrs, fs, acc); }
+        if (vm && n > 0 && lf_scalar(g, kg_kid(g, id, 0), ptrs, fs)) { return lf_kids(g, id, 0, n, ptrs, fs, acc); }
         if (t != "len" || n > 1) { return lf_no(); }
         return lf_node(g, kg_kid(g, id, 0), ptrs, fs, acc);
     }
@@ -11899,25 +11900,20 @@ List(Str) lf_node(Kg g, Int id, List(Str) ptrs, Funcs fs, List(Str) acc) {
         if (!lf_word(t) && !lf_upper(t)) { return lf_no(); }
         return lf_node(g, kg_kid(g, id, 0), ptrs, fs, acc);
     }
-    if (k == "index" || k == "slice") {
+    // A slice (`xs[a..b]`) makes a new list or string.
+    if (k == "slice") { return lf_no(); }
+    if (k == "index") {
         Int b = kg_kid(g, id, 0);
         List(Str) a1 = lf_node(g, b, ptrs, fs, acc);
         if (lf_bad(a1) || !lf_after_val(lf_last(g, b))) { return lf_no(); }
         return lf_kids(g, id, 1, n, ptrs, fs, a1);
     }
     if (k == "struct" || k == "destr") { return lf_kids(g, id, 0, n, ptrs, fs, lf_ident(t, false, acc)); }
+    // A `+` adds numbers only when both operands are known scalars
+    // (lf_scalar); anything else may be a Str or list concatenation, in
+    // brackets too (`(a) + (b)`).
     if (k == "bin" && t == "+") {
-        Str pl = lf_last(g, kg_kid(g, id, 0));
-        Str nf = lf_first(g, kg_kid(g, id, 1));
-        // A field read is a number when every record with that field has
-        // a scalar there; anything else may be a Str concatenation.
-        Bool numf = str_starts_with(pl, ".") && lf_num_field(fs, str_slice(pl, 1, str_len(pl)), 0);
-        if ((str_starts_with(pl, ".") && !numf) || pl == "]" || list_has_str(ptrs, pl)) { return lf_no(); }
-        // A right operand that is a numeric field read (`p.x + q.y`) adds
-        // numbers even when its record is a pointer parameter.
-        Int rk = kg_kid(g, id, 1);
-        Bool rnum = g.ns[rk].kind == "field" && lf_num_field(fs, g.ns[rk].text, 0);
-        if (list_has_str(ptrs, nf) && !rnum) { return lf_no(); }
+        if (n < 2 || !lf_scalar(g, kg_kid(g, id, 0), ptrs, fs) || !lf_scalar(g, kg_kid(g, id, 1), ptrs, fs)) { return lf_no(); }
         return lf_kids(g, id, 0, n, ptrs, fs, acc);
     }
     // A pattern takes a value apart and allocates nothing: only the arm's
@@ -11942,6 +11938,51 @@ List(Str) lf_node(Kg g, Int id, List(Str) ptrs, Funcs fs, List(Str) acc) {
     if (k == "named") { return lf_kids(g, id, 0, n, ptrs, fs, acc); }
     if (k == "un") { return lf_kids(g, id, 0, n, ptrs, fs, acc); }
     return lf_kids(g, id, 0, n, ptrs, fs, acc);
+}
+
+// Whether node id is surely a scalar (a number, a Bool, a vector): a
+// literal other than text, a name not bound to a pointer (ptrs), a call
+// (a leaf returns a scalar, and a call of anything else makes the caller
+// no leaf anyway; the secret wrappers are their argument), `.len()`, a
+// numeric field, arithmetic and comparisons of scalars, a numeric cast.
+// When unsure, not a scalar.
+Bool lf_scalar(Kg g, Int id, List(Str) ptrs, Funcs fs) {
+    Str k = g.ns[id].kind;
+    Str t = g.ns[id].text;
+    Int n = g.ns[id].nk;
+    if (k == "lit") { Str a = g.ns[id].aux; return a != "str" && a != "raw" && a != "bytes"; }
+    if (k == "ref" || k == "name" || k == "lparam") { return !list_has_str(ptrs, t); }
+    if (k == "call") {
+        Bool wrap = t == "secret" || t == "declassify" || t == "classify";
+        return !wrap || (n > 0 && lf_scalar(g, kg_kid(g, id, 0), ptrs, fs));
+    }
+    if (k == "callv") { return true; }
+    if (k == "mcall") {
+        if (t == "len" || str_starts_with(t, "wrapping_")) { return true; }
+        Bool vm = t == "any" || t == "all" || t == "bits" || t == "sum" || t == "with" || t == "shuffle";
+        return vm && n > 0 && lf_scalar(g, kg_kid(g, id, 0), ptrs, fs);
+    }
+    if (k == "field") { return lf_num_field(fs, t, 0); }
+    if (k == "paren" || k == "un" || k == "named" || k == "rt") { return n > 0 && lf_scalar(g, kg_kid(g, id, n - 1), ptrs, fs); }
+    if (k == "cast") { return n > 0 && g.ns[kg_kid(g, id, 0)].kind == "ty" && scal_ll(ll_ty(ct_base_of(fs.ctn, fs.ctb, g.ns[kg_kid(g, id, 0)].text))); }
+    if (k == "bin") {
+        if (t == "+") { return n >= 2 && lf_scalar(g, kg_kid(g, id, 0), ptrs, fs) && lf_scalar(g, kg_kid(g, id, 1), ptrs, fs); }
+        return lo_has_str(["-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=", "&&", "||", "&", "|", "^", "<<", ">>"], t, 0);
+    }
+    return false;
+}
+
+// The names a body binds to a value that is not a scalar (`Str t = ..`):
+// with the pointer parameters, what a `+` must not touch (lf_scalar).
+List(Str) lf_ptr_binds(Kg g, Int id, Funcs fs, List(Str) acc) {
+    Str k = g.ns[id].kind;
+    Bool b = (k == "bind" || k == "rbind") && g.ns[id].nk > 0 && !scal_ll(ll_ty(ct_base_of(fs.ctn, fs.ctb, g.ns[kg_kid(g, id, 0)].text)));
+    return lf_ptr_binds_at(g, id, 0, fs, if (b) { acc.concat([g.ns[id].text]) } else { acc });
+}
+
+List(Str) lf_ptr_binds_at(Kg g, Int id, Int i, Funcs fs, List(Str) acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    return lf_ptr_binds_at(g, id, i + 1, fs, lf_ptr_binds(g, kg_kid(g, id, i), fs, acc));
 }
 
 // Whether every record type with a field of this name has a scalar there.
@@ -11970,8 +12011,9 @@ List(Str) lf_summary(Kg g, Funcs fs, Int i) {
     Str pns = fs.pns[i];
     List(Str) tyl = if (pts == "") { nil_list() } else { split_rest_depth(pts, ", ") };
     List(Str) nml = if (pns == "") { nil_list() } else { split_rest(pns, ",") };
-    List(Str) ptrs = ptr_params(fs, tyl, nml, 0, []);
-    return lf_node(g, kg_kid(g, d, g.ns[d].nk - 1), ptrs, fs, []);
+    Int body = kg_kid(g, d, g.ns[d].nk - 1);
+    List(Str) ptrs = lf_ptr_binds(g, body, fs, ptr_params(fs, tyl, nml, 0, []));
+    return lf_node(g, body, ptrs, fs, []);
 }
 
 List(List(Str)) lf_summaries(Kg g, Funcs fs, Int i, ListBuf(List(Str)) acc) {

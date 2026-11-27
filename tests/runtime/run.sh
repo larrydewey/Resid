@@ -408,12 +408,16 @@ fi
 # leaf_calls, lower.resid's lf_node): a tail loop calling one gets a region,
 # a scalar binding a scope, an Int recursion a scope per call; each at n
 # and 10 n. Measured: 8 MB; taken for leaves, 126, 220 and 79 MB at a
-# million steps and 1.25 GB, 2.2 GB and 781 MB at ten million.
+# million steps and 1.25 GB, 2.2 GB and 781 MB at ten million. So are
+# helpers concatenating in brackets, calling a list's `with` or slicing a
+# list (paren, with, slice; lf_scalar): 0.3 MB at both sizes, where taken
+# for leaves they passed 40 MB within a million steps (with, slice) or
+# ten million (paren).
 if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/fstr_leaf.resid -o "$W/fstr_leaf") > "$W/fstr_leaf.log" 2>&1 \
-    && [ "$(for fl in "count 1000000" "count 10000000" "sum 1000000" "sum 10000000" "walk 1000000" "walk 10000000"; do RESID_MEM_LIMIT=40 timeout 120 "$W/fstr_leaf" $fl 2>&1; done | tr '\n' ' ')" = "918920 18918920 3785855 7497175 9888890 108888890 " ]; then
+    && [ "$(for fl in "count 1000000" "count 10000000" "sum 1000000" "sum 10000000" "walk 1000000" "walk 10000000" "paren 1000000" "paren 10000000" "with 1000000" "with 10000000" "slice 1000000" "slice 10000000"; do RESID_MEM_LIMIT=40 timeout 120 "$W/fstr_leaf" $fl 2>&1; done | tr '\n' ' ')" = "918920 18918920 3785855 7497175 9888890 108888890 1000000 10000000 2999998 29999997 2000000 20000000 " ]; then
     pass=$((pass + 1))
 else
-    fail=$((fail + 1)); echo "FAIL f-string helpers are not leaves: $(for fl in "count 10000000" "sum 10000000" "walk 10000000"; do RESID_MEM_LIMIT=40 timeout 120 "$W/fstr_leaf" $fl 2>&1 | tail -1; done | tr '\n' ' ') $(grep -m1 -i error "$W/fstr_leaf.log")"
+    fail=$((fail + 1)); echo "FAIL f-string helpers are not leaves: $(for fl in "count 10000000" "sum 10000000" "walk 10000000" "paren 10000000" "with 10000000" "slice 10000000"; do RESID_MEM_LIMIT=40 timeout 120 "$W/fstr_leaf" $fl 2>&1 | tail -1; done | tr '\n' ' ') $(grep -m1 -i error "$W/fstr_leaf.log")"
 fi
 # Loop regions for `for` and `while` (lower.resid, lw_iter): loops whose
 # bodies allocate and carry nothing, each run at n and at 10 n steps (the

@@ -34,11 +34,32 @@ Int walk(Int lo, Int hi) {
     return a + b;
 }
 
+// Helpers that allocate through a concatenation in brackets, a list's
+// `with` and a list slice (lower.resid's lf_scalar and lf_node) are not
+// leaves either; each is recursive, so it is not inlined. The compiler
+// that took them for leaves gave this loop no region and its scalar
+// binding no scope: 60 to 90 bytes a step, never freed.
+Int pcat(Str s, Int d) { if (d > 0) { return pcat(s, d - 1) + 1; } return str_len((s) + (s)); }
+Int lwith(List(Int) xs, Int i, Int d) { if (d > 0) { return lwith(xs, i, d - 1) + 1; } return xs.with(0, i)[0]; }
+Int lslice(List(Int) xs, Int d) { if (d > 0) { return lslice(xs, d - 1) + 1; } return xs[1..d + 9].len(); }
+
+Int helpers(Int w, Str s, List(Int) xs, Int d, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Int k = if (w == 0) { pcat(s, d) } else { if (w == 1) { lwith(xs, i, d) } else { lslice(xs, d) } };
+    return helpers(w, s, xs, d, i + 1, n, acc + k % 7);
+}
+
+Int run_helpers(Int w, Int n) {
+    List(Int) xs = [n % 5, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    return helpers(w, f"ab-{n % 3}-cd", xs, n % 2 + 1, 0, n, 0);
+}
+
 @requires(args)
 Int main() {
     Str w = args.get(1);
     Int n = str_parse_int(args.get(2));
-    Int r = if (w == "count") { count_f(0, n, 0) } else { if (w == "sum") { sum_f(0, n, 0) } else { walk(0, n) } };
+    Int h = if (w == "paren") { 0 } else { if (w == "with") { 1 } else { 2 } };
+    Int r = if (w == "count") { count_f(0, n, 0) } else { if (w == "sum") { sum_f(0, n, 0) } else { if (w == "walk") { walk(0, n) } else { run_helpers(h, n) } } };
     println(f"{r}");
     return 0;
 }
