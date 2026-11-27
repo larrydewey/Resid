@@ -344,14 +344,16 @@ pub Int pool_main(Int w) {
     _ = st64(w + 16, 0);
     // A new region starts outside any sandbox frame.
     _ = cap_depth_set(0);
+    // Under a memory budget a worker keeps no free pages or big blocks
+    // charged between jobs: nothing would give them back while it is
+    // parked, and they would refuse other threads' work (malloc.resid,
+    // mem_limited). Given back before the parent sees the result, so a job
+    // it starts next finds the budget as the finished one left it.
+    _ = if (mem_limited()) { rg_cache_flush() + heap_cache_flush() } else { 0 };
     // Idle again before the parent sees the result: its next spawn finds
     // this worker rather than starting another thread.
     _ = pool_push(w);
     _ = job_done(a);
-    // Once half a memory budget is charged an idle worker keeps no free
-    // pages or big blocks charged (malloc.resid, mem_pressed): they would
-    // refuse other threads' work.
-    _ = if (ld32(w + 16) == 0 && mem_pressed()) { rg_cache_flush() + heap_cache_flush() } else { 0 };
     _ = futex_wait0(w + 16);
     return pool_main(w);
 }

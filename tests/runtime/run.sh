@@ -516,6 +516,17 @@ if (cd "$ROOT" && RESID_UNMAP_FREED=1 timeout 600 "$COMPILER" runtime/rt/rt.resi
 else
     fail=$((fail + 1)); echo "FAIL runtime build with freed blocks unmapped: $(tail -1 "$W/rt_unmapped.log" 2>/dev/null)"
 fi
+# Idle workers under a budget give their caches back before they park
+# (ctl.resid, pool_main): after four 10 MB jobs, well under half the
+# budget, an 80 MB job runs under RESID_MEM_LIMIT=100. Before, the parked
+# workers kept their pages charged and it was refused.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/spawn_strand.resid -o "$W/spawn_strand") > "$W/spawn_strand.log" 2>&1 \
+    && RESID_MEM_LIMIT=100 timeout 120 "$W/spawn_strand" 23000 a b c d > "$W/spawn_strand.out" 2>&1 \
+    && [ "$(tr '\n' ' ' < "$W/spawn_strand.out")" = "burst 4 ok 4 refused 0 main job 23000 " ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL caches of parked workers under a budget: $(tail -1 "$W/spawn_strand.out" "$W/spawn_strand.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # A large object whose page charge the budget refuses (region.resid,
 # lg_new) is linked into its region first, so the pop frees its page.
 # Under ulimit -v the region range is 1024 pages; 1100 jobs are refused

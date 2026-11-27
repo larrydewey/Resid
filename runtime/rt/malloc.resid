@@ -229,20 +229,17 @@ Int mem_retry(Int n, Int lim) {
 // pages, freed big blocks) stays charged, as it is resident, and can
 // refuse other threads' work. So under a budget the region page cache is
 // kept small (region.resid, cache_cap), a thread about to be refused gives
-// its caches back first (mem_retry), and once half the budget is charged
-// an idle worker gives its caches back before it parks (ctl.resid,
-// pool_main, mem_pressed). The caches stay otherwise: dropping either one
+// its caches back first (mem_retry), and a pooled worker gives its caches
+// back when it finishes a job (ctl.resid, pool_main): nothing else could
+// reach them while it waits. (Giving them back only once half the budget was
+// charged left up to half of it stranded in parked workers, red team
+// fin-memrt-1.) A running thread keeps its caches: dropping either one
 // under every budget made the compiler, which sets one, much slower (the
 // page cache 5 times, the big-block cache 1.4 times on the runtime
 // build). The compiler's runtime build read a string from a freed arena
 // chunk after its arena was popped (fixed in driver.resid), which only
 // the big-block cache had kept readable.
 pub Bool mem_limited() { return limit_bytes() > 0; }
-
-pub Bool mem_pressed() {
-    Int lim = limit_bytes();
-    return lim > 0 && ld64(mem_used()) > lim / 2;
-}
 
 // This thread's cached big blocks given back (pool_main).
 pub Int heap_cache_flush() { return cache_flush(heap_tls()); }
