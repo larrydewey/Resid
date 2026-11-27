@@ -971,7 +971,13 @@ Int t_put_s(Int t, Int kk, Int kb, Int vk, Int vb, Int ks, Int vs) {
     Int at = t_vref(t, tkk(t), k);
     Int v = if (vs != 0) { bar_word(t, vs, v0) } else { v0 };
     if (at != 0) { return if (!tnov(t)) { st64(at, v) } else { 0 }; }
-    return t_insert_new(t, if (ks != 0) { bar_word(t, 4, k) } else { k }, v);
+    // A boxed key (a table of kind-0 keys: a Float, a Bool, a wide
+    // integer) made in a younger region than the table moves into the
+    // table's region first, as a string key does and as the trie path's
+    // keys do (rt_map_put): the table's region is left later, and its move
+    // fixes only keys arrays that lie in the regions it leaves.
+    Int kw = if (ks != 0) { bar_word(t, 4, k) } else { if (tkk(t) == 0) { bar_word(t, 0, k) } else { k } };
+    return t_insert_new(t, kw, v);
 }
 
 Int t_put(Int t, Int kk, Int kb, Int vk, Int vb) { return t_put_s(t, kk, kb, vk, vb, 0, 0); }
@@ -1817,12 +1823,17 @@ Int elem_move_ptr(Int p, Int ctx) {
     if (p == 0 || ult(p, 4096) || !mv_src(ctx, p)) { return p; }
     if (!is_boxed(p)) { return str_move(p, ctx); }
     // A scalar box: header and payload copied whole (16 bytes at most, or
-    // a wide integer's limbs).
+    // a wide integer's limbs). Its payload word (+16) points into the box
+    // itself (+24, scalar_box); the copy's points into the copy, or hashing
+    // and comparing it (value_hash, boxed_eq: a moved Float map key) read
+    // the payload left in the freed region.
     Int st = stype(p);
     if (st < 1 || (st > 5 && st != 7)) { return p; }
     Int n = if (st == 7) { 24 + wide_limbs(box_type(p)) * 8 } else { if (st >= 4) { 40 } else { 32 } };
     Int q = mv_alloc(ctx, n);
-    return mcopy(q, p, n) * 0 + q;
+    _ = mcopy(q, p, n);
+    _ = if (ld64(p + 16) == p + 24) { st64(q + 16, q + 24) } else { 0 };
+    return q;
 }
 
 Int str_move(Int p, Int ctx) {
@@ -1834,12 +1845,15 @@ Int str_move(Int p, Int ctx) {
 }
 
 // Kinds 4 and 5 (from the compiler): a string / a list of scalars or
-// strings, stored as kind 0. A larger k is a compiled mover (`resid.mv.T`,
-// resid_mv_map_f): a map whose values are records, sums, maps or lists of
-// records moves each value by it.
+// strings, stored as kind 0. Kind 8: a tagged word that may be a scalar box
+// (a Float, Bool or small integer key, which the map stores boxed, or a
+// UInt(8) value), moved as a list element is. A larger k is a compiled
+// mover (`resid.mv.T`, resid_mv_map_f): a map whose values are records,
+// sums, maps or lists of records moves each value by it.
 Int word_move(Int k, Int w, Int ctx) {
     if (k == 4) { return str_move(w, ctx); }
     if (k == 5) { return list_move(w, 0, ctx); }
+    if (k == 8) { return elem_move(w, ctx); }
     if (k >= 4096) { return resid_raw_call2(k, w, ctx); }
     return w;
 }
@@ -2001,8 +2015,8 @@ Int tab_move(Int t, Int kf, Int vf, Int ctx) {
     _ = if (kt) { st64(nt + 32, dup_words(tkeys(t), tcap(t) * 2, ctx)) } else { 0 };
     _ = if (vt) { st64(nt + 40, tkeys(nt) + 8) } else { 0 };
     // A table made in the region may hold region words.
-    Bool fix = tkeys(nt) != 0 && (kf == 4 || (vf >= 4 && tvals(nt) != 0));
-    _ = if (fix) { move_slots(nt, 0, tcap(nt), kt && kf == 4, vt && vf >= 4, vf, ctx) } else { 0 };
+    Bool fix = tkeys(nt) != 0 && (kf >= 4 || (vf >= 4 && tvals(nt) != 0));
+    _ = if (fix) { move_slots(nt, 0, tcap(nt), kt && kf >= 4, vt && vf >= 4, kf, vf, ctx) } else { 0 };
     return nt;
 }
 
@@ -2019,13 +2033,13 @@ Int dup_words(Int p, Int n, Int ctx) {
     return mcopy(q, p, n * 8) * 0 + q;
 }
 
-Int move_slots(Int t, Int i, Int n, Bool fk, Bool fv, Int vf, Int ctx) {
+Int move_slots(Int t, Int i, Int n, Bool fk, Bool fv, Int kf, Int vf, Int ctx) {
     if (i >= n) { return 0; }
     Int k = ld64(tkeys(t) + i * 16);
     Bool live = k != t_empty(t) && k != t_tomb(t);
-    _ = if (live && fk) { st64(tkeys(t) + i * 16, word_move(4, k, ctx)) } else { 0 };
+    _ = if (live && fk) { st64(tkeys(t) + i * 16, word_move(kf, k, ctx)) } else { 0 };
     _ = if (live && fv) { st64(tvals(t) + i * 16, word_move(vf, ld64(tvals(t) + i * 16), ctx)) } else { 0 };
-    return move_slots(t, i + 1, n, fk, fv, vf, ctx);
+    return move_slots(t, i + 1, n, fk, fv, kf, vf, ctx);
 }
 
 // The moves the compiler emits, with a loop's context (lr_region).

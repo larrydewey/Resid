@@ -1,0 +1,186 @@
+// Map and Set keys that the map stores boxed, carried out of a region. A
+// map stores every key but an Int boxed, and a positive Float under about
+// 1e-303 (a subnormal here) is a scalar box allocated where it was made.
+// The loop region's and spawn's move of Map(Float, V) and Set(Float) passed
+// key kind 0 (a raw word), so the keys stayed in the freed region and were
+// read back from reused memory: duplicated keys, failed lookups, garbage
+// (SW-REGIONS-1). They now move as tagged words (kind 8, elem_move). Each
+// is carried by a tail loop, returned from for and while loops and from a
+// spawn made at scope depth 0, then read after heavy reallocation. Keys of
+// other kinds (Int, Str, Bool, UInt(8), Dec, UInt(256), records) are read
+// back the same way.
+type Pt = { Int x; Str tag; };
+type Row = { Str name; List(Int) xs; };
+
+Str pad(Int i) { return f"{i}-" + str_repeat("x", 60); }
+Bool churn(Int i) { return str_len(pad(i) + pad(i + 1)) == 0; }
+
+Float shrink(Float x, Int k) { if (k == 0) { return x; } return shrink(x / 10.0, k - 1); }
+Float tiny(Int i) { return shrink((Float) (i % 7 + 1), 310); }
+
+Map(Float, Str) tail_m(Map(Float, Str) m, Int i, Int n) {
+    if (churn(i)) { println("never"); }
+    if (i >= n) { return m; }
+    return tail_m(m.insert(tiny(i), f"v{i % 7}"), i + 1, n);
+}
+
+Set(Float) tail_s(Set(Float) s, Int i, Int n) {
+    if (churn(i)) { println("never"); }
+    if (i >= n) { return s; }
+    return tail_s(s.insert(tiny(i)), i + 1, n);
+}
+
+Map(Float, Row) tail_r(Map(Float, Row) m, Int i, Int n) {
+    if (churn(i)) { println("never"); }
+    if (i >= n) { return m; }
+    return tail_r(m.insert(tiny(i), Row {.name = f"r{i % 7}", .xs = [i % 7]}), i + 1, n);
+}
+
+Map(Float, Str) for_m(Int n) {
+    for (Int i in 0..n) {
+        Map(Float, Str) m = {tiny(i): f"v{i % 7}", tiny(i + 1): f"v{(i + 1) % 7}"};
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return m; }
+    }
+    return {};
+}
+
+Set(Float) for_s(Int n) {
+    for (Int i in 0..n) {
+        Set(Float) e = {};
+        Set(Float) s = e.insert(tiny(i)).insert(tiny(i + 1)).insert(tiny(i + 2));
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return s; }
+    }
+    return {};
+}
+
+Bool step_ok(Int i, Int n) { return i < n; }
+
+Map(Float, Str) while_m(Int n) {
+    while (step_ok(n - 1, n)) {
+        for (Int j in 0..n) { if (churn(j)) { println("never"); } }
+        Map(Float, Str) e = {};
+        return tail_m(e, 0, 14);
+    }
+    return {};
+}
+
+Set(Float) while_s(Int n) {
+    while (step_ok(n - 1, n)) {
+        for (Int j in 0..n) { if (churn(j)) { println("never"); } }
+        Set(Float) e = {};
+        return tail_s(e, 0, 14);
+    }
+    return {};
+}
+
+Map(Float, Str) spawn_m(Int n) {
+    Result(Map(Float, Str), RegionError) r = spawn () {
+        Map(Float, Str) e = {};
+        return tail_m(e, 0, n);
+    };
+    return r else { {} };
+}
+
+Set(Float) spawn_s(Int n) {
+    Result(Set(Float), RegionError) r = spawn () {
+        Set(Float) e = {};
+        return tail_s(e, 0, n);
+    };
+    return r else { {} };
+}
+
+// Other key kinds, carried the same way.
+Map(Int, Str) tail_i(Map(Int, Str) m, Int i, Int n) { if (churn(i)) { println("never"); } if (i >= n) { return m; } return tail_i(m.insert(i % 7, f"v{i % 7}"), i + 1, n); }
+Map(Str, Str) tail_t(Map(Str, Str) m, Int i, Int n) { if (churn(i)) { println("never"); } if (i >= n) { return m; } return tail_t(m.insert(f"k{i % 7}", f"v{i % 7}"), i + 1, n); }
+Map(Bool, Str) tail_b(Map(Bool, Str) m, Int i, Int n) { if (churn(i)) { println("never"); } if (i >= n) { return m; } return tail_b(m.insert(i % 2 == 0, f"v{i % 2}"), i + 1, n); }
+Map(UInt(8), Str) tail_u8(Map(UInt(8), Str) m, Int i, Int n) { if (churn(i)) { println("never"); } if (i >= n) { return m; } return tail_u8(m.insert((UInt(8)) (i % 7), f"v{i % 7}"), i + 1, n); }
+Map(Dec, Str) tail_d(Map(Dec, Str) m, Int i, Int n) { if (churn(i)) { println("never"); } if (i >= n) { return m; } return tail_d(m.insert((Dec) (i % 7), f"v{i % 7}"), i + 1, n); }
+Map(UInt(256), Str) tail_w(Map(UInt(256), Str) m, Int i, Int n) { if (churn(i)) { println("never"); } if (i >= n) { return m; } return tail_w(m.insert((UInt(256)) (i % 7), f"v{i % 7}"), i + 1, n); }
+Map(Pt, Str) tail_p(Map(Pt, Str) m, Int i, Int n) { if (churn(i)) { println("never"); } if (i >= n) { return m; } return tail_p(m.insert(Pt {.x = i % 7, .tag = f"t{i % 7}"}, f"v{i % 7}"), i + 1, n); }
+
+Int scrub() {
+    for (Int i in 0..rt 30000) {
+        Str z = f"zz{i}" + str_repeat("Q", 90) + pad(i);
+        if (str_len(z) == 0) { return i; }
+    }
+    return 0;
+}
+
+// How many of tiny(0..6) map to their own value, and the map's size.
+Str mcheck(Map(Float, Str) m) { return f"{m.len()} {mgood(m, 0, 0)}"; }
+Int mgood(Map(Float, Str) m, Int j, Int acc) {
+    if (j >= 7) { return acc; }
+    Str v = m.get(tiny(j)) else { "" };
+    return mgood(m, j + 1, acc + (if (v == f"v{j}") { 1 } else { 0 }));
+}
+Str scheck(Set(Float) s) { return f"{s.len()} {sgood(s, 0, 0)} {kgood(s.to_list(), 0, 0)}"; }
+Int sgood(Set(Float) s, Int j, Int acc) {
+    if (j >= 7) { return acc; }
+    return sgood(s, j + 1, acc + (if (s.contains(tiny(j))) { 1 } else { 0 }));
+}
+// Each element is one of tiny(0..6), read back bit for bit.
+Int kgood(List(Float) ks, Int i, Int acc) {
+    if (i >= ks.len()) { return acc; }
+    return kgood(ks, i + 1, acc + (if (isk(ks[i], 0)) { 1 } else { 0 }));
+}
+Bool isk(Float k, Int j) { if (j >= 7) { return false; } if (k == tiny(j)) { return true; } return isk(k, j + 1); }
+Str rcheck(Map(Float, Row) m) { return f"{m.len()} {rgood(m, 0, 0)}"; }
+Int rgood(Map(Float, Row) m, Int j, Int acc) {
+    if (j >= 7) { return acc; }
+    Option(Row) r = m.get(tiny(j));
+    Bool ok = match (r) { Some(x) => x.name == f"r{j}" && x.xs[0] == j, None => false };
+    return rgood(m, j + 1, acc + (if (ok) { 1 } else { 0 }));
+}
+
+Bool run(Int n) {
+    Map(Float, Str) em = {};
+    Set(Float) es = {};
+    Map(Float, Row) er = {};
+    Map(Float, Str) tm = tail_m(em, 0, n);
+    Set(Float) ts = tail_s(es, 0, n);
+    Map(Float, Row) tr = tail_r(er, 0, n);
+    Map(Float, Str) fm = for_m(n);
+    Set(Float) fs = for_s(n);
+    Map(Float, Str) wm = while_m(n);
+    Set(Float) ws = while_s(n);
+    Map(Float, Str) sm = spawn_m(n);
+    Set(Float) ss = spawn_s(n);
+    Map(Int, Str) ei = {};
+    Map(Str, Str) et = {};
+    Map(Bool, Str) eb = {};
+    Map(UInt(8), Str) eu = {};
+    Map(Dec, Str) ed = {};
+    Map(UInt(256), Str) ew = {};
+    Map(Pt, Str) ep = {};
+    Map(Int, Str) ki = tail_i(ei, 0, n);
+    Map(Str, Str) kt = tail_t(et, 0, n);
+    Map(Bool, Str) kb = tail_b(eb, 0, n);
+    Map(UInt(8), Str) ku = tail_u8(eu, 0, n);
+    Map(Dec, Str) kd = tail_d(ed, 0, n);
+    Map(UInt(256), Str) kw = tail_w(ew, 0, n);
+    Map(Pt, Str) kp = tail_p(ep, 0, n);
+    _ = scrub();
+    Result(Int, RegionError) z = spawn () { Map(Float, Str) e2 = {}; Map(Float, Str) q = tail_m(e2, 100, 100 + n); return scrub() + q.len(); };
+    Int zz = z else { 0 };
+    _ = scrub();
+    println("tail: " + mcheck(tm) + " | " + scheck(ts) + " | " + rcheck(tr));
+    println("for: " + mcheck(fm) + " | " + scheck(fs));
+    println("while: " + mcheck(wm) + " | " + scheck(ws));
+    println("spawn: " + mcheck(sm) + " | " + scheck(ss) + f" {zz > 0}");
+    Str v3 = kt.get("k3") else { "" };
+    Str vb = kb.get(true) else { "" };
+    Str vu = ku.get((UInt(8)) 4) else { "" };
+    Str vd = kd.get((Dec) 5) else { "" };
+    Str vw = kw.get((UInt(256)) 6) else { "" };
+    Str vp = kp.get(Pt {.x = 2, .tag = "t2"}) else { "" };
+    println(f"keys: {ki.len()} {ki.get(1) else { "" }} {kt.len()} {v3} {kb.len()} {vb} {ku.len()} {vu} {kd.len()} {vd} {kw.len()} {vw} {kp.len()} {vp}");
+    return true;
+}
+
+Int main() {
+    _ = run(rt 12);
+    _ = run(rt 20000);
+    return 0;
+}

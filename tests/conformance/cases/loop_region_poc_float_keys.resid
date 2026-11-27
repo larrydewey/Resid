@@ -1,0 +1,56 @@
+// Regression test for SW-REGIONS-1 (fixed): the red-team proof of concept, kept as
+// found. Comments below describe the defect as it was.
+Str pad(Int i) { return f"{i}-" + str_repeat("x", 60); }
+Bool churn(Int i) { return str_len(pad(i) + pad(i + 1)) == 0; }
+
+Float shrink(Float x, Int k) { if (k == 0) { return x; } return shrink(x / 10.0, k - 1); }
+Float tiny(Int i) { return shrink((Float) (i % 7 + 1), 310); }
+
+Map(Float, Int) fk(Map(Float, Int) m, Int i, Int n) {
+    if (churn(i)) { println("never"); }
+    if (i >= n) { return m; }
+    return fk(m.insert(tiny(i), i), i + 1, n);
+}
+Set(Float) fs(Set(Float) s, Int i, Int n) {
+    if (churn(i)) { println("never"); }
+    if (i >= n) { return s; }
+    return fs(s.insert(tiny(i)), i + 1, n);
+}
+Map(Float, Int) fk_for(Int n) {
+    for (Int i in 0..n) {
+        Map(Float, Int) m = {tiny(i): i, tiny(i + 1): i + 1};
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return m; }
+    }
+    return {};
+}
+Int scrub() {
+    for (Int i in 0..rt 100000) {
+        Str z = f"zz{i}" + str_repeat("Q", 90);
+        if (str_len(z) == 0) { return i; }
+    }
+    return 0;
+}
+Str fl(List(Float) xs, Int i, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    return fl(xs, i + 1, acc + f"{shrink(1.0, 0) * xs[i] / shrink(1.0, 300)} ");
+}
+Bool run(Int n) {
+    Map(Float, Int) e = {};
+    Map(Float, Int) m = fk(e, 0, n);
+    _ = scrub();
+    println(f"map {m.len()} " + fl(m.keys(), 0, ""));
+    Set(Float) es = {};
+    Set(Float) s = fs(es, 0, n);
+    _ = scrub();
+    println(f"set {s.len()} " + fl(s.to_list(), 0, ""));
+    Map(Float, Int) m2 = fk_for(n);
+    _ = scrub();
+    println(f"for {m2.len()} " + fl(m2.keys(), 0, ""));
+    return true;
+}
+Int main() {
+    _ = run(rt 12);
+    _ = run(rt 60000);
+    return 0;
+}

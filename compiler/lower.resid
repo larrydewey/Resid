@@ -7981,14 +7981,24 @@ Bool lr_list_word(Str t) { return lr_wraps(t, "List(") && lr_word_ty(str_slice(t
 Bool lr_is_clo(Str t) { return ty_clo(t); }
 Bool lr_wraps(Str t, Str pre) { return ty_wraps(t, pre); }
 
-// A word's kind for resid_map_evac: 4 a string, 5 a list, 0 plain.
-Int lr_kind(Str t) { return if (t == "Str") { 4 } else { if (lr_list_word(t)) { 5 } else { 0 } }; }
+// A map value word's kind for resid_mv_map (word_move in
+// runtime/rt/map.resid): 4 a string, 5 a list, 8 a tagged word (a UInt(8)
+// value is boxed, lin_vk 0, and a box may lie in the region), 0 a raw
+// scalar (Int, Float, Bool: lin_vk) with nothing to move.
+Int lr_kind(Str t) { return if (t == "Str") { 4 } else { if (lr_list_word(t)) { 5 } else { if (lin_vk(t) == 0 && lr_word_ty(t)) { 8 } else { 0 } } }; }
+
+// A map key's or set element's kind: only an Int key is a raw word
+// (lin_kk 1); every other word key is stored boxed (lin_word), and a Float
+// key under about 1e-303 is a scalar box allocated where it was made, which
+// a loop region or a spawn's region frees. Kind 8 moves it (elem_move):
+// as kind 0 the keys were left in the freed region (SW-REGIONS-1).
+Int lr_kkind(Str t) { return if (t == "Str") { 4 } else { if (lr_list_word(t)) { 5 } else { if (lin_kk(t) == 1) { 0 } else { 8 } } }; }
 
 // The call that moves a carried value of type `ty` to the heap, or "".
 Str lr_evac_fn(Str ty) {
-    if (lr_wraps(ty, "Set(") && lr_word_ty(set_elem_type_cg(ty))) { return f"@resid_mv_map(ptr %V, i8 {lr_kind(set_elem_type_cg(ty))}, i8 0, ptr %C)"; }
+    if (lr_wraps(ty, "Set(") && lr_word_ty(set_elem_type_cg(ty))) { return f"@resid_mv_map(ptr %V, i8 {lr_kkind(set_elem_type_cg(ty))}, i8 0, ptr %C)"; }
     if (lr_wraps(ty, "Map(") && lr_word_ty(map_key_type_cg(ty)) && (lr_word_ty(map_val_type_cg(ty)) || lr_list_word(map_val_type_cg(ty)))) {
-        return f"@resid_mv_map(ptr %V, i8 {lr_kind(map_key_type_cg(ty))}, i8 {lr_kind(map_val_type_cg(ty))}, ptr %C)";
+        return f"@resid_mv_map(ptr %V, i8 {lr_kkind(map_key_type_cg(ty))}, i8 {lr_kind(map_val_type_cg(ty))}, ptr %C)";
     }
     if (lr_list_word(ty)) { return "@resid_mv_list(ptr %V, ptr %C)"; }
     if (is_dec_cg(ty) && ll_ty(ty) == "ptr") { return "@resid_mv_dec(ptr %V, ptr %C)"; }
@@ -8069,7 +8079,7 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
     if (lr_wraps(t, "Map(") && lr_word_ty(map_key_type_cg(t)) && !resid_internals()) {
         Str vt = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(map_val_type_cg(t)));
         Str vm = if (ll_ty(vt) == "ptr" && !lr_word_ty(vt)) { lr_move(fs, vt, seen.concat([t])) } else { "" };
-        if (vm != "" && vm != "-") { return f"@resid_mv_map_f(ptr %V, i8 {lr_kind(map_key_type_cg(t))}, ptr @" + lr_mv_fn(vt) + ", ptr %C)"; }
+        if (vm != "" && vm != "-") { return f"@resid_mv_map_f(ptr %V, i8 {lr_kkind(map_key_type_cg(t))}, ptr @" + lr_mv_fn(vt) + ", ptr %C)"; }
     }
     if (lr_wraps(t, "List(") && !is_list_fixed(t)) {
         Str et = ct_base_of(fs.ctn, fs.ctb, elem_type(t));
