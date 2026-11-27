@@ -53,3 +53,26 @@ test "dc-mldsa-2: signing and mu refuse input that is not bytes" {
     expect(mldsa_mu(k.pk, [0, 0, 257]).len()).toBe(0);
     expect(mldsa_mu(k.pk.with(0, k.pk[0] + 256), [0, 0, 1]).len()).toBe(0);
 }
+
+Bool rt_hint_some(MldsaParams p, List(Int) y) { return match md_hint_unpack(p, y) { Some(h) => true, None => false }; }
+
+List(Int) rt_zeros(Int n, ListBuf(Int) acc) { return if (n <= 0) { acc.finish() } else { rt_zeros(n - 1, acc.push(0)) }; }
+
+// md_hint_unpack is public and indexed its argument with no check of its
+// own: a short list, or a position that is not a byte, aborted.
+test "md_hint_unpack refuses a hint of the wrong length or with a non-byte" {
+    MldsaParams p = mldsa44();
+    List(Int) empty = rt_zeros(p.omega + p.k, ListBuf());
+    expect(rt_hint_some(p, empty)).toBeTrue();
+    // One hint, at position 7 of the first polynomial.
+    List(Int) one = empty.with(0, 7).with(p.omega, 1).with(p.omega + 1, 1).with(p.omega + 2, 1).with(p.omega + 3, 1);
+    expect(rt_hint_some(p, one)).toBeTrue();
+    List(Int) none = [];
+    expect(rt_hint_some(p, none)).toBeFalse();
+    expect(rt_hint_some(p, empty[0..p.omega + p.k - 1])).toBeFalse();
+    expect(rt_hint_some(p, empty.concat([0]))).toBeFalse();
+    expect(rt_hint_some(mldsa87(), empty)).toBeFalse();
+    expect(rt_hint_some(p, one.with(0, 256))).toBeFalse();
+    expect(rt_hint_some(p, one.with(0, 0 - 1))).toBeFalse();
+    expect(rt_hint_some(p, one.with(p.omega + 3, 257))).toBeFalse();
+}

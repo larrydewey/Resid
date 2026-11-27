@@ -926,8 +926,10 @@ List(List(Int)) md_use_hint_v(List(List(Int)) a, List(List(Int)) h, Int g, Int i
 /// The hint polynomials of a signature's last omega + k bytes, or None
 /// unless they are well formed (FIPS 204 Algorithm 21): counts never
 /// decreasing and at most omega, positions strictly increasing within a
-/// polynomial, unused position bytes zero.
+/// polynomial, unused position bytes zero. None too unless `y` is
+/// omega + k elements, each a byte (0..255).
 pub Option(List(List(Int))) md_hint_unpack(MldsaParams p, List(Int) y) {
+    if (y.len() != p.omega + p.k || !md_bytes_ok(y, 0)) { return None; }
     List(List(Int)) none = [];
     return md_hint_un(p, y, 0, 0, none);
 }

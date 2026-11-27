@@ -464,9 +464,8 @@ Int fz_hint_len(MldsaParams p) { return p.omega + p.k; }
 // here independently: the positions of the ones polynomial by polynomial,
 // zeros up to omega, then the running count after each polynomial).
 Int fz_hint(MldsaParams p, List(Int) y) {
-    if (y.len() != fz_hint_len(p)) { return 0; }
     return match md_hint_unpack(p, y) {
-        Some(h) => fz_must(h.len() == p.k && fz_same(fz_hint_pack(p, h, 0, 0, ListBuf(), ListBuf()), y), "md_hint_unpack accepted a non-canonical hint"),
+        Some(h) => fz_must(y.len() == fz_hint_len(p) && h.len() == p.k && fz_same(fz_hint_pack(p, h, 0, 0, ListBuf(), ListBuf()), y), "md_hint_unpack accepted a non-canonical hint"),
         None => 0,
     };
 }
