@@ -3205,6 +3205,11 @@ TD td_scan(Str s, Int pos, Int copied, Str acc, List(Str) names, List(Str) syms)
             }
         }
     }
+    // A `;` left after a declaration skip_decl ends at its closing brace
+    // (`type P = { ... };`) is a declaration of its own: stepping over it
+    // with skip_decl would swallow the next declaration, and a test block
+    // there was never run.
+    if (t.text == ";") { return td_scan(s, t.pos, copied, acc, names, syms); }
     // An annotation (`@requires(...)`) may precede a test block: step over
     // it and keep scanning.
     if (str_starts_with(t.text, "@")) {

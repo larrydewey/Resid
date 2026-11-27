@@ -41,3 +41,7 @@ test "toContain on a list" { List(Int) a = [1, 2]; expect(a).toContain(3); }
 test "toContain on a byte list" { List(UInt(8)) a = [1, 2]; UInt(8) x = 3; expect(a).toContain(x); }
 test "toBeNull on some list" { Option(List(Int)) o = Some([1]); expect(o).toBeNull(); }
 test "toSatisfy on a list" { List(Int) a = [1, 2]; expect(a).toSatisfy(lambda(xs) { xs.len() == 3 }); }
+// Discovery once stepped over the `;` after a record type with the next
+// declaration, so a test right after one was silently never run.
+type Wrap = { Int v; };
+test "right after a record type" { Wrap w = Wrap {.v = 1}; expect(w.v).toEqual(2); }

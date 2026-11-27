@@ -32,3 +32,5 @@ test "toContain" { List(Int) a = [1, 2]; expect(a).toContain(2); }
 test "toContain on a byte list" { List(UInt(8)) a = [1, 2]; UInt(8) x = 2; expect(a).toContain(x); }
 test "toBeNull" { Option(List(Int)) o = None; expect(o).toBeNull(); }
 test "toSatisfy on a list" { List(Int) a = [1, 2]; expect(a).toSatisfy(lambda(xs) { xs.len() == 2 }); }
+type Wrap = { Int v; };
+test "right after a record type" { Wrap w = Wrap {.v = 1}; expect(w).toEqual(Wrap {.v = 1}); }
