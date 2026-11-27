@@ -108,7 +108,13 @@ Secret(Str) back = secret_str_splice(pw, caret - 1, 1, "");     // backspace
 - `at` and `del` are public `Int`s; a secret one is refused (`E0255`),
   since it would decide which bytes are copied. `ins` is a `Str` or a
   `Secret(Str)`.
-- Characters are Unicode scalar values, counted as `.len()` counts them.
+- Characters are Unicode scalar values, counted as `.len()` counts them
+  (in text that is not valid UTF-8, a malformed sequence counts as one).
+- The result is always valid UTF-8: every character that is not
+  well-formed (a lone continuation byte, a cut-short sequence, an overlong
+  form, a surrogate, a byte F5-FF) is written as U+FFFD. Its `.len()` is
+  therefore exactly `s.len() - del + ins.len()` (with `del` as clamped),
+  whatever bytes meet at the joins.
 - Out-of-range values are clamped, never refused: `at` to `0..s.len()`,
   `del` to `0..s.len() - at`. The call never fails (a failure would be a
   branch on the secret) and never reads outside `s`.

@@ -680,9 +680,17 @@ Int str_slice_slow(Int s, Int start0, Int end0) {
 // secret_str_splice (spec §48), after the checker has erased the secret:
 // s with `del` codepoints from codepoint `at` replaced by ins, in a new
 // string. at is clamped to 0..len and del to 0..len - at, so no byte
-// outside s is read and nothing fails. s itself is left as it is: other
-// values may still hold it, and in secret mode the allocator zeroes it
-// when its region lets it go, as for every other secret.
+// outside s is read and nothing fails. The three pieces (s before at, ins,
+// s after at + del) are copied a character at a time, as str_len counts
+// characters, and a character that is not well-formed UTF-8 is written as
+// U+FFFD. Every piece then ends on a whole character and starts on a lead
+// byte, so no character is counted across a join: the result has exactly
+// len - del + str_len(ins) characters, whatever the bytes are. (Copied as
+// bytes, a lone lead byte of s took up an inserted continuation byte, and
+// the result's public .len() told which bytes were which.) s itself is
+// left as it is: other values may still hold it, and in secret mode the
+// allocator zeroes it when its region lets it go, as for every other
+// secret.
 @export("resid_str_splice", "ptr(ptr,i64,i64,ptr)")
 pub Int rt_str_splice(Int s, Int at, Int del, Int ins) {
     Int sl = idx_slot(s);
@@ -693,12 +701,41 @@ pub Int rt_str_splice(Int s, Int at, Int del, Int ins) {
     Int bb = slot_off(sl, a + d);
     Int bn = slot_off(sl, len);
     Int li = c_strlen(ins);
-    Int p = ralloc(ba + li + (bn - bb) + 1);
-    _ = mcopy(p, s, ba);
-    _ = mcopy(p + ba, ins, li);
-    _ = mcopy(p + ba + li, s + bb, bn - bb);
-    _ = st8(p + ba + li + (bn - bb), 0);
+    Int p = ralloc(clean_bytes(s, s + ba, 0) + clean_bytes(ins, ins + li, 0) + clean_bytes(s + bb, s + bn, 0) + 1);
+    Int e = clean_copy(clean_copy(clean_copy(p, s, s + ba), ins, ins + li), s + bb, s + bn);
+    _ = st8(e, 0);
     return p;
+}
+
+// Whether the character at p, of n bytes (utf8_len_at), is well-formed
+// UTF-8: no lone continuation byte, no cut-short sequence, no byte F5-FF,
+// no overlong form, no surrogate, nothing past U+10FFFF.
+Bool utf8_ok_at(Int p, Int n) {
+    Int c = ld8(p);
+    if (c < 128) { return true; }
+    if (n == 1 || n != utf8_seq_len(c)) { return false; }
+    Int c1 = ld8(p + 1);
+    if (n == 2) { return c >= 194; }
+    if (n == 3) { return (c != 224 || c1 >= 160) && (c != 237 || c1 < 160); }
+    return c <= 244 && (c != 240 || c1 >= 144) && (c != 244 || c1 < 144);
+}
+
+// The bytes [p, end) take when copied by clean_copy (end on a character
+// boundary).
+Int clean_bytes(Int p, Int end, Int acc) {
+    if (p >= end) { return acc; }
+    Int n = utf8_len_at(p);
+    return clean_bytes(p + n, end, acc + (if (utf8_ok_at(p, n)) { n } else { 3 }));
+}
+
+// [p, end) copied to dst a character at a time, a malformed one as
+// U+FFFD (EF BF BD); the end of what was written.
+Int clean_copy(Int dst, Int p, Int end) {
+    if (p >= end) { return dst; }
+    Int n = utf8_len_at(p);
+    Bool ok = utf8_ok_at(p, n);
+    _ = if (ok) { mcopy(dst, p, n) } else { st8(dst, 239) + st8(dst + 1, 191) + st8(dst + 2, 189) };
+    return clean_copy(dst + (if (ok) { n } else { 3 }), p + n, end);
 }
 
 // Frequency class of a byte in text (higher is commoner).

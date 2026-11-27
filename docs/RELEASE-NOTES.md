@@ -10,6 +10,10 @@
   count Unicode scalar values, as `.len()` does, and are clamped to the
   text (never refused); a secret position or count is refused (E0255).
   The name is reserved (E0259). An empty secret text is `classify("")`.
+  The result is valid UTF-8: a malformed character of `s` or `ins`
+  becomes U+FFFD, so the result's `.len()` is `s.len() - del +
+  ins.len()` whatever bytes meet at a join, and says nothing about the
+  bytes of a secret that is not valid UTF-8.
 
 # Resid v0.5.1
 
