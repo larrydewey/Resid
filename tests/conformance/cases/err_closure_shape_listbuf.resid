@@ -1,0 +1,18 @@
+// A closure whose result is a builder is a builder inside a closure type
+// (E0404, spec §45.1). Its text begins as a ListBuf's does and its
+// parameters' comma sits at depth 0, so the builder kind once read it as a
+// fixed ListBuf(T, N) and the checker reported a consumption error (E0401)
+// instead; lowering took it for a fixed builder in a frame slot.
+ListBuf(Int) closure(Int, Int) mkbuf(Int a) {
+    return lambda(x, y) {
+        ListBuf(Int) b = ListBuf();
+        b.push(a).push(x).push(y)
+    };
+}
+
+Int main() {
+    ListBuf(Int) closure(Int, Int) f = mkbuf(1);
+    List(Int) r = f(2, 3).finish();
+    println(f"{r.len()}");
+    return 0;
+}

@@ -1,0 +1,14 @@
+// Regression test for SWMG-2 (fixed): the red-team proof of concept, kept as
+// found. Comments below describe the defect as it was.
+// lo_freeze calls resid_list_freeze on a closure whose type text starts
+// with "List(" (in a program that uses .with): a first capture whose low
+// word reads as a transient list's shift (-2) is rewritten to -1.
+List(Int) closure(Int) mkl(Int a) { return lambda(k) { [a, k] }; }
+
+Int main() {
+    List(Int) xs = [1, 2, 3];
+    List(Int) ys = xs.with(0, rt 9);
+    List(Int) closure(Int) f = mkl(0 - rt 2);
+    println(f"captured {f(5)[0]} (want -2) {ys[0]}");
+    return 0;
+}

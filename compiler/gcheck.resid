@@ -3201,9 +3201,11 @@ pub Bool gk_is_builder(Str t) { return gk_builder_kind(t) != ""; }
 // "flb" ListBuf(T, N); "" when t is not a builder.
 pub Str gk_builder_kind(Str t) {
     if (t == "StrBuf") { return "sb"; }
-    if (str_has_prefix(t, "StrBuf(")) { return "fsb"; }
-    if (str_has_prefix(t, "BytesBuf(")) { return "fbb"; }
-    if (!str_has_prefix(t, "ListBuf(")) { return ""; }
+    // The builder itself (ty_is): `ListBuf(Int) closure(Int, Int)` is a
+    // closure, whose parameters' comma made it look fixed.
+    if (ty_is(t, "StrBuf(")) { return "fsb"; }
+    if (ty_is(t, "BytesBuf(")) { return "fbb"; }
+    if (!ty_is(t, "ListBuf(")) { return ""; }
     return if (ty_args(t).len() == 2) { "flb" } else { "lb" };
 }
 

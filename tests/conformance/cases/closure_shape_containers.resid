@@ -1,0 +1,139 @@
+// Closures whose result is a container: `Map(Str, Int) closure(Int)` and
+// `List(Int) closure(Int)` are closures, not a map or a list. Their text
+// once began as a container's does, so lo_freeze called resid_map_freeze on
+// a returned closure's environment (zeroing its third capture, or writing
+// past an environment with fewer), and resid_list_freeze rewrote a first
+// capture of -2 to -1 (SWMG-2). (A closure returning a builder is refused,
+// E0404: err_closure_shape_listbuf.) Each closure
+// is used as a return value, an argument, a list element, a record field,
+// a loop carry (tail, for and while loops with garbage made each step) and
+// a spawn's result.
+type Hold = { Map(Str, Int) closure(Int) f; Map(Str, Int) m; List(Int) closure(Int) g; };
+
+Str pad(Int i) { return f"{i}-" + str_repeat("x", 60); }
+Bool churn(Int i) { return str_len(pad(i) + pad(i + 1)) == 0; }
+
+Map(Str, Int) closure(Int) mkm(Int a, Int b, Int c) {
+    return lambda(k) {
+        Map(Str, Int) m = {};
+        m.insert("sum", a + b + c + k)
+    };
+}
+
+// One capture: an environment of three words, which a map freeze wrote past.
+Map(Str, Int) closure(Int) mkm1(Str s) {
+    return lambda(k) {
+        Map(Str, Int) m = {};
+        m.insert(s, k)
+    };
+}
+
+List(Int) closure(Int) mkl(Int a) { return lambda(k) { [a, k] }; }
+
+Int msum(Map(Str, Int) closure(Int) f, Int k) { Map(Str, Int) r = f(k); return r.get("sum") else { 0 - 1 }; }
+Str lshow(List(Int) closure(Int) f, Int k) { List(Int) r = f(k); return f"{r[0]},{r[1]}"; }
+
+Map(Str, Int) closure(Int) carry_m(Int i, Int n, Map(Str, Int) closure(Int) f) {
+    if (churn(i)) { println("never"); }
+    if (i >= n) { return f; }
+    return carry_m(i + 1, n, if (i % 500 == 0) { mkm(i, 20, 300) } else { f });
+}
+
+List(Int) closure(Int) carry_l(Int i, Int n, List(Int) closure(Int) f) {
+    if (churn(i)) { println("never"); }
+    if (i >= n) { return f; }
+    return carry_l(i + 1, n, if (i % 500 == 0) { mkl(0 - 2 - i) } else { f });
+}
+
+Map(Str, Int) closure(Int) for_m(Int n) {
+    for (Int i in 0..n) {
+        Map(Str, Int) closure(Int) f = mkm(i, 20, 300);
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return f; }
+    }
+    return mkm(0, 0, 0);
+}
+
+List(Int) closure(Int) for_l(Int n) {
+    for (Int i in 0..n) {
+        List(Int) closure(Int) f = mkl(0 - 2);
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return f; }
+    }
+    return mkl(0);
+}
+
+Bool step_ok(Int i, Int n) { return i < n; }
+
+Map(Str, Int) closure(Int) while_m(Int n) {
+    while (step_ok(n - 1, n)) {
+        for (Int j in 0..n) { if (churn(j)) { println("never"); } }
+        return mkm(n, 20, 300);
+    }
+    return mkm(0, 0, 0);
+}
+
+List(Int) closure(Int) while_l(Int n) {
+    while (step_ok(n - 1, n)) {
+        for (Int j in 0..n) { if (churn(j)) { println("never"); } }
+        return mkl(0 - 2);
+    }
+    return mkl(0);
+}
+
+Map(Str, Int) closure(Int) spawn_m(Int k) {
+    Result(Map(Str, Int) closure(Int), RegionError) r = spawn () { return mkm(k, 20, 300); };
+    return r else { mkm(0, 0, 0) };
+}
+
+List(Int) closure(Int) spawn_l(Int k) {
+    Result(List(Int) closure(Int), RegionError) r = spawn () { return mkl(0 - k); };
+    return r else { mkl(0) };
+}
+
+Hold mkhold(Int a, Int b, Int c) {
+    Map(Str, Int) m0 = {};
+    return Hold {.f = lambda(k) { m0.insert("sum", a + b + c + k) }, .m = m0.insert("x", 1), .g = mkl(0 - 2)};
+}
+
+Int scrub() {
+    for (Int i in 0..rt 20000) {
+        Str z = f"zz{i}" + str_repeat("Q", 90);
+        if (str_len(z) == 0) { return i; }
+    }
+    return 0;
+}
+
+Int main() {
+    List(Int) xs = [1, 2, 3];
+    List(Int) ys = xs.with(0, rt 9);
+    Map(Str, Int) closure(Int) g = mkm(rt 1, rt 20, rt 300);
+    Map(Str, Int) r = g(4000);
+    Map(Str, Int) closure(Int) g1 = mkm1(f"key{rt 5}");
+    Map(Str, Int) r1 = g1(rt 6);
+    List(Int) closure(Int) l = mkl(0 - rt 2);
+    println(f"return: {r.get("sum") else { 0 }} {r1.get("key5") else { 0 }} {l(5)[0]} {ys[0]}");
+    println(f"argument: {msum(g, 4000)} " + lshow(l, 1));
+    List(Map(Str, Int) closure(Int)) ms = [mkm(1, 2, 3), g];
+    List(List(Int) closure(Int)) ls = [mkl(0 - 2), l];
+    println(f"list: {msum(ms[0], 4)} {msum(ms[1], 4000)} " + lshow(ls[0], 3) + " " + lshow(ls[1], 4));
+    Hold h = mkhold(rt 1, rt 20, rt 300);
+    Map(Str, Int) hr = h.f(4000);
+    println(f"field: {hr.get("sum") else { 0 }} {msum(h.f, 4000)} " + lshow(h.g, 5) + f" {h.m.len()}");
+    Map(Str, Int) closure(Int) cm = carry_m(0, rt 3000, mkm(0, 0, 0));
+    List(Int) closure(Int) cl = carry_l(0, rt 3000, mkl(0));
+    Map(Str, Int) closure(Int) fm = for_m(rt 300);
+    List(Int) closure(Int) fl = for_l(rt 300);
+    Map(Str, Int) closure(Int) wm = while_m(rt 300);
+    List(Int) closure(Int) wl = while_l(rt 300);
+    Map(Str, Int) closure(Int) pm = spawn_m(rt 11);
+    List(Int) closure(Int) pl = spawn_l(rt 2);
+    _ = scrub();
+    Result(Int, RegionError) z = spawn () { return scrub(); };
+    Int zz = z else { 0 };
+    println(f"tail: {msum(cm, 4000)} " + lshow(cl, 6));
+    println(f"for: {msum(fm, 4000)} " + lshow(fl, 7));
+    println(f"while: {msum(wm, 4000)} " + lshow(wl, 8));
+    println(f"spawn: {msum(pm, 4000)} " + lshow(pl, 9) + f" {zz >= 0}");
+    return 0;
+}

@@ -1,0 +1,10 @@
+// Regression test for SW-MOVERS-TEXT-1 (fixed): the red-team proof of concept, kept as
+// found. Comments below describe the defect as it was.
+// A `Str(16) closure(Int)` passed as an argument and kept in a list.
+Str(16) closure(Int) mk(Str s) { return lambda(v) { (Str(16)) s }; }
+Int use(Str(16) closure(Int) g) { Str(16) r = g(0); return str_len((Str) r); }
+Int main() {
+    List(Str(16) closure(Int)) fs = [mk("hello"), mk("world!")];
+    println(f"{use(fs[1])}");
+    return 0;
+}
