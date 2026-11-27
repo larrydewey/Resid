@@ -49,13 +49,27 @@ pub Transcript tr_pedersen(Transcript t, Pedersen p) {
 pub type ZkDraw = { List(UInt(64)) value; Int next; };
 
 /// Draws a uniform element of [0, `n`) from `rnd` starting at `pos`.
-/// Takes successive chunks of ceil(bits/8) bytes, the first below `n`; None when `rnd` runs out.
+/// Takes successive chunks of ceil(bits/8) bytes, keeps the low bit_len(`n`)
+/// bits of each and returns the first below `n`; None when `rnd` runs out
+/// (or `n` is 0). A masked chunk is uniform on [0, 2^bits) and n >= 2^(bits-1),
+/// so each chunk is accepted with probability at least 1/2, and the value
+/// is uniform on [0, `n`). Before 2026-11-27 the excess top bits of the
+/// chunk were kept: for a 2047-bit n a chunk was accepted with probability
+/// below 1/2, as low as 1/4. Only provers' own randomness comes from here;
+/// no verifier re-derives these values (challenges use tr_sample_modn).
 pub Option(ZkDraw) zk_draw_below(List(Int) rnd, Int pos, List(UInt(64)) n) {
-    Int nb = (bn_bit_len(n) + 7) / 8;
-    if (pos + nb > rnd.len()) { return None; }
-    List(UInt(64)) x = bn_from_be(bn_slice_int(rnd, pos, nb));
+    Int bits = bn_bit_len(n);
+    Int nb = (bits + 7) / 8;
+    if (nb == 0 || pos + nb > rnd.len()) { return None; }
+    List(UInt(64)) x = zk_low_bits(bn_from_be(bn_slice_int(rnd, pos, nb)), bits);
     if (bn_cmp(x, n) < 0) { return Some(ZkDraw {.value = x, .next = pos + nb}); }
     return zk_draw_below(rnd, pos + nb, n);
+}
+
+/// The low `bits` bits of `x`.
+pub List(UInt(64)) zk_low_bits(List(UInt(64)) x, Int bits) {
+    if (bn_bit_len(x) <= bits) { return x; }
+    return bn_and(x, bn_sub(bn_shl([1], bits), [1]));
 }
 
 // ─── Pedersen parameters proof (prm) ────────────────────────────
