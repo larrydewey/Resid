@@ -218,5 +218,18 @@ else
     echo "note: secure boot cross-check skipped (python3 cryptography not installed)"
 fi
 
+# Merkle transparency logs (lib/merkle.resid): RFC 9162 roots, inclusion
+# and consistency proofs (valid and tampered) for every tree size up to 70,
+# signed checkpoints and witness cosignatures, made and checked byte for
+# byte against golang.org/x/mod's tlog and note (merkle_ref/gen.sh).
+(cd "$ROOT" && "$COMPILER" tests/crypto/merkleprobe.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/merkleprobe") > "$W/build.log" 2>&1 || {
+    echo "FAIL build merkleprobe"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
+out="$("$W/merkleprobe" "$ROOT/tests/crypto/vectors_merkle/merkle.txt" 2>&1)"
+summary="$(printf '%s\n' "$out" | sed -n 's/^SUMMARY //p')"
+p="$(printf '%s' "$summary" | sed -n 's/.*pass=\([0-9]*\).*/\1/p')"
+x="$(printf '%s' "$summary" | sed -n 's/.*fail=\([0-9]*\).*/\1/p')"
+if [ -z "$summary" ]; then fail=$((fail + 1)); echo "FAIL merkleprobe did not finish"; printf '%s\n' "$out" | tail -3;
+else pass=$((pass + p)); fail=$((fail + x)); [ "$x" = 0 ] || printf '%s\n' "$out" | grep '^FAIL' | head -5 | cut -c1-200; fi
+
 echo "crypto: $pass passed, $fail failed ($files vector files)"
 [ "$fail" -eq 0 ]

@@ -34,9 +34,11 @@ default and the hash a `HashAlg` parameter:
   proof, root_m, root_n)` (§2.1.4.2).
 - **Checkpoints:** the C2SP signed-note checkpoint body (`origin\nsize\n
   base64(root)\n`) with Ed25519 note signatures (key ID =
-  SHA-256(name ‖ 0x0A ‖ 0x01 ‖ pubkey)[0..4]). `ckpt_sign`, `ckpt_open`
-  checks a note against a list of trusted verifier keys and refuses
-  unknown or duplicate signers, and `ckpt_cosigned(note, witnesses, k)`
+  SHA-256(name ‖ 0x0A ‖ 0x01 ‖ pubkey)[0..4]). `note_sign`, and
+  `ckpt_open`, which checks a note against the log's key. As signed-note
+  requires, lines from unknown keys are ignored, while a known key that
+  fails or signs twice rejects the note. `ckpt_cosigned(note, log,
+  witnesses, k, now)`
   requires k distinct witness signatures. Witness cosignatures follow
   C2SP tlog-cosignature (cosignature/v1, timestamped).
 - Everything is public data: no `Secret` types and no ct cases. The parsers
@@ -44,10 +46,9 @@ default and the hash a `HashAlg` parameter:
   is checked against `size` before indexing.
 
 **Tests:** RFC 9162 has no vectors, so they come from an independent
-implementation. `tests/crypto/gen_merkle.py` builds trees with Python
-hashlib (sizes 1..70 and powers of two around them, every index and every
-m ≤ n), plus Go `golang.org/x/mod/sumdb/tlog` vectors where Go is
-installed. Negative cases: a flipped bit in each proof element, wrong
+implementation: `tests/crypto/merkle_ref/` (Go, golang.org/x/mod's
+`sumdb/tlog` and `sumdb/note`) writes `vectors_merkle/merkle.txt`, covering
+every tree size up to 70 and indices and sizes across each tree. Negative cases: a flipped bit in each proof element, wrong
 index, wrong size, a proof one element short or long, m = 0, m > n, and
 checkpoints with a bad signature, an unknown key, a duplicate signer,
 trailing text or a non-canonical size.

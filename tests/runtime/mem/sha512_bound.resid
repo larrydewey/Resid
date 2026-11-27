@@ -1,0 +1,22 @@
+// SHA-512 over 1 MB, then an Ed25519 signature over the same message and
+// its verification (lib/crypto.resid's sha512_bytes under both): the
+// runtime budget (run.sh sets RESID_MEM_LIMIT) holds the message as a
+// List(Int) and little else. PROGRESS.md once recorded sha512_blocks
+// allocating about 1 MB per 128-byte block, which over 8192 blocks is
+// gigabytes; this keeps that from returning unnoticed.
+
+import "../../../lib/crypto.resid";
+import "../../../lib/ed25519.resid";
+
+List(Int) mk(Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return mk(i + 1, n, acc.push((i * 7) % 256));
+}
+
+Int main() {
+    List(Int) m = mk(0, rt 1048576, ListBuf());
+    List(Int) seed = mk(0, rt 32, ListBuf());
+    Bool ok = verify_sig_bytes(m, sign_msg_bytes(seed, m), pub_key(seed));
+    println(hex_encode(sha512_bytes(m)[0..16]) + f" {ok}");
+    return 0;
+}
