@@ -513,6 +513,18 @@ if (cd "$ROOT" && RESID_UNMAP_FREED=1 timeout 600 "$COMPILER" runtime/rt/rt.resi
 else
     fail=$((fail + 1)); echo "FAIL runtime build with freed blocks unmapped: $(tail -1 "$W/rt_unmapped.log" 2>/dev/null)"
 fi
+# A large object whose page charge the budget refuses (region.resid,
+# lg_new) is linked into its region first, so the pop frees its page.
+# Under ulimit -v the region range is 1024 pages; 1100 jobs are refused
+# for the budget, all of them. Before, each refusal lost a page: after
+# 986 jobs the rest were refused for "region address space exhausted".
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/lg_refused.resid -o "$W/lg_refused") > "$W/lg_refused.log" 2>&1 \
+    && (ulimit -v 2500000; RESID_MEM_LIMIT=40 RESID_SPAWN_STACK_MB=8 timeout 300 "$W/lg_refused") > "$W/lg_refused.out" 2>&1 \
+    && [ "$(cat "$W/lg_refused.out")" = "budget 1100 other 0 then 20" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL refused large objects keep the region range: $(tail -1 "$W/lg_refused.out" "$W/lg_refused.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # CBOR encoding appends packed bytes (lib/cbor.resid): 2 MB encoded in
 # 54 MB. The encoder that kept a cons cell per output byte took 486 MB.
 if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/cbor_bytes.resid -o "$W/cbor_bytes") > "$W/cbor_bytes.log" 2>&1 \

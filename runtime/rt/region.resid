@@ -358,8 +358,11 @@ pub Bool lg_is(Int p) {
 Int lg_new(Int r, Int n) {
     Int k = order_of(n + lg_hdr());
     Int pg = pages_take(k, ld64(r));
-    _ = if (k == 0) { page_charge(pg, rg_page()) } else { 0 };
+    // Linked before it is charged, as region_grow's pages are: a charge the
+    // budget refuses unwinds to the region's owner, whose pop then frees
+    // the page with the region (unlinked, it was lost for good).
     _ = lg_link(r, pg, k) + st64(r + 32, ld64(r + 32) + (1 << k));
+    _ = if (k == 0) { page_charge(pg, rg_page()) } else { 0 };
     Int d = ag_scope_depth();
     _ = if (d > 0 && r == rec_at(d - 1)) { due_sync(d) } else { 0 };
     return pg + lg_hdr();
