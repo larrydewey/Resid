@@ -230,9 +230,10 @@ Str ckpt_ext_text(List(Str) e, Int i, Str acc) {
 /// The checkpoint in a note text, or None unless it is canonical: a
 /// non-empty origin, a decimal size without sign or leading zeros (below
 /// 2^63), a canonical base64 SHA-256 root, extension lines that are
-/// non-empty, and a final newline with no control characters.
+/// non-empty, and a final newline with no control characters. The text
+/// must be exact UTF-8 (sn_exact).
 pub Option(Checkpoint) ckpt_parse(Str text) {
-    if (!sn_text_ok(text)) { return None; }
+    if (!sn_exact(text) || !sn_text_ok(text)) { return None; }
     List(Str) lines = str_split(text, "\n");
     // A text ending in "\n" splits with a final empty piece.
     Int n = lines.len() - 1;
@@ -292,9 +293,19 @@ pub Str note_sign(Str text, Str name, List(Int) seed) {
 
 /// The note in `s`, split at its last blank line, or None unless the text
 /// is well formed (ends in a newline, no control characters but newline)
-/// and every signature line parses (em dash, a name without spaces or
-/// '+', canonical base64 of at least five bytes). At most 64 signatures.
+/// and every signature line parses (em dash, a name without white space
+/// or '+', canonical base64 of at least five bytes). At most 64
+/// signatures.
+///
+/// `s` must be exact UTF-8 (sn_exact), or it is refused: a Str read from
+/// a file or the network keeps the bytes it was given, and one holding an
+/// overlong form would be split on its stored bytes but signed over its
+/// code points (an overlong newline joined two lines into one, an
+/// overlong digit read as that digit). A caller holding the received
+/// bytes should pass them to note_parse_bytes, ckpt_open_bytes or
+/// ckpt_cosigned_bytes, which check them before any text is made.
 pub Option(Note) note_parse(Str s) {
+    if (!sn_exact(s)) { return None; }
     List(Str) lines = str_split(s, "\n");
     Int n = lines.len() - 1;
     if (n < 2 || lines[n] != "") { return None; }
@@ -308,6 +319,55 @@ pub Option(Note) note_parse(Str s) {
         Some(v) => Some(Note {.text = text, .sigs = v}),
         None => None,
     };
+}
+
+/// note_parse on the note's bytes as received: None unless they are
+/// strict UTF-8 (RFC 3629: no overlong form, no surrogate, nothing above
+/// U+10FFFF, no truncated sequence), then as note_parse.
+pub Option(Note) note_parse_bytes(List(Int) b) {
+    if (!sn_utf8_ok(b, 0)) { return None; }
+    return note_parse(sn_utf8_text(b, 0, StrBuf()));
+}
+
+/// Whether the stored bytes of `s` are exactly the strict UTF-8 encoding
+/// of its code points. The runtime hashes a Str's stored bytes
+/// (str_sha256) and bytes_of encodes its code points, so the two digests
+/// agree only when nothing was stored in another form.
+pub Bool sn_exact(Str s) {
+    List(Int) b = bytes_of(s);
+    return sn_utf8_ok(b, 0) && str_sha256(s) == hex_encode(sha256_bytes(b));
+}
+
+// Strict UTF-8 from byte i on: shortest forms only, no surrogates,
+// nothing above U+10FFFF, every sequence complete.
+Bool sn_utf8_ok(List(Int) b, Int i) {
+    Int n = b.len();
+    if (i >= n) { return true; }
+    Int c = b[i];
+    if (c < 0 || c > 244) { return false; }
+    if (c < 128) { return sn_utf8_ok(b, i + 1); }
+    if (c < 194) { return false; }
+    if (c < 224) { return sn_cont(b, i + 1, 128, 191) && sn_utf8_ok(b, i + 2); }
+    if (c < 240) {
+        Int lo = if (c == 224) { 160 } else { 128 };
+        Int hi = if (c == 237) { 159 } else { 191 };
+        return sn_cont(b, i + 1, lo, hi) && sn_cont(b, i + 2, 128, 191) && sn_utf8_ok(b, i + 3);
+    }
+    Int lo4 = if (c == 240) { 144 } else { 128 };
+    Int hi4 = if (c == 244) { 143 } else { 191 };
+    return sn_cont(b, i + 1, lo4, hi4) && sn_cont(b, i + 2, 128, 191) && sn_cont(b, i + 3, 128, 191) && sn_utf8_ok(b, i + 4);
+}
+
+Bool sn_cont(List(Int) b, Int i, Int lo, Int hi) { return i < b.len() && b[i] >= lo && b[i] <= hi; }
+
+// The text of bytes sn_utf8_ok accepted.
+Str sn_utf8_text(List(Int) b, Int i, StrBuf acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    Int c = b[i];
+    if (c < 128) { return sn_utf8_text(b, i + 1, acc.push_char(c)); }
+    if (c < 224) { return sn_utf8_text(b, i + 2, acc.push_char(((c & 31) << 6) | (b[i + 1] & 63))); }
+    if (c < 240) { return sn_utf8_text(b, i + 3, acc.push_char(((c & 15) << 12) | ((b[i + 1] & 63) << 6) | (b[i + 2] & 63))); }
+    return sn_utf8_text(b, i + 4, acc.push_char(((c & 7) << 18) | ((b[i + 1] & 63) << 12) | ((b[i + 2] & 63) << 6) | (b[i + 3] & 63)));
 }
 
 // The index of the last empty line before `i` (inclusive), or -1.
@@ -431,6 +491,14 @@ pub Option(Checkpoint) ckpt_open(Str note, NoteKey log) {
     };
 }
 
+/// ckpt_open on the note's bytes as received (note_parse_bytes).
+pub Option(Checkpoint) ckpt_open_bytes(List(Int) note, NoteKey log) {
+    return match note_parse_bytes(note) {
+        Some(n) => ckpt_open_n(n, log),
+        None => None,
+    };
+}
+
 Option(Checkpoint) ckpt_open_n(Note n, NoteKey log) {
     List(NoteKey) keys = [log];
     Bool signed = match note_verified(n, keys) { Some(names) => names.len() == 1, None => false, };
@@ -482,6 +550,14 @@ Int cs_read_be64(List(Int) b, Int i, Int acc) {
 /// witness that fails, or a witness that cosigns twice, rejects the note.
 pub Option(Checkpoint) ckpt_cosigned(Str note, NoteKey log, List(NoteKey) witnesses, Int threshold, Int now) {
     return match note_parse(note) {
+        Some(n) => ckpt_cosigned_n(n, log, witnesses, threshold, now),
+        None => None,
+    };
+}
+
+/// ckpt_cosigned on the note's bytes as received (note_parse_bytes).
+pub Option(Checkpoint) ckpt_cosigned_bytes(List(Int) note, NoteKey log, List(NoteKey) witnesses, Int threshold, Int now) {
+    return match note_parse_bytes(note) {
         Some(n) => ckpt_cosigned_n(n, log, witnesses, threshold, now),
         None => None,
     };

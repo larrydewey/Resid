@@ -1,0 +1,68 @@
+// merkle_strprobe.resid — red-team regression dc-merkle-1 (issue #9):
+// notes read from files, as text and as bytes, the way a client receives
+// them. A test block has no filesystem, and only a Str that came from
+// outside can hold bytes that are not the UTF-8 of its code points.
+//
+//   merkle_strprobe <seeds-dir>
+//
+// seeds/note.bin is a signed, cosigned checkpoint (fuzz.resid's fixed
+// keys); note-overlong-newline.bin and note-overlong-digit.bin are the
+// same note with one character stored as an overlong form
+// (seeds/gen_datastore.sh). Before the fix both opened: the signature was
+// checked over the re-encoded text, while the lines were split on the
+// stored bytes, so the first gave one extension line holding a newline.
+//
+// Prints "FAIL <what>" per disagreement, then "SUMMARY pass=<n> fail=<n>
+// skip=0"; exit status 1 when anything failed.
+
+import "../../lib/merkle.resid";
+
+NoteKey sp_log() { return NoteKey {.name = "fuzz.example/log", .kind = 1, .pubk = pub_key(sha256_bytes(bytes_of("resid fuzz log")))}; }
+NoteKey sp_wit(Int i) { return NoteKey {.name = f"witness{i}.example", .kind = 4, .pubk = pub_key(sha256_bytes(bytes_of(f"resid fuzz witness{i}")))}; }
+
+Int ck(Bool ok, Str what) {
+    if (!ok) { println("FAIL " + what); }
+    return if (ok) { 1 } else { 0 };
+}
+
+Bool some_n(Option(Note) v) { return match v { Some(x) => true, None => false }; }
+Bool some_c(Option(Checkpoint) v) { return match v { Some(x) => true, None => false }; }
+Int ext_n(Option(Checkpoint) v) { return match v { Some(c) => c.ext.len(), None => 0 - 1 }; }
+
+// A note that must open (want) or be refused, through every entry point.
+Int note_case(Str name, Str text, List(Int) raw, Bool want) {
+    List(NoteKey) wit = [sp_wit(1), sp_wit(2)];
+    Int now = 1800000000;
+    Int a = ck(some_n(note_parse(text)) == want, name + ": note_parse") + ck(some_n(note_parse_bytes(raw)) == want, name + ": note_parse_bytes");
+    Int b = ck(some_c(ckpt_open(text, sp_log())) == want, name + ": ckpt_open") + ck(some_c(ckpt_open_bytes(raw, sp_log())) == want, name + ": ckpt_open_bytes");
+    Int c = ck(some_c(ckpt_cosigned(text, sp_log(), wit, 2, now)) == want, name + ": ckpt_cosigned") + ck(some_c(ckpt_cosigned_bytes(raw, sp_log(), wit, 2, now)) == want, name + ": ckpt_cosigned_bytes");
+    Int d = ck(sn_exact(text) == want, name + ": sn_exact");
+    // What opens has the two extension lines the log signed.
+    Int e = if (want) { ck(ext_n(ckpt_open(text, sp_log())) == 2 && ext_n(ckpt_open_bytes(raw, sp_log())) == 2, name + ": extension lines") } else { 1 };
+    return a + b + c + d + e;
+}
+
+// Byte strings that are not strict UTF-8, each refused as a note.
+Int bytes_case(Str name, List(Int) good, List(Int) bad) {
+    List(Int) tail = [10];
+    List(Int) b = good[0..17].concat(bad).concat(good[17..good.len()]);
+    return ck(some_n(note_parse_bytes(good)) && !some_n(note_parse_bytes(b)) && !some_n(note_parse_bytes(bad.concat(tail))), name);
+}
+
+@requires(args, filesystem(readonly))
+Int main() {
+    Str d = args.get(1);
+    List(Int) good = filesystem.read_bytes(d + "/note.bin");
+    Int a = note_case("signed note", filesystem.read_all(d + "/note.bin"), good, true);
+    Int b = note_case("overlong newline", filesystem.read_all(d + "/note-overlong-newline.bin"), filesystem.read_bytes(d + "/note-overlong-newline.bin"), false);
+    Int c = note_case("overlong digit", filesystem.read_all(d + "/note-overlong-digit.bin"), filesystem.read_bytes(d + "/note-overlong-digit.bin"), false);
+    // Overlong '/', overlong NUL, a surrogate, above U+10FFFF, a lone
+    // continuation, a truncated sequence, bytes that are never UTF-8.
+    Int e = bytes_case("overlong slash", good, [192, 175]) + bytes_case("overlong three-byte", good, [224, 128, 175]) + bytes_case("surrogate", good, [237, 160, 128])
+        + bytes_case("above U+10FFFF", good, [244, 144, 128, 128]) + bytes_case("lone continuation", good, [128]) + bytes_case("truncated", good, [226, 128])
+        + bytes_case("0xFF", good, [255]) + bytes_case("not a byte", good, [256]);
+    Int pass = a + b + c + e;
+    Int total = 8 * 3 + 8;
+    println(f"SUMMARY pass={pass} fail={total - pass} skip=0");
+    return if (pass == total) { 0 } else { 1 };
+}

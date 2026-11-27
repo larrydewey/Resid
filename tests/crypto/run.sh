@@ -178,6 +178,19 @@ else
     fail=$((fail + 1)); echo "FAIL bcrypt_pbkdf: $(grep -m3 -E 'error|expected|actual' "$W/bcrypt.log" | tr '\n' ' ')"
 fi
 
+# dc-merkle-1 (issue #9): notes read from files as text and as bytes; the
+# two holding an overlong UTF-8 form must be refused.
+(cd "$ROOT" && "$COMPILER" tests/crypto/merkle_strprobe.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/strprobe") > "$W/build.log" 2>&1 || {
+    echo "FAIL build merkle_strprobe"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
+out="$("$W/strprobe" "$SD" 2>&1)"
+summary="$(printf '%s\n' "$out" | sed -n 's/^SUMMARY //p')"
+if [ -z "$summary" ]; then fail=$((fail + 1)); echo "FAIL merkle_strprobe did not finish"; printf '%s\n' "$out" | tail -3;
+else
+    pass=$((pass + $(printf '%s' "$summary" | sed -n 's/.*pass=\([0-9]*\).*/\1/p')))
+    fail=$((fail + $(printf '%s' "$summary" | sed -n 's/.*fail=\([0-9]*\).*/\1/p')))
+    printf '%s\n' "$out" | grep '^FAIL' | head -5
+fi
+
 # Red-team regressions for the datastore primitives (issue #9): one file
 # a module, each test failing before its fix.
 for t in r255_redteam; do

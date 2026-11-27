@@ -370,7 +370,13 @@ Int run_note(List(Int) m) {
         + match ckpt_cosigned(s, log, [fz_wit(1)], 2, fz_now()) { Some(x) => fz_must(false, "ckpt_cosigned counted one witness twice"), None => 0 }
         + match ckpt_open(s, fz_wit(1)) { Some(x) => fz_must(false, "ckpt_open accepted a witness as the log"), None => 0 };
     Int e = match pn { Some(n) => fz_twice(n, s) + fz_twice_again(n, s), None => 0 };
-    return ((a + b + c + d + e) & 4095) + match two { Some(x) => 4096, None => 0 };
+    // The bytes as received: what parses writes back to those very bytes
+    // (so they were strict UTF-8), and what opens is the signed checkpoint.
+    Int g = match note_parse_bytes(m) {
+        Some(n) => fz_must(fz_same(bytes_of(n.text + "\n" + fz_sig_text(n.sigs, 0, "")), m), "note_parse_bytes accepted bytes that do not write back to themselves"),
+        None => 0,
+    } + fz_is_signed(ckpt_open_bytes(m, log), "ckpt_open_bytes") + fz_is_signed(ckpt_cosigned_bytes(m, log, wit, 2, fz_now()), "ckpt_cosigned_bytes");
+    return ((a + b + c + d + e + g) & 4095) + match two { Some(x) => 4096, None => 0 };
 }
 
 // How many signature lines of the note are from this key (name and ID).
