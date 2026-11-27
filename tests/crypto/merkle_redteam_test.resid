@@ -1,0 +1,195 @@
+// Red-team regressions for lib/merkle.resid (issue #9). Each test failed
+// before its fix. Comparisons are on Bool only. (dc-merkle-1 needs notes
+// read from files: tests/crypto/merkle_strprobe.resid.)
+
+import "merkle.resid";
+
+// Whether a one-signature note under this key name parses.
+Bool rt_name_parses(Str name) {
+    List(Int) sig = sha256_bytes([1]).concat(sha256_bytes([2]));
+    Str note = "a note\n\n" + note_sig_line(name, 1, sig);
+    return match note_parse(note) { Some(n) => true, None => false };
+}
+
+Bool rt_any_parses(List(Int) cps, Int i) {
+    if (i >= cps.len()) { return false; }
+    if (rt_name_parses("log" + str_from_code(cps[i]) + "name") || rt_name_parses(str_from_code(cps[i]) + "log") || rt_name_parses("log" + str_from_code(cps[i]))) { return true; }
+    return rt_any_parses(cps, i + 1);
+}
+
+// dc-merkle-2: only ASCII white space was refused in a key name; the
+// signed-note format (and Go's note package, unicode.IsSpace) refuses
+// every Unicode space.
+test "dc-merkle-2: a key name holds no Unicode white space" {
+    expect(rt_name_parses("log.example/name")).toBeTrue();
+    // U+0085, U+00A0, U+1680, U+2000..U+200A, U+2028, U+2029, U+202F, U+205F, U+3000.
+    List(Int) spaces = [133, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288];
+    expect(rt_any_parses(spaces, 0)).toBeFalse();
+    expect(rt_name_parses("log" + str_from_code(160) + "name")).toBeFalse();
+    expect(rt_name_parses("log" + str_from_code(8232) + "name")).toBeFalse();
+    expect(rt_name_parses("log" + str_from_code(12288) + "name")).toBeFalse();
+}
+
+test "dc-merkle-2: a key name holds no ASCII control or '+', and may be non-ASCII" {
+    List(Int) ctl = [43, 9, 11, 12, 13, 31];
+    expect(rt_any_parses(ctl, 0)).toBeFalse();
+    expect(rt_name_parses("")).toBeFalse();
+    // Letters outside ASCII, and characters next to the refused ranges.
+    expect(rt_name_parses("журнал.example")).toBeTrue();
+    expect(rt_name_parses("log" + str_from_code(161) + "name")).toBeTrue();
+    expect(rt_name_parses("log" + str_from_code(8203) + "name")).toBeTrue();
+    expect(rt_name_parses("log" + str_from_code(12289) + "name")).toBeTrue();
+}
+
+List(Int) rt_log_seed() { return sha256_bytes(bytes_of("merkle redteam log")); }
+
+NoteKey rt_log(Str name) { return NoteKey {.name = name, .kind = 1, .pubk = pub_key(rt_log_seed())}; }
+
+// A checkpoint signed by the log `name`, then a line from a key nobody
+// lists, named `other`.
+Bool rt_opens_with(Str name, Str other) {
+    List(Str) none = [];
+    Checkpoint c = Checkpoint {.origin = name, .size = 7, .root = sha256_bytes([7]), .ext = none};
+    Str note = note_sign(ckpt_text(c), name, rt_log_seed()) + note_sig_line(other, 9, sha256_bytes([3]).concat(sha256_bytes([4])));
+    return match ckpt_open(note, rt_log(name)) { Some(x) => x.size == 7, None => false };
+}
+
+// dc2-merkle-2: DEL and the C1 controls are neither white space nor '+',
+// so the format allows them in a name (Go's note package too); refusing
+// them let anyone's stray signature line make a good note unreadable.
+// Of U+007F..U+00A0 only NEL (U+0085) and NBSP (U+00A0) are white space.
+test "dc2-merkle-2: a line from an unlisted key named with DEL or a C1 control does not spoil a note" {
+    expect(rt_opens_with("log.example", "other.example")).toBeTrue();
+    expect(rt_opens_with("log.example", "other" + str_from_code(127) + "log")).toBeTrue();
+    expect(rt_opens_with("log.example", "other" + str_from_code(128) + "log")).toBeTrue();
+    expect(rt_opens_with("log.example", "other" + str_from_code(159) + "log")).toBeTrue();
+    // The log's own name may hold them as well.
+    expect(rt_opens_with("log" + str_from_code(127) + "x", "other.example")).toBeTrue();
+    // White space stays refused, whoever the line is from.
+    expect(rt_opens_with("log.example", "other" + str_from_code(133) + "log")).toBeFalse();
+    expect(rt_opens_with("log.example", "other" + str_from_code(160) + "log")).toBeFalse();
+    expect(rt_opens_with("log.example", "other" + str_from_code(8232) + "log")).toBeFalse();
+}
+
+// dc3-merkle-1: cosignature/v1 signs the checkpoint's extension lines too
+// (c2sp.org/tlog-cosignature: the header lines, origin, size, root hash,
+// then "zero or more lines, each containing one extension line"). The
+// lines below are pyca/cryptography's (merkle_ref/gen_cosig_ext.py).
+Str rt_cosig_ext() { return "— witness.example +98TggAAAABlU/EAuUItODLpixjNnPJk1hI0LAkgucREL/snMK6zhvvg2q5S9Qw/Kqlp+qZ08d6UinNwGp3NECaxnMB2c4VrpKhPAw==\n"; }
+Str rt_cosig_three() { return "— witness.example +98TggAAAABlU/EAb+RTxBBMGLMQVe0r3nIr+mOVbIUllzFnKBbko20KRAV99XyIhKiXqkoxWOMttRdT2YWcZIKODYxH65O9cjvGAg==\n"; }
+
+List(Int) rt_wit_seed() { return sha256_bytes(bytes_of("merkle redteam witness")); }
+
+Checkpoint rt_ext_ckpt() {
+    List(Str) ext = ["extension one", "x=2"];
+    return Checkpoint {.origin = "log.example", .size = 7, .root = sha256_bytes([7]), .ext = ext};
+}
+
+Bool rt_cosigned(Str cosig) {
+    NoteKey wit = NoteKey {.name = "witness.example", .kind = 4, .pubk = pub_key(rt_wit_seed())};
+    Str note = note_sign(ckpt_text(rt_ext_ckpt()), "log.example", rt_log_seed()) + cosig;
+    return match ckpt_cosigned(note, rt_log("log.example"), [wit], 1, 1800000000) { Some(c) => c.ext.len() == 2, None => false };
+}
+
+test "dc3-merkle-1: a cosignature covers the checkpoint's extension lines" {
+    expect(cosig_line(rt_ext_ckpt(), 1700000000, "witness.example", rt_wit_seed()) == rt_cosig_ext()).toBeTrue();
+    expect(rt_cosigned(rt_cosig_ext())).toBeTrue();
+    // A cosignature over origin, size and root alone is not one of this
+    // checkpoint.
+    expect(rt_cosigned(rt_cosig_three())).toBeFalse();
+    expect(hex_encode(cosig_message(rt_ext_ckpt(), 5)) == hex_encode(bytes_of("cosignature/v1\ntime 5\n" + ckpt_text(rt_ext_ckpt())))).toBeTrue();
+}
+
+// dc3-merkle-2: several signature lines may carry one key name
+// (c2sp.org/tlog-checkpoint); what may not repeat is a name together with
+// a key ID. Two listed keys sharing a name, both signing, made the note
+// fail.
+List(Int) rt_seed_n(Int i) { return sha256_bytes(bytes_of(f"merkle redteam key {i}")); }
+
+NoteKey rt_key(Str name, Int kind, Int i) { return NoteKey {.name = name, .kind = kind, .pubk = pub_key(rt_seed_n(i))}; }
+
+Checkpoint rt_plain_ckpt() {
+    List(Str) none = [];
+    return Checkpoint {.origin = "log.example", .size = 7, .root = sha256_bytes([7]), .ext = none};
+}
+
+// The log's signature line under key i (same name, another key).
+Str rt_log_line(Int i) {
+    Str text = ckpt_text(rt_plain_ckpt());
+    return note_sig_line("log.example", note_key_id(rt_key("log.example", 1, i)), sign_msg_bytes(rt_seed_n(i), bytes_of(text)));
+}
+
+Int rt_verified(Str note, List(NoteKey) keys) {
+    return match note_parse(note) {
+        Some(n) => match note_verified(n, keys) { Some(names) => names.len(), None => 0 - 1 },
+        None => 0 - 2,
+    };
+}
+
+test "dc3-merkle-2: two keys of one name may both sign; one key may not sign twice" {
+    Str text = ckpt_text(rt_plain_ckpt());
+    List(NoteKey) both = [rt_key("log.example", 1, 1), rt_key("log.example", 1, 2)];
+    Str two = text + "\n" + rt_log_line(1) + rt_log_line(2);
+    // Both verify; they are one name.
+    expect(rt_verified(two, both)).toBe(1);
+    expect(rt_verified(two, [rt_key("log.example", 1, 1)])).toBe(1);
+    Bool opens = match ckpt_open(two, rt_key("log.example", 1, 2)) { Some(c) => true, None => false };
+    expect(opens).toBeTrue();
+    // The same key (name and ID) on two lines is still refused.
+    expect(rt_verified(text + "\n" + rt_log_line(1) + rt_log_line(1), both)).toBe(0 - 1);
+    expect(rt_verified(text + "\n" + rt_log_line(1) + rt_log_line(2) + rt_log_line(1), both)).toBe(0 - 1);
+    // And a listed key whose signature fails still spoils the note.
+    Str forged = note_sig_line("log.example", note_key_id(rt_key("log.example", 1, 2)), sign_msg_bytes(rt_seed_n(3), bytes_of(text)));
+    expect(rt_verified(text + "\n" + rt_log_line(1) + forged, both)).toBe(0 - 1);
+}
+
+Bool rt_cosigned_by(List(Int) signers, List(NoteKey) wit, Int threshold) {
+    Checkpoint c = rt_plain_ckpt();
+    Str note = ckpt_text(c) + "\n" + rt_log_line(1) + rt_cosig_lines(c, signers, 0, "");
+    return match ckpt_cosigned(note, rt_key("log.example", 1, 1), wit, threshold, 1800000000) { Some(x) => true, None => false };
+}
+
+// A cosignature line by key i, named "w<name>.example".
+Str rt_cosig_lines(Checkpoint c, List(Int) signers, Int j, Str acc) {
+    if (j >= signers.len()) { return acc; }
+    Int i = signers[j];
+    return rt_cosig_lines(c, signers, j + 1, acc + cosig_line(c, 1700000000, rt_wit_name(i), rt_seed_n(i)));
+}
+
+// Keys 10 and 11 share the name "wa.example"; key 12 is "wb.example".
+Str rt_wit_name(Int i) { return if (i == 12) { "wb.example" } else { "wa.example" }; }
+
+test "dc3-merkle-2: a threshold counts distinct witness names, not lines" {
+    List(NoteKey) wit = [rt_key("wa.example", 4, 10), rt_key("wa.example", 4, 11), rt_key("wb.example", 4, 12)];
+    // Two keys of one witness: accepted, and worth one.
+    expect(rt_cosigned_by([10, 11], wit, 1)).toBeTrue();
+    expect(rt_cosigned_by([10, 11], wit, 2)).toBeFalse();
+    expect(rt_cosigned_by([10, 11, 12], wit, 2)).toBeTrue();
+    expect(rt_cosigned_by([10, 11, 12], wit, 3)).toBeFalse();
+    expect(rt_cosigned_by([10, 12], wit, 2)).toBeTrue();
+    // One key on two lines is refused.
+    expect(rt_cosigned_by([10, 10, 12], wit, 1)).toBeFalse();
+}
+
+// dc3-merkle-3: an origin is a name as a cosigner's is
+// (c2sp.org/tlog-cosignature): no white space, no '+', at most 255 bytes.
+Bool rt_origin_parses(Str origin) {
+    Str text = origin + "\n7\n" + base64_encode(sha256_bytes([7])) + "\n";
+    return match ckpt_parse(text) { Some(c) => c.origin == origin && c.size == 7, None => false };
+}
+
+test "dc3-merkle-3: ckpt_parse refuses an origin with white space or '+', or over 255 bytes" {
+    expect(rt_origin_parses("log.example/a")).toBeTrue();
+    expect(rt_origin_parses("журнал.example")).toBeTrue();
+    expect(rt_origin_parses("log example")).toBeFalse();
+    expect(rt_origin_parses(" log.example")).toBeFalse();
+    expect(rt_origin_parses("log.example ")).toBeFalse();
+    expect(rt_origin_parses("log+example")).toBeFalse();
+    expect(rt_origin_parses("log" + str_from_code(160) + "example")).toBeFalse();
+    expect(rt_origin_parses("log" + str_from_code(8232) + "example")).toBeFalse();
+    expect(rt_origin_parses(str_repeat("a", 255))).toBeTrue();
+    expect(rt_origin_parses(str_repeat("a", 256))).toBeFalse();
+    // 255 is a count of bytes: 128 two-byte letters are 256.
+    expect(rt_origin_parses(str_repeat("ж", 127) + "a")).toBeTrue();
+    expect(rt_origin_parses(str_repeat("ж", 128))).toBeFalse();
+}

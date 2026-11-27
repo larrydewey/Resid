@@ -372,6 +372,16 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/large_carry.resid -o "$W/large_c
 else
     fail=$((fail + 1)); echo "FAIL large objects carried through a loop: $(tail -1 "$W/large_carry.out" "$W/large_carry.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# SHA-512 (lib/crypto.resid's sha512_bytes) and Ed25519 over 1 MB stay
+# within 64 MB. Measured 2026-11-27: passes at 48 MB, aborts at 32; the
+# message alone is 8 MB as a List(Int).
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/sha512_bound.resid -o "$W/sha512_bound") > "$W/sha512_bound.log" 2>&1 \
+    && RESID_MEM_LIMIT=64 timeout 120 "$W/sha512_bound" > "$W/sha512_bound.out" 2>&1 \
+    && [ "$(cat "$W/sha512_bound.out")" = "6572ea278d86161f26300749198491b7 true" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL SHA-512 memory bound: $(tail -1 "$W/sha512_bound.out" "$W/sha512_bound.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # Loop regions for lists of sums, of 64-bit integers and of lists, and for
 # a loop returning a Result (lower.resid, lr_move and lr_region_ok): eight
 # loops of two million steps whose carried state holds them each keep a few

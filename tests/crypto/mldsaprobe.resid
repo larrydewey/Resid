@@ -1,0 +1,93 @@
+// mldsaprobe.resid — runs tests/crypto/vectors_mldsa/mldsa.txt
+// (gen_mldsa.py: NIST ACVP ML-DSA keyGen, sigGen and sigVer, and OpenSSL
+// signatures) through lib/mldsa.resid at all three parameter sets: key
+// generation from a seed, deterministic and hedged signing through the
+// external (pure, with a context), internal and external-mu interfaces,
+// byte for byte, and verification of valid and invalid signatures.
+//
+//   mldsaprobe <mldsa.txt>
+//
+// Prints "FAIL <line>" for each disagreement, then
+// "SUMMARY pass=<n> fail=<n> skip=0"; exit status 1 when anything failed.
+
+import "../../lib/mldsa.resid";
+import "../../lib/crypto.resid";
+
+Int nib(Int c) {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    return 0;
+}
+
+ListBuf(Int) unhex_acc(Str s, Int i, Int n, ListBuf(Int) acc) {
+    if (i + 1 >= n) { return acc; }
+    return unhex_acc(s, i + 2, n, acc.push(nib(str_char_at(s, i)) * 16 + nib(str_char_at(s, i + 1))));
+}
+
+List(Int) unhex(Str s) {
+    if (s == "-") { List(Int) none = []; return none; }
+    return unhex_acc(s, 0, str_len(s), ListBuf()).finish();
+}
+
+MldsaParams params(Str name) {
+    return match mldsa_named(name) { Some(p) => p, None => mldsa44(), };
+}
+
+@requires(declassify)
+Bool check(List(Str) f) {
+    MldsaParams p = params(f[1]);
+    if (f[0] == "K") {
+        MldsaKeys k = mldsa_keygen_internal(p, secret_bytes(unhex(f[2])));
+        return hex_encode(k.pk) == f[3] && hex_encode(opened(k.sk)) == f[4];
+    }
+    if (f[0] == "G") {
+        List(Secret(UInt(8))) sk = secret_bytes(unhex(f[6]));
+        List(Secret(UInt(8))) rnd = secret_bytes(unhex(f[5]));
+        List(Int) msg = unhex(f[3]);
+        List(Int) sig = if (f[2] == "external") { mldsa_sign_internal(p, sk, prefixed(msg, unhex(f[4])), rnd) }
+            else if (f[2] == "internal") { mldsa_sign_internal(p, sk, msg, rnd) }
+            else { mldsa_sign_mu(p, sk, msg, rnd) };
+        return hex_encode(sig) == f[7];
+    }
+    if (f[0] == "V") {
+        List(Int) pk = unhex(f[3]);
+        List(Int) msg = unhex(f[4]);
+        List(Int) sig = unhex(f[6]);
+        Bool got = if (f[2] == "external") { mldsa_verify(p, pk, msg, unhex(f[5]), sig) }
+            else if (f[2] == "internal") { mldsa_verify_internal(p, pk, msg, sig) }
+            else { mldsa_verify_mu(p, pk, msg, sig) };
+        return got == (f[7] == "1");
+    }
+    return false;
+}
+
+List(Int) prefixed(List(Int) m, List(Int) ctx) {
+    List(Int) head = [0, ctx.len()];
+    return head.concat(ctx).concat(m);
+}
+
+@requires(declassify)
+List(Int) opened(List(Secret(UInt(8))) b) { return widen(declassify(secret_join(b), "test compares to the reference value"), 0, ListBuf()); }
+
+List(Int) widen(List(UInt(8)) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return widen(b, i + 1, acc.push((Int) b[i]));
+}
+
+type Tally = { Int pass; Int fail; };
+
+@requires(declassify)
+Tally run(List(Str) lines, Int i, Tally t) {
+    if (i >= lines.len()) { return t; }
+    if (lines[i] == "") { return run(lines, i + 1, t); }
+    if (check(str_split(lines[i], " "))) { return run(lines, i + 1, Tally {.pass = t.pass + 1, .fail = t.fail}); }
+    println(f"FAIL line {i + 1}: " + str_slice(lines[i], 0, 120));
+    return run(lines, i + 1, Tally {.pass = t.pass, .fail = t.fail + 1});
+}
+
+@requires(args, filesystem(readonly), declassify)
+Int main() {
+    Tally t = run(str_split(filesystem.read_all(args.get(1)), "\n"), 0, Tally {.pass = 0, .fail = 0});
+    println(f"SUMMARY pass={t.pass} fail={t.fail} skip=0");
+    return if (t.fail > 0) { 1 } else { 0 };
+}
