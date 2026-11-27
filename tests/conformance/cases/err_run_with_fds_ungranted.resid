@@ -1,0 +1,11 @@
+// process.run_with_fds runs a command, as process.run does: a write of
+// `process` (E0219), so a function holding only `network` cannot hand its
+// listener to a child.
+@requires(network)
+Int serve() {
+    Int l = resid_tcp_listen(0);
+    return process.run_with_fds(f"relay child {l}", [l]);
+}
+
+@requires(network)
+Int main() { return serve(); }

@@ -569,14 +569,51 @@ pub Int wait_pid(Int pid, Int flags) {
 Int exit_code(Int st) { return if ((st & 127) == 0) { (st >> 8) & 255 } else { 0 - 1 }; }
 
 // Runs cmd by fork + execvp on its space-split words, never a shell.
+// The child inherits stdio only: every other descriptor the runtime makes
+// is close-on-exec.
 @export("resid_process_run", "i64(ptr)")
-pub Int rt_process_run(Int cmd) {
+pub Int rt_process_run(Int cmd) { return run_keeping(cmd, 0, 0); }
+
+// process.run_with_fds(cmd, fds): process.run, where the descriptors in
+// `fds` stay open in this one child, at the same numbers, so its argv can
+// name them (a server that listens once and hands the listener to
+// children it bounds by connection count). Each must be a TCP listener or
+// connection, or a resid_unix_* socket, that the runtime made and the
+// program still holds (net_fd_inheritable); at most 64. Close-on-exec is
+// cleared in the child, after the fork and before exec, never in the
+// parent, so a command started at the same time by another thread
+// inherits nothing. -2, and nothing runs, when one is refused; otherwise
+// as process.run (the exit code, 127 when the command cannot be run, -1
+// for an empty command, a failed fork or a child killed by a signal).
+@export("resid_process_run_fds", "i64(ptr,ptr)")
+pub Int rt_process_run_fds(Int cmd, Int fds) {
+    if (cmd == 0) { return 0 - 1; }
+    Int n = if (fds == 0) { 0 } else { c_list_len(fds) };
+    if (n > 64) { return 0 - 2; }
+    Int keep = xmalloc(n * 8 + 8);
+    if (!fds_inheritable(fds, keep, 0, n)) { return c_free(keep) * 0 - 2; }
+    Int r = run_keeping(cmd, keep, n);
+    return c_free(keep) * 0 + r;
+}
+
+// The descriptors of fds from i on into keep; false at the first refused.
+Bool fds_inheritable(Int fds, Int keep, Int i, Int n) {
+    if (i >= n) { return true; }
+    Int fd = slot_int(fds, c_list_get(fds, i));
+    if (!net_fd_inheritable(fd)) { return false; }
+    _ = st64(keep + i * 8, fd);
+    return fds_inheritable(fds, keep, i + 1, n);
+}
+
+// cmd run in a child that keeps the n descriptors at keep open across exec.
+Int run_keeping(Int cmd, Int keep, Int n) {
     if (cmd == 0) { return 0 - 1; }
     Int argv = split_argv(cmd);
     if (argv == 0) { return 0 - 1; }
     Int pid = c_fork();
     if (pid < 0) { return free_argv(argv) - 1; }
     if (pid == 0) {
+        if (!fds_keep(keep, 0, n)) { return resid_raw_syscall(231, 127, 0, 0, 0, 0, 0); }
         _ = c_execvp(ld64(argv), argv);
         return resid_raw_syscall(231, 127, 0, 0, 0, 0, 0);
     }
@@ -584,6 +621,14 @@ pub Int rt_process_run(Int cmd) {
     _ = free_argv(argv);
     if (st < 0) { return 0 - 1; }
     return exit_code(st);
+}
+
+// In the child only: clears FD_CLOEXEC on each kept descriptor (system
+// calls on memory prepared before the fork).
+Bool fds_keep(Int keep, Int i, Int n) {
+    if (i >= n) { return true; }
+    if (resid_raw_syscall(72, ld64(keep + i * 8), 2, 0, 0, 0, 0) != 0) { return false; }   // fcntl(fd, F_SETFD, 0)
+    return fds_keep(keep, i + 1, n);
 }
 
 // ─── Pseudo-terminals ──────────────────────────────────────────────────

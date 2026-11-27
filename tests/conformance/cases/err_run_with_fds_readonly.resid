@@ -1,0 +1,7 @@
+// process.run_with_fds is a write of `process`, as process.run is: a
+// read-only grant does not cover it (E0219).
+@requires(process(readonly), network)
+Int main() {
+    Int l = resid_tcp_listen(0);
+    return process.run_with_fds(f"true {l}", [l]);
+}
