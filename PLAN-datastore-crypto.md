@@ -1,0 +1,143 @@
+# Plan: cryptography for the security-first datastore
+
+**Status: DRAFT (2026-11-27).** Coordination: issue #7. Branch:
+`claude/datastore-crypto`.
+
+## Why
+
+The successor to BurrowDB is designed as an owner-first fact store. Its
+source of truth is an append-only log of signed facts, and tables are views
+over that log. Columns are `SEALED` (unreadable by the engine) unless the
+schema opts into leaking `EQUALITY`, `ORDER` or `CLEAR`. Writers prove
+constraints in zero knowledge, query results carry proofs against the log
+root, and aggregates over sealed data run across independent operators
+(MPC). The design deliberately does not depend on TEEs.
+
+Most of what that needs is already in `lib/`: SHA-2/SHA-3, HMAC/HKDF,
+Ed25519, ECDSA, the AEADs, HPKE, ML-KEM-768, Shamir and the CGGMP stack.
+This plan adds the pieces that are missing, in the order the datastore
+needs them. Each piece is a new module and replaces nothing. No compiler,
+runtime or seed changes are planned.
+
+## D1 — Merkle transparency log (`lib/merkle.resid`)
+
+RFC 9162 §2.1, the Certificate Transparency v2 tree, with SHA-256 by
+default and the hash a `HashAlg` parameter:
+
+- `mt_leaf_hash(data)` = H(0x00 ‖ data); `mt_node_hash(l, r)` = H(0x01 ‖ l ‖ r).
+- `mt_root(leaves)`: MTH over a list of leaf hashes. The split is the
+  largest power of two below n, never a padded tree.
+- `mt_inclusion_proof(leaves, m)` and `mt_verify_inclusion(alg, index,
+  size, leaf_hash, proof, root)`. Verification uses RFC 9162 §2.1.3.2's
+  iterative algorithm, so it runs in O(log n) and never rebuilds the tree.
+- `mt_consistency_proof(leaves, m)` and `mt_verify_consistency(alg, m, n,
+  proof, root_m, root_n)` (§2.1.4.2).
+- **Checkpoints:** the C2SP signed-note checkpoint body (`origin\nsize\n
+  base64(root)\n`) with Ed25519 note signatures (key ID =
+  SHA-256(name ‖ 0x0A ‖ 0x01 ‖ pubkey)[0..4]). `ckpt_sign`, `ckpt_open`
+  checks a note against a list of trusted verifier keys and refuses
+  unknown or duplicate signers, and `ckpt_cosigned(note, witnesses, k)`
+  requires k distinct witness signatures. Witness cosignatures follow
+  C2SP tlog-cosignature (cosignature/v1, timestamped).
+- Everything is public data: no `Secret` types and no ct cases. The parsers
+  (note text, base64, proof lists) are total, and every length in a proof
+  is checked against `size` before indexing.
+
+**Tests:** RFC 9162 has no vectors, so they come from an independent
+implementation. `tests/crypto/gen_merkle.py` builds trees with Python
+hashlib (sizes 1..70 and powers of two around them, every index and every
+m ≤ n), plus Go `golang.org/x/mod/sumdb/tlog` vectors where Go is
+installed. Negative cases: a flipped bit in each proof element, wrong
+index, wrong size, a proof one element short or long, m = 0, m > n, and
+checkpoints with a bad signature, an unknown key, a duplicate signer,
+trailing text or a non-canonical size.
+
+## D2 — SHA-512 allocation (`lib/crypto.resid`)
+
+PROGRESS.md says `sha512_blocks` allocated ~1 MB per block and was
+"unverified since 2026-09-25". Measured again on 2026-11-27 (x86-64,
+software rounds, this checkout): SHA-512 of 14.5 KB, then Ed25519
+sign and verify over it, peaks at 13 MB RSS. SHA-512 of 1 MB peaks at
+16 MB, which is mostly the input as a `List(Int)`, and runs in 14 ms.
+Every digest matches hashlib. **The leak is gone.** The fix is to record
+the measurement, close the PROGRESS item, and add a bounded-memory
+regression test (`tests/runtime/mem/sha512_bound.resid`: 1 MB input
+under `RESID_MEM_LIMIT=64`). No library change is needed.
+
+## D3 — ristretto255 and Pedersen commitments (`lib/ristretto255g.resid`)
+
+RFC 9496 over the existing Edwards25519 arithmetic in
+`lib/ed25519g.resid`, generic over `Wide512(P, B)` so the secret copy is
+checked like Ed25519's:
+
+- `r255_decode` (canonical, non-negative s, refuses non-square and
+  negative t·x or y = 0), `r255_encode`, `r255_eq` (the RFC's x1·y2 ==
+  y1·x2 ∨ y1·y2 == x1·x2), `r255_from_uniform` (64-byte one-way map,
+  Elligator 2 twice), and `r255_add`, `r255_sub`, `r255_neg`, `r255_mul`
+  (the existing masked ladder) and `r255_base_mul`.
+- Scalars mod ℓ: `sc_reduce64` (wide reduction via `eg_digest_mod_l`),
+  `sc_add/sub/mul/neg/inv`, and canonical 32-byte decoding that refuses
+  any value ≥ ℓ.
+- **Pedersen:** generators G (the base point) and H =
+  `r255_from_uniform(SHA-512("resid/pedersen/H/v1"))`, a hash-to-group so
+  nobody knows log_G H. `pc_commit(v, r)` = vG + rH, `pc_add`, `pc_open`,
+  plus vector commitments `pc_commit_vec(vs, r)` with generators
+  G_i = from_uniform(SHA-512("resid/pedersen/G/v1" ‖ le32(i))).
+  Bulletproofs (range proofs) and membership proofs build on this in a
+  later plan; they are out of scope here.
+- **Secret handling:** v and r are secret at secret types. Commitments and
+  encodings leave through `Publish(B)` (`@requires(declassify)`). No table
+  lookups are indexed by secrets: the scalar multiplication is the
+  existing double-and-always-add ladder. ct cases go in
+  `tests/ct/secretprobe.resid`: `r255-secret-mul`, `pc-secret-commit`.
+
+**Tests:** RFC 9496 §A.1 (multiples of the generator), §A.2 (the bad
+encodings, which must all be refused) and §A.3 (from_uniform), at both
+types. Group laws on random points, checked against Python `ristretto`
+arithmetic written from the RFC in `tests/crypto/gen_ristretto.py` (no
+third-party package). Pedersen homomorphism and binding sanity checks.
+
+## D4 — ML-DSA (`lib/mldsa.resid`)
+
+FIPS 204 ML-DSA-44, -65 and -87 (one implementation parameterised by
+(k, l, η, τ, β, γ1, γ2, ω, λ)), over `lib/keccakg.resid`'s SHAKE128/256,
+written like `lib/mlkem.resid`:
+
+- `mldsa_keygen(ξ)`, `mldsa_sign(sk, M, ctx, rnd)` (the hedged variant,
+  with `rnd` from the caller; the deterministic variant when rnd is all
+  zeros), `mldsa_verify(pk, M, ctx, σ)` (pure ML-DSA, ctx ≤ 255 bytes),
+  and the internal `_internal` forms for ACVP.
+- Arithmetic follows the reference implementation: Montgomery reduction
+  mod q = 8380417, NTT/inverse NTT, Power2Round, Decompose, MakeHint and
+  UseHint, and the packing functions of FIPS 204 §7.
+- **Secrets:** s1, s2, t0, K and the per-signature y are
+  `Secret(Int(32))`. The rejection loop's verdict is a declassified bit
+  each round: FIPS 204 allows it, and the number of rounds is public by
+  design. The signature and public key leave through `ct_public`.
+  `SampleInBall` and `RejBoundedPoly` run on public or seed-derived
+  public data as specified. ct case `mldsa-secret-sign` keeps the signer
+  under valgrind.
+- Decoding is total: a public key or signature of the wrong length, a
+  hint with more than ω ones or out-of-order indices, and z outside its
+  bound are all refused.
+
+**Tests:** NIST ACVP ML-DSA vectors (keyGen, sigGen deterministic and
+hedged, sigVer, including the negative sigVer cases), converted by
+`tests/crypto/gen_mldsa.py` and committed. Interoperability with OpenSSL
+3.5 via pyca/cryptography where available. Wycheproof ML-DSA where it
+covers the parameter set.
+
+## Order and gates
+
+D2 (records only), then D1, D3, D4. Each piece lands with its doc
+comments (`tools/check_doc_comments.py`), `SECURITY.md` rows
+("Cryptography library"), `website/book.toml` API entries, its
+`tests/crypto/run.sh` section, and `tests/ct` cases for anything on
+secrets (the coverage gate). `compiler/verify_pins.resid` only changes if
+a module joins `lib/verify/`'s closure, which none of these do yet.
+
+## Not in this plan
+
+Bulletproofs and set-membership proofs, deterministic AEAD (AES-GCM-SIV)
+for EQUALITY columns, SPDZ-style MPC arithmetic, and order-revealing
+encryption. Those are datastore plans that build on D1 and D3.
