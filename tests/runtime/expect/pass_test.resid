@@ -2,6 +2,9 @@
 type Pt = { Int x; Str y; };
 type Shape = Circle(Int) | Square(Int) | Empty;
 type Color = Red | Green | Blue(Int) | Two(Str, Bool);
+type Val = VText(Str) | VList(List(Int));
+List(Str) names() { return ["ann", "bo"]; }
+List(UInt(8)) octets() { return [1, 2]; }
 
 test "list" { List(Int) a = [1, 2, 3]; expect(a).toEqual([1, 2, 3]); }
 test "empty list" { List(Int) a = []; expect(a).toEqual([]); }
@@ -38,5 +41,16 @@ test "map after remove" { Map(Int, Str) e = {}; Map(Int, Str) a = e.insert(1, "a
 test "variants" { Color c = Two("a", true); expect(c).toEqual(Two("a", true)); }
 test "nullary variant" { Color c = Red; expect(c).toEqual(Red); }
 test "option of record" { Option(Pt) o = Some(Pt {.x = 1, .y = "a"}); expect(o).toEqual(Some(Pt {.x = 1, .y = "a"})); }
+test "ok of Str" { Result(Str, Int) r = Ok("a"); expect(r).toEqual(Ok("a")); }
+test "variant payloads" { Val v = VList([1]); expect(v).toEqual(VList([1])); expect(VText("x")).toNotEqual(VText("y")); }
+test "toContain on a literal list" { expect([1, 2]).toContain(2); }
+test "toContain on a Str list" { List(Str) a = ["ann", "bo"]; expect(a).toContain("bo"); }
+test "toContain on a Str list from a call" { expect(names()).toContain("ann"); }
+test "toContain on a byte list from a call" { UInt(8) x = 2; expect(octets()).toContain(x); }
+test "toHaveLength on a literal list" { expect([1, 2]).toHaveLength(2); }
+test "toHaveLength on a Str list from a call" { expect(names()).toHaveLength(2); }
+test "toHaveLength on a byte list" { List(UInt(8)) a = [1, 2]; expect(a).toHaveLength(2); }
+test "toHaveLength on a record list" { List(Pt) a = [Pt {.x = 1, .y = "a"}]; expect(a).toHaveLength(1); }
+test "toHaveLength on a Str" { expect("abc").toHaveLength(3); }
 type Wrap = { Int v; };
 test "right after a record type" { Wrap w = Wrap {.v = 1}; expect(w).toEqual(Wrap {.v = 1}); }

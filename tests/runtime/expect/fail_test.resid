@@ -5,6 +5,9 @@
 type Pt = { Int x; Str y; };
 type Shape = Circle(Int) | Square(Int) | Empty;
 type Color = Red | Green | Blue(Int) | Two(Str, Bool);
+type Val = VText(Str) | VList(List(Int));
+List(Str) names() { return ["ann", "bo"]; }
+List(UInt(8)) octets() { return [1, 2]; }
 
 test "list vs shorter list" { List(Int) a = [1, 2, 3]; expect(a).toEqual([9, 9]); }
 test "list vs empty" { List(Int) a = [1, 2, 3]; expect(a).toEqual([]); }
@@ -52,6 +55,16 @@ test "option of Str" { Option(Str) o = Some("a"); expect(o).toEqual(Some("b")); 
 test "option of record" { Option(Pt) o = Some(Pt {.x = 1, .y = "a"}); expect(o).toEqual(Some(Pt {.x = 2, .y = "a"})); }
 test "float whole" { expect(1.0).toEqual(2.0); }
 test "list of Str lengths" { List(Str) a = ["a"]; expect(a).toEqual(["a", "b"]); }
+test "ok of Str" { Result(Str, Int) r = Ok("a"); expect(r).toEqual(Ok("b")); }
+test "variant Str payload" { Val v = VText("x"); expect(v).toEqual(VText("y")); }
+test "variant List payload" { Val v = VList([1]); expect(v).toEqual(VList([2])); }
+test "toContain on a literal list" { expect([1, 2]).toContain(3); }
+test "toContain on a Str list from a call" { expect(names()).toContain("cy"); }
+test "toContain on a byte list from a call" { UInt(8) x = 3; expect(octets()).toContain(x); }
+test "toHaveLength on a literal list" { expect([1, 2]).toHaveLength(3); }
+test "toHaveLength on a Str list from a call" { expect(names()).toHaveLength(3); }
+test "toHaveLength on a byte list" { List(UInt(8)) a = [1, 2]; expect(a).toHaveLength(3); }
+test "toHaveLength on a record list" { List(Pt) a = [Pt {.x = 1, .y = "a"}]; expect(a).toHaveLength(2); }
 // Discovery once stepped over the `;` after a record type with the next
 // declaration, so a test right after one was silently never run.
 type Wrap = { Int v; };
