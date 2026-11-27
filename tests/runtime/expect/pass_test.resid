@@ -1,6 +1,7 @@
 // Every test here must PASS: the matching cases of fail_test.resid.
 type Pt = { Int x; Str y; };
 type Shape = Circle(Int) | Square(Int) | Empty;
+type Color = Red | Green | Blue(Int) | Two(Str, Bool);
 
 test "list" { List(Int) a = [1, 2, 3]; expect(a).toEqual([1, 2, 3]); }
 test "empty list" { List(Int) a = []; expect(a).toEqual([]); }
@@ -32,5 +33,10 @@ test "toContain" { List(Int) a = [1, 2]; expect(a).toContain(2); }
 test "toContain on a byte list" { List(UInt(8)) a = [1, 2]; UInt(8) x = 2; expect(a).toContain(x); }
 test "toBeNull" { Option(List(Int)) o = None; expect(o).toBeNull(); }
 test "toSatisfy on a list" { List(Int) a = [1, 2]; expect(a).toSatisfy(lambda(xs) { xs.len() == 2 }); }
+test "map of Str keys in any order" { Map(Str, Int) e = {}; Map(Str, Int) a = e.insert("k1", 1).insert("k2", 2).insert("k3", 3).insert("k4", 4).insert("k5", 5).insert("k6", 6).insert("k7", 7).insert("k8", 8).insert("k9", 9).insert("k10", 10); Map(Str, Int) b = e.insert("k10", 10).insert("k9", 9).insert("k8", 8).insert("k7", 7).insert("k6", 6).insert("k5", 5).insert("k4", 4).insert("k3", 3).insert("k2", 2).insert("k1", 1); expect(a).toEqual(b); }
+test "map after remove" { Map(Int, Str) e = {}; Map(Int, Str) a = e.insert(1, "a").insert(2, "b").insert(3, "c").remove(2); Map(Int, Str) b = e.insert(3, "c").insert(1, "a"); expect(a).toEqual(b); }
+test "variants" { Color c = Two("a", true); expect(c).toEqual(Two("a", true)); }
+test "nullary variant" { Color c = Red; expect(c).toEqual(Red); }
+test "option of record" { Option(Pt) o = Some(Pt {.x = 1, .y = "a"}); expect(o).toEqual(Some(Pt {.x = 1, .y = "a"})); }
 type Wrap = { Int v; };
 test "right after a record type" { Wrap w = Wrap {.v = 1}; expect(w).toEqual(Wrap {.v = 1}); }
