@@ -1,0 +1,127 @@
+// merkleprobe.resid — runs tests/crypto/vectors_merkle/merkle.txt
+// (merkle_ref/: golang.org/x/mod's tlog and note, crypto/ed25519)
+// through lib/merkle.resid: tree roots, inclusion and consistency proofs
+// (valid and tampered), signed checkpoints and witness cosignatures.
+//
+//   merkleprobe <merkle.txt>
+//
+// Prints "FAIL <line>" for each disagreement, then
+// "SUMMARY pass=<n> fail=<n> skip=0"; exit status 1 when anything failed.
+
+import "../../lib/merkle.resid";
+
+Int nib(Int c) {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    return 0;
+}
+
+ListBuf(Int) unhex_acc(Str s, Int i, Int n, ListBuf(Int) acc) {
+    if (i + 1 >= n) { return acc; }
+    return unhex_acc(s, i + 2, n, acc.push(nib(str_char_at(s, i)) * 16 + nib(str_char_at(s, i + 1))));
+}
+
+List(Int) unhex(Str s) {
+    if (s == "-") { List(Int) none = []; return none; }
+    return unhex_acc(s, 0, str_len(s), ListBuf()).finish();
+}
+
+List(List(Int)) hashes(List(Int) b, Int i, ListBuf(List(Int)) acc) {
+    if (i + 32 > b.len()) { return acc.finish(); }
+    return hashes(b, i + 32, acc.push(b[i..i + 32]));
+}
+
+// UTF-8 bytes back into text (the notes hold an em dash).
+Str utf8_text(List(Int) b, Int i, Str acc) {
+    if (i >= b.len()) { return acc; }
+    Int c = b[i];
+    if (c < 128) { return utf8_text(b, i + 1, acc + str_from_code(c)); }
+    if (c < 224) { return utf8_text(b, i + 2, acc + str_from_code(((c & 31) << 6) | (b[i + 1] & 63))); }
+    if (c < 240) { return utf8_text(b, i + 3, acc + str_from_code(((c & 15) << 12) | ((b[i + 1] & 63) << 6) | (b[i + 2] & 63))); }
+    return utf8_text(b, i + 4, acc + str_from_code(((c & 7) << 18) | ((b[i + 1] & 63) << 12) | ((b[i + 2] & 63) << 6) | (b[i + 3] & 63)));
+}
+
+Bool same(List(Int) a, List(Int) b) {
+    if (a.len() != b.len()) { return false; }
+    return hex_encode(a) == hex_encode(b);
+}
+
+List(List(Int)) leaves(Int n, Int i, ListBuf(List(Int)) acc) {
+    if (i >= n) { return acc.finish(); }
+    List(Int) e = [i & 255, i >> 8];
+    return leaves(n, i + 1, acc.push(mt_leaf_hash(Sha256, e)));
+}
+
+Str flat(List(List(Int)) p, Int i, Str acc) {
+    if (i >= p.len()) { return if (acc == "") { "-" } else { acc }; }
+    return flat(p, i + 1, acc + hex_encode(p[i]));
+}
+
+// One vector line: true when the library agrees.
+Bool check(List(Str) f) {
+    if (f[0] == "R") {
+        Int n = str_parse_int(f[1]);
+        return hex_encode(mt_root(Sha256, leaves(n, 0, ListBuf()))) == f[2];
+    }
+    if (f[0] == "I") {
+        Int n = str_parse_int(f[1]);
+        Int m = str_parse_int(f[2]);
+        List(List(Int)) p = hashes(unhex(f[5]), 0, ListBuf());
+        Bool want = f[6] == "1";
+        Bool got = mt_verify_inclusion(Sha256, m, n, unhex(f[4]), p, unhex(f[3]));
+        // A valid vector's proof is also what the library makes.
+        Bool made = !want || flat(mt_inclusion_proof(Sha256, leaves(n, 0, ListBuf()), m), 0, "") == f[5];
+        return got == want && made;
+    }
+    if (f[0] == "C") {
+        Int m = str_parse_int(f[1]);
+        Int n = str_parse_int(f[2]);
+        List(List(Int)) p = hashes(unhex(f[5]), 0, ListBuf());
+        Bool want = f[6] == "1";
+        Bool got = mt_verify_consistency(Sha256, m, n, p, unhex(f[3]), unhex(f[4]));
+        Bool made = !want || flat(mt_consistency_proof(Sha256, leaves(n, 0, ListBuf()), m), 0, "") == f[5];
+        return got == want && made;
+    }
+    if (f[0] == "N") {
+        Str note = utf8_text(unhex(f[1]), 0, "");
+        NoteKey k = NoteKey {.name = f[2], .kind = 1, .pubk = unhex(f[3])};
+        Str got = match ckpt_open(note, k) { Some(c) => c.origin, None => "-", };
+        return got == f[4];
+    }
+    if (f[0] == "W") {
+        Str note = utf8_text(unhex(f[1]), 0, "");
+        NoteKey log = NoteKey {.name = f[2], .kind = 1, .pubk = unhex(f[3])};
+        List(NoteKey) wit = [NoteKey {.name = f[4], .kind = 4, .pubk = unhex(f[5])}];
+        Bool got = match ckpt_cosigned(note, log, wit, str_parse_int(f[6]), str_parse_int(f[7])) { Some(c) => true, None => false, };
+        return got == (f[8] == "1");
+    }
+    if (f[0] == "S") {
+        Str text = utf8_text(unhex(f[3]), 0, "");
+        return note_sign(text, f[2], unhex(f[1])) == utf8_text(unhex(f[4]), 0, "");
+    }
+    if (f[0] == "K") {
+        Str text = utf8_text(unhex(f[3]), 0, "");
+        return match ckpt_parse(text) {
+            Some(c) => cosig_line(c, str_parse_int(f[4]), f[2], unhex(f[1])) == utf8_text(unhex(f[5]), 0, ""),
+            None => false,
+        };
+    }
+    return false;
+}
+
+type Tally = { Int pass; Int fail; };
+
+Tally run(List(Str) lines, Int i, Tally t) {
+    if (i >= lines.len()) { return t; }
+    if (lines[i] == "") { return run(lines, i + 1, t); }
+    if (check(str_split(lines[i], " "))) { return run(lines, i + 1, Tally {.pass = t.pass + 1, .fail = t.fail}); }
+    println(f"FAIL line {i + 1}: " + lines[i]);
+    return run(lines, i + 1, Tally {.pass = t.pass, .fail = t.fail + 1});
+}
+
+@requires(args, filesystem(readonly))
+Int main() {
+    Tally t = run(str_split(filesystem.read_all(args.get(1)), "\n"), 0, Tally {.pass = 0, .fail = 0});
+    println(f"SUMMARY pass={t.pass} fail={t.fail} skip=0");
+    return if (t.fail > 0) { 1 } else { 0 };
+}

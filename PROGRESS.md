@@ -2866,12 +2866,14 @@ open.
 - **~~Resid is ~2.6x behind Rust on the 10M-append benchmark.~~ SUPERSEDED.**
   The Rust pipeline is gone; the comparison now in flight is against C++ on
   AWFY (see below).
-- **lib/crypto SHA-512 allocates ~1MB per 128-byte block. STILL OPEN,
-  UNVERIFIED SINCE 2026-09-25.** `lib/crypto.resid`'s `sha512_blocks` still
-  holds the `w64_*`/`fw_pair` limb-list shape (90 occurrences); the generic
-  `lib/sha512g.resid` rewrite does not cover this entry point. Re-measure
-  before acting: `sha512_bytes`, `sign_msg`, `verify_sig` on a 14.5 KB input
-  reportedly took ~244 MB.
+- **~~lib/crypto SHA-512 allocates ~1MB per 128-byte block.~~ DONE
+  (re-measured 2026-11-27).** `sha512_bytes`, `sign_msg_bytes` and
+  `verify_sig_bytes` over 14.5 KB peak at 13 MB RSS, and SHA-512 of 1 MB at
+  16 MB (mostly the input as a `List(Int)`), all digests equal to hashlib's.
+  `tests/runtime/mem/sha512_bound.resid` holds it: 1 MB through SHA-512 and
+  Ed25519 sign/verify under `RESID_MEM_LIMIT=64` (passes at 48, aborts at
+  32). The `w64_*`/`fw_pair` shape is still in the source: the allocation
+  no longer shows, and which runtime change removed it was not traced.
 
 ### Open blockers, ranked (2026-10-13)
 

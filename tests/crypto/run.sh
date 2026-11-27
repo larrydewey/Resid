@@ -106,7 +106,8 @@ printf '%s\n' "$rt" | grep -q '^roundtrip: 0 failed' || { [ "$nf" != 0 ] || { ec
 # ── parsers under mutation ───────────────────────────────────────────
 # Every parser that reads untrusted bytes, on mutated certificates, CRLs,
 # OCSP responses, keys, signatures, COSE, TLS messages, PEM, HTTP/2
-# frames with HPACK blocks, SPDM messages, TPM responses and CoRIMs: an abort
+# frames with HPACK blocks, SPDM messages, TPM responses, CoRIMs, signed
+# notes, ristretto255 encodings and ML-DSA keys and signatures: an abort
 # (caught per input by fuzz.resid) or a hang (the timeout) is a failure.
 # The rng seeds are fixed, so a failure reproduces.
 (cd "$ROOT" && "$COMPILER" tests/crypto/fuzz.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/fuzz") > "$W/build.log" 2>&1 || {
@@ -152,6 +153,21 @@ fz tpm "$SD/tpm-create.bin" "$N" 75
 fz tpm "$SD/tpm-public.bin" "$N" 76
 fz corim "$SD/corim-payload.bin" "$N" 77
 fz corim "$SD/corim-keys-payload.bin" "$N" 78
+# Datastore primitives (seeds from seeds/gen_datastore.sh). These kinds
+# also assert that what is accepted is canonical, and that only the signed
+# original verifies; they are cheap, so the note and ristretto255 parsers
+# get four times the iterations.
+fz note "$SD/note.bin" $((N * 4)) 81
+fz r255 "$SD/r255-point.bin" $((N * 4)) 82
+fz r255 "$SD/r255-scalar.bin" $((N * 4)) 83
+fz r255 "$SD/r255-uniform.bin" $((N * 4)) 84
+seedn=85
+for lv in 44 65 87; do
+    fz mldsasig "$SD/mldsa$lv-sig.bin" "$N" "$seedn" "$SD/mldsa$lv-pk.bin" "$SD/mldsa$lv-sig.bin"
+    fz mldsapk "$SD/mldsa$lv-pk.bin" "$N" $((seedn + 1)) "$SD/mldsa$lv-sig.bin" "$SD/mldsa$lv-pk.bin"
+    fz mldsahint "$SD/mldsa$lv-hint.bin" $((N * 4)) $((seedn + 2)) "$SD/mldsa$lv-pk.bin" "$SD/mldsa$lv-sig.bin"
+    seedn=$((seedn + 3))
+done
 
 # bcrypt_pbkdf and AES-CTR (lib/bcrypt_pbkdf.resid) against Python's bcrypt
 # and cryptography, and a passphrase-protected ssh-keygen key
@@ -161,6 +177,30 @@ if (cd "$ROOT" && "$COMPILER" test tests/crypto/bcrypt_pbkdf_test.resid) > "$W/b
 else
     fail=$((fail + 1)); echo "FAIL bcrypt_pbkdf: $(grep -m3 -E 'error|expected|actual' "$W/bcrypt.log" | tr '\n' ' ')"
 fi
+
+# dc-merkle-1 (issue #9): notes read from files as text and as bytes; the
+# two holding an overlong UTF-8 form must be refused.
+(cd "$ROOT" && "$COMPILER" tests/crypto/merkle_strprobe.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/strprobe") > "$W/build.log" 2>&1 || {
+    echo "FAIL build merkle_strprobe"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
+out="$("$W/strprobe" "$SD" 2>&1)"
+summary="$(printf '%s\n' "$out" | sed -n 's/^SUMMARY //p')"
+if [ -z "$summary" ]; then fail=$((fail + 1)); echo "FAIL merkle_strprobe did not finish"; printf '%s\n' "$out" | tail -3;
+else
+    pass=$((pass + $(printf '%s' "$summary" | sed -n 's/.*pass=\([0-9]*\).*/\1/p')))
+    fail=$((fail + $(printf '%s' "$summary" | sed -n 's/.*fail=\([0-9]*\).*/\1/p')))
+    printf '%s\n' "$out" | grep '^FAIL' | head -5
+fi
+
+# Red-team regressions for the datastore primitives (issue #9): one file
+# a module, each test failing before its fix.
+for t in r255_redteam merkle_redteam mldsa_redteam; do
+    [ -f "$ROOT/tests/crypto/${t}_test.resid" ] || continue
+    if (cd "$ROOT" && "$COMPILER" test "tests/crypto/${t}_test.resid") > "$W/$t.log" 2>&1 && grep -q "Failures: 0 " "$W/$t.log"; then
+        pass=$((pass + $(sed -n 's/.*Passed: \([0-9]*\).*/\1/p' "$W/$t.log" | tail -1)))
+    else
+        fail=$((fail + 1)); echo "FAIL $t: $(grep -m3 -E 'error|✗|expected|actual' "$W/$t.log" | tr '\n' ' ')"
+    fi
+done
 
 # RSA signing on secret keys (lib/rsasign.resid) against cryptography,
 # faulty CRT halves refused (tools/gen_rsasign_ref.py).
@@ -217,6 +257,45 @@ if python3 -c 'import cryptography' 2>/dev/null; then
 else
     echo "note: secure boot cross-check skipped (python3 cryptography not installed)"
 fi
+
+# Merkle transparency logs (lib/merkle.resid): RFC 9162 roots, inclusion
+# and consistency proofs (valid and tampered) for every tree size up to 70,
+# signed checkpoints and witness cosignatures, made and checked byte for
+# byte against golang.org/x/mod's tlog and note (merkle_ref/gen.sh).
+(cd "$ROOT" && "$COMPILER" tests/crypto/merkleprobe.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/merkleprobe") > "$W/build.log" 2>&1 || {
+    echo "FAIL build merkleprobe"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
+out="$("$W/merkleprobe" "$ROOT/tests/crypto/vectors_merkle/merkle.txt" 2>&1)"
+summary="$(printf '%s\n' "$out" | sed -n 's/^SUMMARY //p')"
+p="$(printf '%s' "$summary" | sed -n 's/.*pass=\([0-9]*\).*/\1/p')"
+x="$(printf '%s' "$summary" | sed -n 's/.*fail=\([0-9]*\).*/\1/p')"
+if [ -z "$summary" ]; then fail=$((fail + 1)); echo "FAIL merkleprobe did not finish"; printf '%s\n' "$out" | tail -3;
+else pass=$((pass + p)); fail=$((fail + x)); [ "$x" = 0 ] || printf '%s\n' "$out" | grep '^FAIL' | head -5 | cut -c1-200; fi
+
+# ristretto255 and Pedersen commitments (lib/ristretto255g.resid's public
+# copy) against libsodium (gen_ristretto.py): multiples of the generator,
+# canonical and junk encodings, the one-way map, addition, scalar
+# multiplication, scalar arithmetic mod l and Pedersen commitments.
+(cd "$ROOT" && "$COMPILER" tests/crypto/r255probe.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/r255probe") > "$W/build.log" 2>&1 || {
+    echo "FAIL build r255probe"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
+out="$("$W/r255probe" "$ROOT/tests/crypto/vectors_r255/r255.txt" 2>&1)"
+summary="$(printf '%s\n' "$out" | sed -n 's/^SUMMARY //p')"
+p="$(printf '%s' "$summary" | sed -n 's/.*pass=\([0-9]*\).*/\1/p')"
+x="$(printf '%s' "$summary" | sed -n 's/.*fail=\([0-9]*\).*/\1/p')"
+if [ -z "$summary" ]; then fail=$((fail + 1)); echo "FAIL r255probe did not finish"; printf '%s\n' "$out" | tail -3;
+else pass=$((pass + p)); fail=$((fail + x)); [ "$x" = 0 ] || printf '%s\n' "$out" | grep '^FAIL' | head -5 | cut -c1-200; fi
+
+# ML-DSA (lib/mldsa.resid) at all three parameter sets: NIST ACVP keyGen,
+# sigGen (deterministic and hedged; external, internal and external-mu)
+# byte for byte, sigVer (valid and invalid), and OpenSSL's signatures
+# (gen_mldsa.py over an ACVP-Server checkout and pyca/cryptography).
+(cd "$ROOT" && "$COMPILER" tests/crypto/mldsaprobe.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/mldsaprobe") > "$W/build.log" 2>&1 || {
+    echo "FAIL build mldsaprobe"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
+out="$("$W/mldsaprobe" "$ROOT/tests/crypto/vectors_mldsa/mldsa.txt" 2>&1)"
+summary="$(printf '%s\n' "$out" | sed -n 's/^SUMMARY //p')"
+p="$(printf '%s' "$summary" | sed -n 's/.*pass=\([0-9]*\).*/\1/p')"
+x="$(printf '%s' "$summary" | sed -n 's/.*fail=\([0-9]*\).*/\1/p')"
+if [ -z "$summary" ]; then fail=$((fail + 1)); echo "FAIL mldsaprobe did not finish"; printf '%s\n' "$out" | tail -3;
+else pass=$((pass + p)); fail=$((fail + x)); [ "$x" = 0 ] || printf '%s\n' "$out" | grep '^FAIL' | head -5 | cut -c1-200; fi
 
 echo "crypto: $pass passed, $fail failed ($files vector files)"
 [ "$fail" -eq 0 ]

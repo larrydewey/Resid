@@ -1,0 +1,634 @@
+// merkle.resid — Merkle transparency logs: the RFC 9162 (Certificate
+// Transparency v2) tree, inclusion and consistency proofs, and C2SP signed
+// checkpoints with witness cosignatures.
+//
+// A log commits to its entries in order. The tree head (size, root) is
+// signed as a checkpoint (c2sp.org/tlog-checkpoint, a signed note,
+// c2sp.org/signed-note); an inclusion proof shows one entry under a head,
+// and a consistency proof shows a later head extends an earlier one, so a
+// log that rewrites or forks its history is caught by anyone holding two
+// heads. Witnesses cosign heads they have checked for consistency
+// (c2sp.org/tlog-cosignature, cosignature/v1), so a client can require k
+// independent witnesses before it believes a head.
+//
+// Hashing follows RFC 9162 §2.1.1: a leaf is H(0x00 || data), an interior
+// node H(0x01 || left || right), and a tree of n > 1 leaves splits at the
+// largest power of two below n -- never a padded tree. The hash is a
+// HashAlg (SHA-256 for checkpoints, which fix it). Leaves are passed as
+// leaf hashes, so a caller hashes each entry once and keeps the hashes.
+//
+// Every value here is public: there are no secret types and no
+// constant-time requirement. Every parser is total, and every proof is
+// checked against the sizes before anything is indexed. Verification uses
+// RFC 9162's iterative algorithms (§2.1.3.2, §2.1.4.2) in O(log n) and
+// never rebuilds a tree.
+//
+// Checkpoint signing takes an Ed25519 seed as public bytes (lib/ed25519's
+// public copy, as lib/cose does for provenance); a key held as secret
+// bytes signs through lib/ed25519g and passes the signature here.
+
+import "crypto.resid";
+import "hash.resid";
+import "ed25519.resid";
+
+// ─── Tree hashing (RFC 9162 §2.1.1) ─────────────────────────────────
+
+/// The leaf hash of an entry: H(0x00 || data).
+pub List(Int) mt_leaf_hash(HashAlg h, List(Int) data) {
+    List(Int) pre = [0];
+    return hash_bytes(h, pre.concat(data));
+}
+
+/// The interior node hash: H(0x01 || left || right).
+pub List(Int) mt_node_hash(HashAlg h, List(Int) left, List(Int) right) {
+    List(Int) pre = [1];
+    return hash_bytes(h, pre.concat(left).concat(right));
+}
+
+/// The largest power of two strictly below `n` (n > 1): where RFC 9162
+/// splits a tree of n leaves.
+pub Int mt_split(Int n) { return mt_split_at(n, 1); }
+
+Int mt_split_at(Int n, Int k) {
+    if (k * 2 >= n) { return k; }
+    return mt_split_at(n, k * 2);
+}
+
+// MTH(D[lo:hi]) for 0 <= lo < hi.
+List(Int) mt_root_of(HashAlg h, List(List(Int)) d, Int lo, Int hi) {
+    Int n = hi - lo;
+    if (n == 1) { return d[lo]; }
+    Int k = mt_split(n);
+    return mt_node_hash(h, mt_root_of(h, d, lo, lo + k), mt_root_of(h, d, lo + k, hi));
+}
+
+/// The root (MTH) of the tree whose leaf hashes are `leaves`; the hash of
+/// the empty string for no leaves.
+pub List(Int) mt_root(HashAlg h, List(List(Int)) leaves) {
+    List(Int) none = [];
+    if (leaves.len() == 0) { return hash_bytes(h, none); }
+    return mt_root_of(h, leaves, 0, leaves.len());
+}
+
+// ─── Inclusion proofs (RFC 9162 §2.1.3) ─────────────────────────────
+
+/// The inclusion proof (audit path) of leaf `m` in the tree of `leaves`,
+/// one hash per element, from the leaf upwards; [] when m is out of range
+/// or the tree has one leaf.
+pub List(List(Int)) mt_inclusion_proof(HashAlg h, List(List(Int)) leaves, Int m) {
+    List(List(Int)) none = [];
+    if (m < 0 || m >= leaves.len()) { return none; }
+    return mt_path(h, leaves, m, 0, leaves.len());
+}
+
+// PATH(m, D[lo:hi]), m relative to lo.
+List(List(Int)) mt_path(HashAlg h, List(List(Int)) d, Int m, Int lo, Int hi) {
+    List(List(Int)) none = [];
+    Int n = hi - lo;
+    if (n <= 1) { return none; }
+    Int k = mt_split(n);
+    if (m < k) { return mt_path(h, d, m, lo, lo + k).concat([mt_root_of(h, d, lo + k, hi)]); }
+    return mt_path(h, d, m - k, lo + k, hi).concat([mt_root_of(h, d, lo, lo + k)]);
+}
+
+/// Whether `proof` shows the leaf hash `leaf` at `index` in the tree of
+/// `size` leaves with root `root` (RFC 9162 §2.1.3.2). False for an index
+/// out of range, a proof of the wrong length, or any element of the
+/// wrong width.
+pub Bool mt_verify_inclusion(HashAlg h, Int index, Int size, List(Int) leaf, List(List(Int)) proof, List(Int) root) {
+    if (index < 0 || size <= 0 || index >= size) { return false; }
+    if (!mt_widths_ok(h, proof, 0) || leaf.len() != hash_len(h) || root.len() != hash_len(h)) { return false; }
+    MtWalk w = mt_incl_walk(h, proof, 0, MtWalk {.fn = index, .sn = size - 1, .r = leaf, .ok = true});
+    return w.ok && w.sn == 0 && mt_same(w.r, root);
+}
+
+/// The state of the RFC 9162 §2.1.3.2 inclusion walk: fn, sn, the running
+/// hash r, and whether the proof is still well formed.
+type MtWalk = { Int fn; Int sn; List(Int) r; Bool ok; };
+
+MtWalk mt_incl_walk(HashAlg h, List(List(Int)) p, Int i, MtWalk w) {
+    if (i >= p.len() || !w.ok) { return w; }
+    if (w.sn == 0) { return MtWalk {.fn = w.fn, .sn = w.sn, .r = w.r, .ok = false}; }
+    if ((w.fn & 1) == 1 || w.fn == w.sn) {
+        List(Int) r = mt_node_hash(h, p[i], w.r);
+        MtShift s = mt_shift_until_set(w.fn, w.sn);
+        return mt_incl_walk(h, p, i + 1, MtWalk {.fn = s.fn >> 1, .sn = s.sn >> 1, .r = r, .ok = true});
+    }
+    List(Int) r2 = mt_node_hash(h, w.r, p[i]);
+    return mt_incl_walk(h, p, i + 1, MtWalk {.fn = w.fn >> 1, .sn = w.sn >> 1, .r = r2, .ok = true});
+}
+
+/// The node indices fn and sn of a proof walk after shifting them together.
+type MtShift = { Int fn; Int sn; };
+
+// Shift fn and sn right together until fn's low bit is set or fn is 0.
+MtShift mt_shift_until_set(Int fn, Int sn) {
+    if ((fn & 1) == 1 || fn == 0) { return MtShift {.fn = fn, .sn = sn}; }
+    return mt_shift_until_set(fn >> 1, sn >> 1);
+}
+
+// Shift fn and sn right together while fn's low bit is set.
+MtShift mt_shift_while_set(Int fn, Int sn) {
+    if ((fn & 1) == 0) { return MtShift {.fn = fn, .sn = sn}; }
+    return mt_shift_while_set(fn >> 1, sn >> 1);
+}
+
+Bool mt_widths_ok(HashAlg h, List(List(Int)) p, Int i) {
+    if (i >= p.len()) { return true; }
+    if (p[i].len() != hash_len(h)) { return false; }
+    return mt_widths_ok(h, p, i + 1);
+}
+
+// Equality of two byte strings of the same public length.
+Bool mt_same(List(Int) a, List(Int) b) {
+    if (a.len() != b.len()) { return false; }
+    return mt_same_at(a, b, 0);
+}
+
+Bool mt_same_at(List(Int) a, List(Int) b, Int i) {
+    if (i >= a.len()) { return true; }
+    if (a[i] != b[i]) { return false; }
+    return mt_same_at(a, b, i + 1);
+}
+
+// ─── Consistency proofs (RFC 9162 §2.1.4) ───────────────────────────
+
+/// The consistency proof from the first `m` leaves to the whole tree of
+/// `leaves`; [] when m is 0, m equals the size, or m is out of range.
+pub List(List(Int)) mt_consistency_proof(HashAlg h, List(List(Int)) leaves, Int m) {
+    List(List(Int)) none = [];
+    if (m <= 0 || m >= leaves.len()) { return none; }
+    return mt_subproof(h, leaves, m, 0, leaves.len(), true);
+}
+
+// SUBPROOF(m, D[lo:hi], b).
+List(List(Int)) mt_subproof(HashAlg h, List(List(Int)) d, Int m, Int lo, Int hi, Bool b) {
+    List(List(Int)) none = [];
+    Int n = hi - lo;
+    if (m == n) {
+        if (b) { return none; }
+        return [mt_root_of(h, d, lo, hi)];
+    }
+    Int k = mt_split(n);
+    if (m <= k) { return mt_subproof(h, d, m, lo, lo + k, b).concat([mt_root_of(h, d, lo + k, hi)]); }
+    return mt_subproof(h, d, m - k, lo + k, hi, false).concat([mt_root_of(h, d, lo, lo + k)]);
+}
+
+/// Whether `proof` shows the tree of `size2` leaves with root `root2`
+/// extends the tree of `size1` leaves with root `root1` (RFC 9162
+/// §2.1.4.2). Equal sizes need an empty proof and equal roots; size1 = 0
+/// or size1 > size2 is false.
+pub Bool mt_verify_consistency(HashAlg h, Int size1, Int size2, List(List(Int)) proof, List(Int) root1, List(Int) root2) {
+    if (size1 <= 0 || size2 <= 0 || size1 > size2) { return false; }
+    if (!mt_widths_ok(h, proof, 0) || root1.len() != hash_len(h) || root2.len() != hash_len(h)) { return false; }
+    if (size1 == size2) { return proof.len() == 0 && mt_same(root1, root2); }
+    if (proof.len() == 0) { return false; }
+    List(List(Int)) p = if (mt_pow2(size1)) { [root1].concat(proof) } else { proof };
+    MtShift s = mt_shift_while_set(size1 - 1, size2 - 1);
+    MtCons c = mt_cons_walk(h, p, 1, MtCons {.fn = s.fn, .sn = s.sn, .fr = p[0], .sr = p[0], .ok = true});
+    return c.ok && c.sn == 0 && mt_same(c.fr, root1) && mt_same(c.sr, root2);
+}
+
+/// The state of the RFC 9162 §2.1.4.2 consistency walk: fn, sn, the two
+/// running hashes fr and sr, and whether the proof is still well formed.
+type MtCons = { Int fn; Int sn; List(Int) fr; List(Int) sr; Bool ok; };
+
+MtCons mt_cons_walk(HashAlg h, List(List(Int)) p, Int i, MtCons c) {
+    if (i >= p.len() || !c.ok) { return c; }
+    if (c.sn == 0) { return MtCons {.fn = c.fn, .sn = c.sn, .fr = c.fr, .sr = c.sr, .ok = false}; }
+    if ((c.fn & 1) == 1 || c.fn == c.sn) {
+        List(Int) fr = mt_node_hash(h, p[i], c.fr);
+        List(Int) sr = mt_node_hash(h, p[i], c.sr);
+        MtShift s = mt_shift_until_set(c.fn, c.sn);
+        return mt_cons_walk(h, p, i + 1, MtCons {.fn = s.fn >> 1, .sn = s.sn >> 1, .fr = fr, .sr = sr, .ok = true});
+    }
+    List(Int) sr2 = mt_node_hash(h, c.sr, p[i]);
+    return mt_cons_walk(h, p, i + 1, MtCons {.fn = c.fn >> 1, .sn = c.sn >> 1, .fr = c.fr, .sr = sr2, .ok = true});
+}
+
+// Whether n > 0 is a power of two.
+Bool mt_pow2(Int n) { return n > 0 && (n & (n - 1)) == 0; }
+
+// ─── Checkpoints (c2sp.org/tlog-checkpoint) ─────────────────────────
+
+/// A log's checkpoint body: origin, tree size, root hash (SHA-256), and
+/// extension lines (opaque, in order).
+pub type Checkpoint = { Str origin; Int size; List(Int) root; List(Str) ext; };
+
+/// The checkpoint's note text: one line each for origin, decimal size,
+/// base64 root and every extension, each ending in a newline.
+pub Str ckpt_text(Checkpoint c) {
+    Str head = c.origin + "\n" + f"{c.size}" + "\n" + base64_encode(c.root) + "\n";
+    return ckpt_ext_text(c.ext, 0, head);
+}
+
+Str ckpt_ext_text(List(Str) e, Int i, Str acc) {
+    if (i >= e.len()) { return acc; }
+    return ckpt_ext_text(e, i + 1, acc + e[i] + "\n");
+}
+
+/// The checkpoint in a note text, or None unless it is canonical: an
+/// origin that is a name (c2sp.org/tlog-cosignature: non-empty, at most
+/// 255 bytes, no white space and no '+'), a decimal size without sign or leading zeros (below
+/// 2^63), a canonical base64 SHA-256 root, extension lines that are
+/// non-empty, and a final newline with no ASCII control characters. The text
+/// must be exact UTF-8 (sn_exact).
+pub Option(Checkpoint) ckpt_parse(Str text) {
+    if (!sn_exact(text) || !sn_text_ok(text)) { return None; }
+    List(Str) lines = str_split(text, "\n");
+    // A text ending in "\n" splits with a final empty piece.
+    Int n = lines.len() - 1;
+    if (n < 3 || lines[n] != "") { return None; }
+    if (!sn_name_ok(lines[0]) || bytes_of(lines[0]).len() > 255) { return None; }
+    Option(Int) size = sn_decimal(lines[1]);
+    List(Int) root = sn_b64(lines[2]);
+    if (root.len() != 32) { return None; }
+    List(Str) ext = lines[3..n];
+    if (!ckpt_ext_ok(ext, 0)) { return None; }
+    return match size {
+        Some(s) => Some(Checkpoint {.origin = lines[0], .size = s, .root = root, .ext = ext}),
+        None => None,
+    };
+}
+
+Bool ckpt_ext_ok(List(Str) e, Int i) {
+    if (i >= e.len()) { return true; }
+    if (e[i] == "") { return false; }
+    return ckpt_ext_ok(e, i + 1);
+}
+
+// ─── Signed notes (c2sp.org/signed-note), Ed25519 ───────────────────
+
+/// A note verifier key: a name, its signature type (0x01 Ed25519, 0x04
+/// timestamped Ed25519 cosignature) and its 32-byte Ed25519 public key.
+pub type NoteKey = { Str name; Int kind; List(Int) pubk; };
+
+/// One signature line of a note: the key's name, its 4-byte ID and the
+/// signature bytes after it.
+pub type NoteSig = { Str name; Int id; List(Int) sig; };
+
+/// A note split into its text and signature lines.
+pub type Note = { Str text; List(NoteSig) sigs; };
+
+/// The 32-bit key ID of a note key: the first four bytes of
+/// SHA-256(name || 0x0A || kind || public key), big-endian.
+pub Int note_key_id(NoteKey k) {
+    List(Int) mid = [10, k.kind];
+    List(Int) d = sha256_bytes(bytes_of(k.name).concat(mid).concat(k.pubk));
+    return (d[0] << 24) | (d[1] << 16) | (d[2] << 8) | d[3];
+}
+
+/// The signature line "— <name> <base64(id || sig)>\n".
+pub Str note_sig_line(Str name, Int id, List(Int) sig) {
+    List(Int) idb = [(id >> 24) & 255, (id >> 16) & 255, (id >> 8) & 255, id & 255];
+    return "— " + name + " " + base64_encode(idb.concat(sig)) + "\n";
+}
+
+/// The note `text` signed by the Ed25519 `seed` under `name`: the text,
+/// a blank line and one signature line.
+pub Str note_sign(Str text, Str name, List(Int) seed) {
+    NoteKey k = NoteKey {.name = name, .kind = 1, .pubk = pub_key(seed)};
+    List(Int) sig = sign_msg_bytes(seed, bytes_of(text));
+    return text + "\n" + note_sig_line(name, note_key_id(k), sig);
+}
+
+/// The note in `s`, split at its last blank line, or None unless the text
+/// is well formed (ends in a newline, no ASCII control character but newline)
+/// and every signature line parses (em dash, a name without white space
+/// or '+', canonical base64 of at least five bytes). At most 64
+/// signatures.
+///
+/// `s` must be exact UTF-8 (sn_exact), or it is refused: a Str made from
+/// a file or the network may hold bytes that are not the encoding of its
+/// code points, and one holding an overlong form would be split on its
+/// stored bytes but signed over its code points (an overlong newline
+/// joined two lines into one, an overlong digit read as that digit).
+///
+/// A Str is not the bytes that arrived: the runtime ends a text at the
+/// first NUL, so whatever followed one in a file or a message is gone
+/// before this function sees it, and cannot be refused here. A caller
+/// holding the received bytes should pass them to note_parse_bytes,
+/// ckpt_open_bytes or ckpt_cosigned_bytes, which check every byte before
+/// any text is made.
+pub Option(Note) note_parse(Str s) {
+    if (!sn_exact(s)) { return None; }
+    List(Str) lines = str_split(s, "\n");
+    Int n = lines.len() - 1;
+    if (n < 2 || lines[n] != "") { return None; }
+    Int blank = sn_last_blank(lines, n - 1);
+    if (blank < 1 || n - blank - 1 < 1 || n - blank - 1 > 64) { return None; }
+    Str text = sn_join(lines, 0, blank, "");
+    if (!sn_text_ok(text)) { return None; }
+    List(NoteSig) none = [];
+    Option(List(NoteSig)) sigs = sn_sig_lines(lines, blank + 1, n, none);
+    return match sigs {
+        Some(v) => Some(Note {.text = text, .sigs = v}),
+        None => None,
+    };
+}
+
+/// note_parse on the note's bytes as received: None unless they are
+/// strict UTF-8 (RFC 3629: no overlong form, no surrogate, nothing above
+/// U+10FFFF, no truncated sequence) with no ASCII control character but
+/// newline anywhere (NUL among them, at which a text would end and hide
+/// the rest), then as note_parse. Every byte is accounted for: the text
+/// made of them encodes back to as many.
+pub Option(Note) note_parse_bytes(List(Int) b) {
+    if (!sn_utf8_ok(b, 0) || !sn_text_bytes(b, 0)) { return None; }
+    Str text = sn_utf8_text(b, 0, StrBuf());
+    if (bytes_of(text).len() != b.len()) { return None; }
+    return note_parse(text);
+}
+
+/// Whether the stored bytes of `s` are exactly the strict UTF-8 encoding
+/// of its code points. The runtime hashes a Str's stored bytes
+/// (str_sha256) and bytes_of encodes its code points, so the two digests
+/// agree only when nothing was stored in another form.
+pub Bool sn_exact(Str s) {
+    List(Int) b = bytes_of(s);
+    return sn_utf8_ok(b, 0) && str_sha256(s) == hex_encode(sha256_bytes(b));
+}
+
+// Strict UTF-8 from byte i on: shortest forms only, no surrogates,
+// nothing above U+10FFFF, every sequence complete.
+Bool sn_utf8_ok(List(Int) b, Int i) {
+    Int n = b.len();
+    if (i >= n) { return true; }
+    Int c = b[i];
+    if (c < 0 || c > 244) { return false; }
+    if (c < 128) { return sn_utf8_ok(b, i + 1); }
+    if (c < 194) { return false; }
+    if (c < 224) { return sn_cont(b, i + 1, 128, 191) && sn_utf8_ok(b, i + 2); }
+    if (c < 240) {
+        Int lo = if (c == 224) { 160 } else { 128 };
+        Int hi = if (c == 237) { 159 } else { 191 };
+        return sn_cont(b, i + 1, lo, hi) && sn_cont(b, i + 2, 128, 191) && sn_utf8_ok(b, i + 3);
+    }
+    Int lo4 = if (c == 240) { 144 } else { 128 };
+    Int hi4 = if (c == 244) { 143 } else { 191 };
+    return sn_cont(b, i + 1, lo4, hi4) && sn_cont(b, i + 2, 128, 191) && sn_cont(b, i + 3, 128, 191) && sn_utf8_ok(b, i + 4);
+}
+
+Bool sn_cont(List(Int) b, Int i, Int lo, Int hi) { return i < b.len() && b[i] >= lo && b[i] <= hi; }
+
+// The text of bytes sn_utf8_ok accepted.
+Str sn_utf8_text(List(Int) b, Int i, StrBuf acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    Int c = b[i];
+    if (c < 128) { return sn_utf8_text(b, i + 1, acc.push_char(c)); }
+    if (c < 224) { return sn_utf8_text(b, i + 2, acc.push_char(((c & 31) << 6) | (b[i + 1] & 63))); }
+    if (c < 240) { return sn_utf8_text(b, i + 3, acc.push_char(((c & 15) << 12) | ((b[i + 1] & 63) << 6) | (b[i + 2] & 63))); }
+    return sn_utf8_text(b, i + 4, acc.push_char(((c & 7) << 18) | ((b[i + 1] & 63) << 12) | ((b[i + 2] & 63) << 6) | (b[i + 3] & 63)));
+}
+
+// The index of the last empty line before `i` (inclusive), or -1.
+Int sn_last_blank(List(Str) l, Int i) {
+    if (i < 0) { return 0 - 1; }
+    if (l[i] == "") { return i; }
+    return sn_last_blank(l, i - 1);
+}
+
+// Lines [i, end) joined, each with its newline.
+Str sn_join(List(Str) l, Int i, Int end, Str acc) {
+    if (i >= end) { return acc; }
+    return sn_join(l, i + 1, end, acc + l[i] + "\n");
+}
+
+Option(List(NoteSig)) sn_sig_lines(List(Str) l, Int i, Int end, List(NoteSig) acc) {
+    if (i >= end) { return Some(acc); }
+    List(Str) f = str_split(l[i], " ");
+    if (f.len() != 3 || f[0] != "—" || !sn_name_ok(f[1])) { return None; }
+    List(Int) b = sn_b64(f[2]);
+    if (b.len() < 5) { return None; }
+    NoteSig sig = NoteSig {.name = f[1], .id = (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3], .sig = b[4..b.len()]};
+    return sn_sig_lines(l, i + 1, end, acc.concat([sig]));
+}
+
+// A key name: non-empty, with no white space and no '+', as the
+// signed-note format says. White space is Unicode's White_Space property
+// (Go's note package: unicode.IsSpace); the ASCII ones could not occur in
+// one field of a line split on spaces, the others could. Nothing else is
+// refused: a name the format allows on a line from a key nobody lists
+// must not make the note unreadable.
+Bool sn_name_ok(Str name) {
+    if (name == "") { return false; }
+    return sn_name_cps(name, 0);
+}
+
+Bool sn_name_cps(Str name, Int i) {
+    if (i >= str_len(name)) { return true; }
+    Int c = str_char_at(name, i);
+    if (c <= 32 || c == 43 || sn_space(c)) { return false; }
+    return sn_name_cps(name, i + 1);
+}
+
+// The White_Space code points above U+0020: NEL, NBSP, and the rest.
+Bool sn_space(Int c) {
+    if (c == 133 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202)) { return true; }
+    return c == 8232 || c == 8233 || c == 8239 || c == 8287 || c == 12288;
+}
+
+// Canonical base64 only: decodes, and encodes back to the same text (no
+// whitespace, no stray bits under the padding). [] otherwise.
+List(Int) sn_b64(Str s) {
+    List(Int) none = [];
+    if (s == "") { return none; }
+    List(Int) b = base64_decode(s);
+    if (b.len() == 0 || base64_encode(b) != s) { return none; }
+    return b;
+}
+
+// Note text: non-empty, ends with a newline, no ASCII control character
+// (below U+0020) but newline, which is the format's rule for a whole
+// note. DEL and the C1 controls are not among them.
+Bool sn_text_ok(Str t) {
+    List(Int) b = bytes_of(t);
+    if (b.len() == 0 || b[b.len() - 1] != 10) { return false; }
+    return sn_text_bytes(b, 0);
+}
+
+Bool sn_text_bytes(List(Int) b, Int i) {
+    if (i >= b.len()) { return true; }
+    if (b[i] < 32 && b[i] != 10) { return false; }
+    return sn_text_bytes(b, i + 1);
+}
+
+// A decimal without sign or leading zeros, below 2^63 (at most 18 digits
+// always fits; 19 digits is checked against the bound).
+Option(Int) sn_decimal(Str s) {
+    List(Int) b = bytes_of(s);
+    if (b.len() == 0 || b.len() > 19) { return None; }
+    if (b[0] == 48 && b.len() > 1) { return None; }
+    return sn_digits(b, 0, 0);
+}
+
+Option(Int) sn_digits(List(Int) b, Int i, Int acc) {
+    if (i >= b.len()) { return Some(acc); }
+    if (b[i] < 48 || b[i] > 57) { return None; }
+    Int d = b[i] - 48;
+    if (acc > (9223372036854775807 - d) / 10) { return None; }
+    return sn_digits(b, i + 1, acc * 10 + d);
+}
+
+/// The names of the keys in `keys` whose signature on the note verifies,
+/// each name once. A signature line naming no key in `keys` (by both name
+/// and ID) is ignored, as the specification requires; a line from a known
+/// key that fails makes the whole note fail (None), and so does a key on
+/// two lines. A key is a name and an ID: several keys may share a name
+/// and all sign (c2sp.org/tlog-checkpoint), and they count as that one
+/// name. Only Ed25519 keys (kind 1) are checked here.
+pub Option(List(Str)) note_verified(Note n, List(NoteKey) keys) {
+    List(Str) none = [];
+    List(Int) seen = [];
+    return sn_check(n, keys, 0, seen, none);
+}
+
+// `seen` holds the indexes of the keys already met, `acc` their names.
+Option(List(Str)) sn_check(Note n, List(NoteKey) keys, Int i, List(Int) seen, List(Str) acc) {
+    if (i >= n.sigs.len()) { return Some(acc); }
+    NoteSig s = n.sigs[i];
+    Int k = sn_find_key(keys, s, 1, 0);
+    if (k < 0) { return sn_check(n, keys, i + 1, seen, acc); }
+    if (sn_seen(seen, k, 0)) { return None; }
+    if (!verify_sig_bytes(bytes_of(n.text), s.sig, keys[k].pubk)) { return None; }
+    return sn_check(n, keys, i + 1, seen.concat([k]), sn_add_name(acc, s.name));
+}
+
+Bool sn_seen(List(Int) xs, Int x, Int i) {
+    if (i >= xs.len()) { return false; }
+    if (xs[i] == x) { return true; }
+    return sn_seen(xs, x, i + 1);
+}
+
+List(Str) sn_add_name(List(Str) names, Str name) {
+    if (sn_has(names, name, 0)) { return names; }
+    return names.concat([name]);
+}
+
+// The index of the key of kind `kind` matching the line by name and ID.
+Int sn_find_key(List(NoteKey) keys, NoteSig s, Int kind, Int i) {
+    if (i >= keys.len()) { return 0 - 1; }
+    NoteKey k = keys[i];
+    if (k.kind == kind && k.name == s.name && note_key_id(k) == s.id) { return i; }
+    return sn_find_key(keys, s, kind, i + 1);
+}
+
+Bool sn_has(List(Str) xs, Str x, Int i) {
+    if (i >= xs.len()) { return false; }
+    if (xs[i] == x) { return true; }
+    return sn_has(xs, x, i + 1);
+}
+
+/// The checkpoint in `note`, if the log's key signed it: the note parses,
+/// the log key's signature verifies (and no known key's fails), and the
+/// text is a canonical checkpoint whose origin is the log key's name.
+pub Option(Checkpoint) ckpt_open(Str note, NoteKey log) {
+    return match note_parse(note) {
+        Some(n) => ckpt_open_n(n, log),
+        None => None,
+    };
+}
+
+/// ckpt_open on the note's bytes as received (note_parse_bytes).
+pub Option(Checkpoint) ckpt_open_bytes(List(Int) note, NoteKey log) {
+    return match note_parse_bytes(note) {
+        Some(n) => ckpt_open_n(n, log),
+        None => None,
+    };
+}
+
+Option(Checkpoint) ckpt_open_n(Note n, NoteKey log) {
+    List(NoteKey) keys = [log];
+    Bool signed = match note_verified(n, keys) { Some(names) => names.len() == 1, None => false, };
+    if (!signed) { return None; }
+    return match ckpt_parse(n.text) {
+        Some(c) => ckpt_origin_is(c, log.name),
+        None => None,
+    };
+}
+
+Option(Checkpoint) ckpt_origin_is(Checkpoint c, Str name) {
+    if (c.origin == name) { return Some(c); }
+    return None;
+}
+
+// ─── Witness cosignatures (c2sp.org/tlog-cosignature) ───────────────
+
+/// The message a witness signs for cosignature/v1 (Ed25519): the header
+/// lines "cosignature/v1" and "time <t>", then the whole checkpoint as its
+/// note text has it -- origin, size, root and every extension line, in
+/// order. (c2sp.org/tlog-cosignature; a cosigner makes no statement about
+/// what the extension lines mean, but its signature covers them.)
+pub List(Int) cosig_message(Checkpoint c, Int t) {
+    Str m = "cosignature/v1\ntime " + f"{t}" + "\n" + ckpt_text(c);
+    return bytes_of(m);
+}
+
+/// A witness's cosignature line for `c` at time `t` (seconds since the
+/// epoch): the 8-byte big-endian time, then the Ed25519 signature.
+pub Str cosig_line(Checkpoint c, Int t, Str name, List(Int) seed) {
+    NoteKey k = NoteKey {.name = name, .kind = 4, .pubk = pub_key(seed)};
+    List(Int) sig = sign_msg_bytes(seed, cosig_message(c, t));
+    return note_sig_line(name, note_key_id(k), cs_be64(t).concat(sig));
+}
+
+List(Int) cs_be64(Int t) { return cs_be64_at(t, 56, ListBuf()); }
+
+List(Int) cs_be64_at(Int t, Int sh, ListBuf(Int) acc) {
+    if (sh < 0) { return acc.finish(); }
+    return cs_be64_at(t, sh - 8, acc.push((t >> sh) & 255));
+}
+
+Int cs_read_be64(List(Int) b, Int i, Int acc) {
+    if (i >= 8) { return acc; }
+    return cs_read_be64(b, i + 1, (acc << 8) | b[i]);
+}
+
+/// The checkpoint in `note` when the log signed it and at least
+/// `threshold` distinct witnesses of `witnesses` (kind 4 keys) cosigned
+/// it with a time no later than `now`. A cosignature from a listed
+/// witness key that fails, or one key (name and ID) on two lines, rejects
+/// the note. Witnesses are counted by name: a witness with several listed
+/// keys may cosign with each, and counts once.
+pub Option(Checkpoint) ckpt_cosigned(Str note, NoteKey log, List(NoteKey) witnesses, Int threshold, Int now) {
+    return match note_parse(note) {
+        Some(n) => ckpt_cosigned_n(n, log, witnesses, threshold, now),
+        None => None,
+    };
+}
+
+/// ckpt_cosigned on the note's bytes as received (note_parse_bytes).
+pub Option(Checkpoint) ckpt_cosigned_bytes(List(Int) note, NoteKey log, List(NoteKey) witnesses, Int threshold, Int now) {
+    return match note_parse_bytes(note) {
+        Some(n) => ckpt_cosigned_n(n, log, witnesses, threshold, now),
+        None => None,
+    };
+}
+
+Option(Checkpoint) ckpt_cosigned_n(Note n, NoteKey log, List(NoteKey) w, Int threshold, Int now) {
+    return match ckpt_open_n(n, log) {
+        Some(cp) => cs_enough(cp, cs_check(n, cp, w, now, 0, cs_seen(), cs_none()), threshold),
+        None => None,
+    };
+}
+
+List(Str) cs_none() { List(Str) none = []; return none; }
+List(Int) cs_seen() { List(Int) none = []; return none; }
+
+Option(Checkpoint) cs_enough(Checkpoint cp, Option(List(Str)) got, Int threshold) {
+    Bool ok = match got { Some(names) => names.len() >= threshold, None => false, };
+    if (ok) { return Some(cp); }
+    return None;
+}
+
+Option(List(Str)) cs_check(Note n, Checkpoint c, List(NoteKey) w, Int now, Int i, List(Int) seen, List(Str) acc) {
+    if (i >= n.sigs.len()) { return Some(acc); }
+    NoteSig s = n.sigs[i];
+    Int k = sn_find_key(w, s, 4, 0);
+    if (k < 0) { return cs_check(n, c, w, now, i + 1, seen, acc); }
+    if (sn_seen(seen, k, 0) || s.sig.len() != 72) { return None; }
+    Int t = cs_read_be64(s.sig, 0, 0);
+    if (t < 0 || t > now) { return None; }
+    if (!verify_sig_bytes(cosig_message(c, t), s.sig[8..72], w[k].pubk)) { return None; }
+    return cs_check(n, c, w, now, i + 1, seen.concat([k]), sn_add_name(acc, s.name));
+}
