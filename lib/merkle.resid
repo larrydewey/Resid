@@ -227,8 +227,9 @@ Str ckpt_ext_text(List(Str) e, Int i, Str acc) {
     return ckpt_ext_text(e, i + 1, acc + e[i] + "\n");
 }
 
-/// The checkpoint in a note text, or None unless it is canonical: a
-/// non-empty origin, a decimal size without sign or leading zeros (below
+/// The checkpoint in a note text, or None unless it is canonical: an
+/// origin that is a name (c2sp.org/tlog-cosignature: non-empty, at most
+/// 255 bytes, no white space and no '+'), a decimal size without sign or leading zeros (below
 /// 2^63), a canonical base64 SHA-256 root, extension lines that are
 /// non-empty, and a final newline with no ASCII control characters. The text
 /// must be exact UTF-8 (sn_exact).
@@ -238,7 +239,7 @@ pub Option(Checkpoint) ckpt_parse(Str text) {
     // A text ending in "\n" splits with a final empty piece.
     Int n = lines.len() - 1;
     if (n < 3 || lines[n] != "") { return None; }
-    if (lines[0] == "") { return None; }
+    if (!sn_name_ok(lines[0]) || bytes_of(lines[0]).len() > 255) { return None; }
     Option(Int) size = sn_decimal(lines[1]);
     List(Int) root = sn_b64(lines[2]);
     if (root.len() != 32) { return None; }

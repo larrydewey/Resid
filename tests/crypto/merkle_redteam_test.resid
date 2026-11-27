@@ -170,3 +170,26 @@ test "dc3-merkle-2: a threshold counts distinct witness names, not lines" {
     // One key on two lines is refused.
     expect(rt_cosigned_by([10, 10, 12], wit, 1)).toBeFalse();
 }
+
+// dc3-merkle-3: an origin is a name as a cosigner's is
+// (c2sp.org/tlog-cosignature): no white space, no '+', at most 255 bytes.
+Bool rt_origin_parses(Str origin) {
+    Str text = origin + "\n7\n" + base64_encode(sha256_bytes([7])) + "\n";
+    return match ckpt_parse(text) { Some(c) => c.origin == origin && c.size == 7, None => false };
+}
+
+test "dc3-merkle-3: ckpt_parse refuses an origin with white space or '+', or over 255 bytes" {
+    expect(rt_origin_parses("log.example/a")).toBeTrue();
+    expect(rt_origin_parses("журнал.example")).toBeTrue();
+    expect(rt_origin_parses("log example")).toBeFalse();
+    expect(rt_origin_parses(" log.example")).toBeFalse();
+    expect(rt_origin_parses("log.example ")).toBeFalse();
+    expect(rt_origin_parses("log+example")).toBeFalse();
+    expect(rt_origin_parses("log" + str_from_code(160) + "example")).toBeFalse();
+    expect(rt_origin_parses("log" + str_from_code(8232) + "example")).toBeFalse();
+    expect(rt_origin_parses(str_repeat("a", 255))).toBeTrue();
+    expect(rt_origin_parses(str_repeat("a", 256))).toBeFalse();
+    // 255 is a count of bytes: 128 two-byte letters are 256.
+    expect(rt_origin_parses(str_repeat("ж", 127) + "a")).toBeTrue();
+    expect(rt_origin_parses(str_repeat("ж", 128))).toBeFalse();
+}
