@@ -764,7 +764,10 @@ List(Int) md_sign_loop(MldsaParams p, List(List(List(Secret(Int(32))))) a, List(
     ListBuf(List(Secret(Int(32)))) lb59 = ListBuf();
     ListBuf(List(Secret(Int(32)))) lb60 = ListBuf();
     List(List(Secret(Int(32)))) h = md_vhint(md_vadd(r0, ct0, 0, lb59), w1, p.gamma2, 0, lb60);
-    if (mc_reveal(md_vsum(h, 0, none)) > p.omega) { return md_sign_loop(p, a, s1, s2, t0, mu, rhopp, kappa + p.l); }
+    // One verdict bit: the sign of omega minus the number of hints, not
+    // the number itself (which is a value of a rejected iteration).
+    Secret(Int(32)) omega = mc_lift(p.omega);
+    if (mc_reveal(mc_shr(mc_sub(omega, md_vsum(h, 0, none)), 31)) != 0) { return md_sign_loop(p, a, s1, s2, t0, mu, rhopp, kappa + p.l); }
     // Accepted: c~, z and h are the signature.
     ListBuf(Secret(UInt(8))) zb = ListBuf();
     ListBuf(Int) lb61 = ListBuf();
