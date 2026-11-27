@@ -398,6 +398,10 @@ pub EgPt(P) pc_commit(P v, P r) { return eg_add(eg_base_mul(v), eg_mul(r, pc_h()
 /// The commitment sum_i v_i·G_i + rH to a vector of values, given as the
 /// concatenation of their 32-byte little-endian encodings `vs` (bytes,
 /// so the values may be secret: a wide secret is never kept in a list).
+/// Each value and `r` must be a scalar in [0, l): all 256 bits of a value
+/// are used as they are, so v and v + l commit alike, and this generic
+/// code cannot branch on a scalar to refuse it. pc_open_vec makes the
+/// check.
 @needs(Wide512(P, B))
 pub EgPt(P) pc_commit_vec(List(B) vs, P r) {
     assert(vs.len() % 32 == 0, "pedersen: values are 32 bytes each");
@@ -427,6 +431,24 @@ pub Bool pc_open(EgPt(Int(512)) c, Int(512) v, Int(512) r) {
     Int(512) z = 0;
     if (v < z || v >= eg_l() || r < z || r >= eg_l()) { return false; }
     return r255_eq(c, pc_commit(v, r));
+}
+
+/// Whether the opening (vs, r) matches the public vector commitment `c`:
+/// `vs` is the values' 32-byte little-endian encodings, concatenated.
+/// False unless it is whole 32-byte values, each canonical
+/// (r255_sc_decode, so below l), and 0 <= r < l.
+pub Bool pc_open_vec(EgPt(Int(512)) c, List(Int) vs, Int(512) r) {
+    Int(512) z = 0;
+    if (vs.len() % 32 != 0 || r < z || r >= eg_l() || !pc_vec_canonical(vs, 0)) { return false; }
+    return r255_eq(c, pc_commit_vec(vs, r));
+}
+
+Bool pc_vec_canonical(List(Int) vs, Int i) {
+    if (32 * i >= vs.len()) { return true; }
+    return match r255_sc_decode(vs[32 * i..32 * i + 32]) {
+        Some(v) => pc_vec_canonical(vs, i + 1),
+        None => false,
+    };
 }
 
 /// pc_open on the 32-byte little-endian encodings of v and r, which must

@@ -44,3 +44,40 @@ test "DC-R255-1: pc_open_bytes takes canonical 32-byte scalars only" {
     expect(pc_open_bytes(c, rt_sc(v).concat([0]), rt_sc(r))).toBeFalse();
     expect(pc_open_bytes(c, rt_sc(r), rt_sc(v))).toBeFalse();
 }
+
+List(Int) rt_le(Int(512) s) {
+    ListBuf(Int) acc = ListBuf();
+    return eg_le_bytes(s, 32, 0, acc);
+}
+
+EgPt(Int(512)) rt_commit_vec(List(Int) vs, Int(512) r) { return pc_commit_vec(vs, r); }
+
+// dc2-r255-1: pc_commit_vec takes 32-byte values as they come, and scalar
+// multiplication reads all 256 bits of each, so v, v + l, v + 2l, ... (as
+// far as 32 bytes go) committed alike: about sixteen byte strings a value.
+test "dc2-r255-1: pc_open_vec refuses values or blinding outside [0, l)" {
+    Int(512) v0 = 5;
+    Int(512) v1 = 77;
+    Int(512) r = 123456789;
+    List(Int) vs = rt_sc(v0).concat(rt_sc(v1));
+    EgPt(Int(512)) c = rt_commit_vec(vs, r);
+    expect(pc_open_vec(c, vs, r)).toBeTrue();
+    // The same commitment from an unreduced value: refused as an opening.
+    List(Int) alias = rt_le(v0 + eg_l()).concat(rt_sc(v1));
+    expect(hex_encode(r255_encode(rt_commit_vec(alias, r))) == hex_encode(r255_encode(c))).toBeTrue();
+    expect(pc_open_vec(c, alias, r)).toBeFalse();
+    expect(pc_open_vec(c, rt_sc(v0).concat(rt_le(v1 + eg_l() + eg_l())), r)).toBeFalse();
+    expect(pc_open_vec(c, vs, r + eg_l())).toBeFalse();
+    expect(pc_open_vec(c, vs, r + rt_two_to(256))).toBeFalse();
+    expect(pc_open_vec(c, vs, r - eg_l())).toBeFalse();
+    // Not whole values, a value missing, values swapped, a wrong value.
+    expect(pc_open_vec(c, vs[0..63], r)).toBeFalse();
+    expect(pc_open_vec(c, vs.concat([0]), r)).toBeFalse();
+    expect(pc_open_vec(c, rt_sc(v0), r)).toBeFalse();
+    expect(pc_open_vec(c, rt_sc(v1).concat(rt_sc(v0)), r)).toBeFalse();
+    expect(pc_open_vec(c, rt_sc(v0).concat(rt_sc(v1 + (Int(512)) 1)), r)).toBeFalse();
+    expect(pc_open_vec(c, vs.with(3, 256), r)).toBeFalse();
+    // No values at all: the commitment is rH.
+    List(Int) none = [];
+    expect(pc_open_vec(rt_commit_vec(none, r), none, r)).toBeTrue();
+}
