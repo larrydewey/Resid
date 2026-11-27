@@ -445,7 +445,8 @@ pub Bool pc_open(EgPt(Int(512)) c, Int(512) v, Int(512) r) {
 /// canonical (r255_sc_decode, so below l), and 0 <= r < l.
 pub Bool pc_open_vec(EgPt(Int(512)) c, Int n, List(Int) vs, Int(512) r) {
     Int(512) z = 0;
-    if (n < 0 || vs.len() != 32 * n || r < z || r >= eg_l() || !pc_vec_canonical(vs, 0)) { return false; }
+    // (A division: 32 * n overflows for a count of 2^58 or more.)
+    if (n < 0 || vs.len() % 32 != 0 || vs.len() / 32 != n || r < z || r >= eg_l() || !pc_vec_canonical(vs, 0)) { return false; }
     return r255_eq(c, pc_commit_vec(vs, r));
 }
 

@@ -102,3 +102,15 @@ test "dc3-r255-1: pc_open_vec takes the number of values it expects" {
     expect(pc_open_vec(c, 0 - 1, vs, r)).toBeFalse();
     expect(pc_open_vec(c, 1, rt_sc(v0), r)).toBeFalse();
 }
+
+// dc4-r255-1: the length test multiplied the count by 32, and a count of
+// 2^58 or more overflowed (an abort in checked arithmetic, not false).
+test "dc4-r255-1: pc_open_vec returns false for a count too large to multiply" {
+    Int(512) r = 123456789;
+    List(Int) vs = rt_sc(r).concat(rt_sc(r));
+    EgPt(Int(512)) c = rt_commit_vec(vs, r);
+    expect(pc_open_vec(c, 288230376151711744, vs, r)).toBeFalse();
+    expect(pc_open_vec(c, 4611686018427387904, vs, r)).toBeFalse();
+    expect(pc_open_vec(c, 9223372036854775807, vs, r)).toBeFalse();
+    expect(pc_open_vec(c, 2, vs, r)).toBeTrue();
+}
