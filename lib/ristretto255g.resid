@@ -1,0 +1,417 @@
+// ristretto255g.resid — the ristretto255 prime-order group (RFC 9496) and
+// Pedersen commitments over it, written once and generic over
+// lib/word.resid's Wide512(P, B) like lib/ed25519g.resid, whose field and
+// Edwards point arithmetic it uses: one implementation for public values
+// (P = Int(512), B = Int) and for secret ones (Secret(Int(512)),
+// Secret(UInt(8))), whose copy the compiler checks (spec §48).
+//
+// A ristretto255 element is an Edwards25519 point in extended coordinates
+// (EgPt), standing for its class modulo the 8-torsion; elements compare
+// with r255_eq, never coordinate by coordinate, and leave only as their
+// canonical 32-byte encoding. Decoding refuses every non-canonical
+// encoding (RFC 9496 §4.3.1), so two equal elements always have the same
+// bytes.
+//
+// Every field operation is branch-free: the square root ratio, CT_ABS and
+// the selections of the encoder and the one-way map use p_sign masks, so
+// at secret types no branch, index or comparison depends on a coordinate.
+// Encodings computed from secrets (a commitment, a public key) leave
+// through Publish(B), so the secret copy needs @requires(declassify).
+// Decoding takes public bytes and answers a public Bool.
+//
+// Scalars are integers mod l = 2^252 + 27742317777372353535851937790883648493,
+// kept below l. Scalar multiplication is ed25519g's fixed-window ladder
+// (eg_mul): every window costs four doublings, one addition and a masked
+// read of the whole table.
+//
+// Pedersen commitments: C = vG + rH, with G the ristretto255 generator and
+// H = r255_from_uniform(SHA-512("resid/pedersen/H/v1")), a hash to the
+// group, so nobody knows log_G H. Vector commitments use
+// G_i = r255_from_uniform(SHA-512("resid/pedersen/G/v1" || le32(i))).
+// Commitments are hiding (r uniform) and binding under discrete log.
+
+import "word.resid";
+import "crypto.resid";
+import "ed25519g.resid";
+
+// ─── Constants (RFC 9496 §4.1) ──────────────────────────────────────
+
+/// sqrt(-1) mod p, the non-negative root.
+pub Int(512) r255_sqrt_m1() { return 19681161376707505956807079304988542015446066515923890162744021073123829784752; }
+/// sqrt(a*d - 1) mod p, as RFC 9496 fixes it (a = -1).
+pub Int(512) r255_sqrt_ad_minus_one() { return 25063068953384623474111414158702152701244531502492656460079210482610430750235; }
+/// 1/sqrt(a - d) mod p.
+pub Int(512) r255_invsqrt_a_minus_d() { return 54469307008909316920995813868745141605393597292927456921205312896311721017578; }
+/// 1 - d^2 mod p.
+pub Int(512) r255_one_minus_d_sq() { return 1159843021668779879193775521855586647937357759715417654439879720876111806838; }
+/// (d - 1)^2 mod p.
+pub Int(512) r255_d_minus_one_sq() { return 40440834346308536858101042469323190826248399146238708352240133220865137265952; }
+
+// ─── Field helpers, branch-free ─────────────────────────────────────
+
+// All ones when a == b (both below p), else 0: the sign of (a-b) | (b-a)
+// is set exactly when they differ.
+@needs(Wide512(P, B))
+P r255_eqm(P a, P b) {
+    P ones = p_lift((Int(512)) 0 - (Int(512)) 1);
+    P d = p_sub(a, b);
+    return p_xor(p_sign(p_or(d, p_sub(b, a))), ones);
+}
+
+// All ones when x (below p) is negative in RFC 9496's sense: odd.
+@needs(Wide512(P, B))
+P r255_negm(P x) {
+    P one = p_lift((Int(512)) 1);
+    P z = p_lift((Int(512)) 0);
+    return p_sub(z, p_and(x, one));
+}
+
+// a when m is all ones, b when it is zero.
+@needs(Wide512(P, B))
+P r255_sel(P m, P a, P b) {
+    P ones = p_lift((Int(512)) 0 - (Int(512)) 1);
+    return p_or(p_and(a, m), p_and(b, p_xor(m, ones)));
+}
+
+// -x mod p.
+@needs(Wide512(P, B))
+P r255_fneg(P x) {
+    P z = p_lift((Int(512)) 0);
+    return eg_fsub(z, x);
+}
+
+// CT_ABS: x when it is non-negative, else -x.
+@needs(Wide512(P, B))
+P r255_abs(P x) { return r255_sel(r255_negm(x), r255_fneg(x), x); }
+
+// a^((p - 5) / 8) = a^(2^252 - 3) = (a^(2^250 - 1))^4 * a, by ref10's
+// fixed addition chain: no step depends on a.
+@needs(Wide512(P, B))
+P r255_pow_p58(P a) {
+    P a250 = r255_a250(a);
+    return eg_fmul(eg_fmul(eg_fmul(a250, a250), eg_fmul(a250, a250)), a);
+}
+
+// a^(2^250 - 1), by ref10's fixed addition chain.
+@needs(Wide512(P, B))
+P r255_a250(P a) {
+    P a2 = eg_fmul(a, a);
+    P a9 = eg_fmul(a, r255_sqn(a2, 2));
+    P a11 = eg_fmul(a2, a9);
+    P e5 = eg_fmul(a9, eg_fmul(a11, a11));
+    P e10 = eg_fmul(r255_sqn(e5, 5), e5);
+    P e20 = eg_fmul(r255_sqn(e10, 10), e10);
+    P e40 = eg_fmul(r255_sqn(e20, 20), e20);
+    P e50 = eg_fmul(r255_sqn(e40, 10), e10);
+    P e100 = eg_fmul(r255_sqn(e50, 50), e50);
+    P e200 = eg_fmul(r255_sqn(e100, 100), e100);
+    return eg_fmul(r255_sqn(e200, 50), e50);
+}
+
+// a squared n times (n public).
+@needs(Wide512(P, B))
+P r255_sqn(P a, Int n) {
+    if (n <= 0) { return a; }
+    return r255_sqn(eg_fmul(a, a), n - 1);
+}
+
+/// The result of SQRT_RATIO_M1: whether u/v was a square (all ones) or
+/// not (0), and the non-negative root of u/v, or of sqrt(-1)·u/v when
+/// u/v was not a square.
+type R255Root(P) = { P square; P r; };
+
+/// SQRT_RATIO_M1(u, v) of RFC 9496 §4.2, branch-free.
+@needs(Wide512(P, B))
+pub R255Root(P) r255_sqrt_ratio_m1(P u, P v) {
+    P sm1 = p_lift(r255_sqrt_m1());
+    P v3 = eg_fmul(eg_fmul(v, v), v);
+    P v7 = eg_fmul(eg_fmul(v3, v3), v);
+    P r = eg_fmul(eg_fmul(u, v3), r255_pow_p58(eg_fmul(u, v7)));
+    P check = eg_fmul(v, eg_fmul(r, r));
+    P nu = r255_fneg(u);
+    P correct = r255_eqm(check, u);
+    P flipped = r255_eqm(check, nu);
+    P flipped_i = r255_eqm(check, eg_fmul(nu, sm1));
+    P r2 = r255_sel(p_or(flipped, flipped_i), eg_fmul(r, sm1), r);
+    return R255Root {.square = p_or(correct, flipped), .r = r255_abs(r2)};
+}
+
+// ─── Elements ───────────────────────────────────────────────────────
+
+/// The ristretto255 generator (Ed25519's base point).
+@needs(Wide512(P, B))
+pub EgPt(P) r255_base() { return eg_base(); }
+
+/// The identity element.
+@needs(Wide512(P, B))
+pub EgPt(P) r255_identity() { return eg_id(); }
+
+/// The sum of two elements.
+@needs(Wide512(P, B))
+pub EgPt(P) r255_add(EgPt(P) a, EgPt(P) b) { return eg_add(a, b); }
+
+/// The negation of an element.
+@needs(Wide512(P, B))
+pub EgPt(P) r255_neg(EgPt(P) a) {
+    return EgPt {.x = r255_fneg(a.x), .y = a.y, .z = a.z, .t = r255_fneg(a.t)};
+}
+
+/// The difference of two elements.
+@needs(Wide512(P, B))
+pub EgPt(P) r255_sub(EgPt(P) a, EgPt(P) b) { return eg_add(a, r255_neg(b)); }
+
+/// [k]a for a scalar 0 <= k < 2^256, in constant time.
+@needs(Wide512(P, B))
+pub EgPt(P) r255_mul(P k, EgPt(P) a) { return eg_mul(k, a); }
+
+/// [k]G for a scalar 0 <= k < 2^256, in constant time.
+@needs(Wide512(P, B))
+pub EgPt(P) r255_base_mul(P k) { return eg_base_mul(k); }
+
+/// All ones when the two elements are equal (RFC 9496 §4.3.3: x1·y2 ==
+/// y1·x2 or y1·y2 == x1·x2), else 0.
+@needs(Wide512(P, B))
+pub P r255_eq_mask(EgPt(P) a, EgPt(P) b) {
+    P e1 = r255_eqm(eg_fmul(a.x, b.y), eg_fmul(a.y, b.x));
+    P e2 = r255_eqm(eg_fmul(a.y, b.y), eg_fmul(a.x, b.x));
+    return p_or(e1, e2);
+}
+
+/// The canonical 32-byte encoding of an element (RFC 9496 §4.3.2),
+/// branch-free, as B bytes (secret at secret types).
+@needs(Wide512(P, B))
+pub List(B) r255_encode_b(EgPt(P) e) {
+    P one = p_lift((Int(512)) 1);
+    P sm1 = p_lift(r255_sqrt_m1());
+    P u1 = eg_fmul(eg_fadd(e.z, e.y), eg_fsub(e.z, e.y));
+    P u2 = eg_fmul(e.x, e.y);
+    R255Root(P) inv = r255_sqrt_ratio_m1(one, eg_fmul(u1, eg_fmul(u2, u2)));
+    P den1 = eg_fmul(inv.r, u1);
+    P den2 = eg_fmul(inv.r, u2);
+    P z_inv = eg_fmul(eg_fmul(den1, den2), e.t);
+    P ix0 = eg_fmul(e.x, sm1);
+    P iy0 = eg_fmul(e.y, sm1);
+    P enchanted = eg_fmul(den1, p_lift(r255_invsqrt_a_minus_d()));
+    P rotate = r255_negm(eg_fmul(e.t, z_inv));
+    P x = r255_sel(rotate, iy0, e.x);
+    P y0 = r255_sel(rotate, ix0, e.y);
+    P den_inv = r255_sel(rotate, enchanted, den2);
+    P y = r255_sel(r255_negm(eg_fmul(x, z_inv)), r255_fneg(y0), y0);
+    P s = r255_abs(eg_fmul(den_inv, eg_fsub(e.z, y)));
+    ListBuf(B) acc = ListBuf();
+    return eg_le_bytes(s, 32, 0, acc);
+}
+
+/// The canonical encoding of an element as public bytes: a copy at public
+/// types, a declassification at secret ones (@requires(declassify)).
+@needs(Wide512(P, B), Publish(B))
+pub List(Int) r255_encode_g(EgPt(P) e) { return w_publish(r255_encode_b(e)); }
+
+/// The element whose canonical encoding is `b`, if `b` is one (RFC 9496
+/// §4.3.1): 32 bytes, s below p and non-negative, u2·v a square, t
+/// non-negative and y non-zero. None for anything else.
+pub Option(EgPt(Int(512))) r255_decode(List(Int) b) {
+    if (b.len() != 32) { return None; }
+    if (!r255_bytes_ok(b, 0)) { return None; }
+    Int(512) z = 0;
+    Int(512) s = eg_le(b, 0, 32, 0, z);
+    if (s >= eg_p() || (s & (Int(512)) 1) == (Int(512)) 1) { return None; }
+    Int(512) one = 1;
+    Int(512) ss = eg_fmul(s, s);
+    Int(512) u1 = eg_fsub(one, ss);
+    Int(512) u2 = eg_fadd(one, ss);
+    Int(512) u2_sqr = eg_fmul(u2, u2);
+    Int(512) v = eg_fsub(r255_fneg(eg_fmul(eg_d(), eg_fmul(u1, u1))), u2_sqr);
+    R255Root(Int(512)) inv = r255_sqrt_ratio_m1(one, eg_fmul(v, u2_sqr));
+    Int(512) den_x = eg_fmul(inv.r, u2);
+    Int(512) den_y = eg_fmul(eg_fmul(inv.r, den_x), v);
+    Int(512) x = r255_abs(eg_fmul(eg_fadd(s, s), den_x));
+    Int(512) y = eg_fmul(u1, den_y);
+    Int(512) t = eg_fmul(x, y);
+    if (inv.square == z || (t & (Int(512)) 1) == (Int(512)) 1 || y == z) { return None; }
+    return Some(EgPt {.x = x, .y = y, .z = one, .t = t});
+}
+
+// Every byte is a byte (0..255).
+Bool r255_bytes_ok(List(Int) b, Int i) {
+    if (i >= b.len()) { return true; }
+    if (b[i] < 0 || b[i] > 255) { return false; }
+    return r255_bytes_ok(b, i + 1);
+}
+
+/// MAP(t) of RFC 9496 §4.3.4: the Elligator map of a field element onto
+/// the group, branch-free.
+@needs(Wide512(P, B))
+pub EgPt(P) r255_map(P t) {
+    P one = p_lift((Int(512)) 1);
+    P d = p_lift(eg_d());
+    P sm1 = p_lift(r255_sqrt_m1());
+    P r = eg_fmul(sm1, eg_fmul(t, t));
+    P u = eg_fmul(eg_fadd(r, one), p_lift(r255_one_minus_d_sq()));
+    P v = eg_fmul(eg_fsub(r255_fneg(one), eg_fmul(r, d)), eg_fadd(r, d));
+    R255Root(P) sr = r255_sqrt_ratio_m1(u, v);
+    P s_prime = r255_fneg(r255_abs(eg_fmul(sr.r, t)));
+    P s = r255_sel(sr.square, sr.r, s_prime);
+    P c = r255_sel(sr.square, r255_fneg(one), r);
+    P n = eg_fsub(eg_fmul(eg_fmul(c, eg_fsub(r, one)), p_lift(r255_d_minus_one_sq())), v);
+    P ss = eg_fmul(s, s);
+    P w0 = eg_fmul(eg_fadd(s, s), v);
+    P w1 = eg_fmul(n, p_lift(r255_sqrt_ad_minus_one()));
+    P w2 = eg_fsub(one, ss);
+    P w3 = eg_fadd(one, ss);
+    return EgPt {.x = eg_fmul(w0, w3), .y = eg_fmul(w2, w1), .z = eg_fmul(w1, w3), .t = eg_fmul(w0, w2)};
+}
+
+// The 32 bytes at off as a field element: bit 255 masked off, then
+// reduced below p (RFC 9496 §4.3.4).
+@needs(Wide512(P, B))
+P r255_fe_of(List(B) b, Int off) {
+    P z = p_lift((Int(512)) 0);
+    P m255 = p_lift(((Int(512)) 1 << (Int(512)) 255) - (Int(512)) 1);
+    P pp = p_lift(eg_p());
+    P v = p_and(eg_le(b, off, 32, 0, z), m255);
+    P d = p_sub(v, pp);
+    return r255_sel(p_sign(d), v, d);
+}
+
+/// The element of 64 uniform bytes (RFC 9496 §4.3.4's one-way map):
+/// MAP of each half, added. The input may be secret.
+@needs(Wide512(P, B))
+pub EgPt(P) r255_from_uniform(List(B) b) {
+    assert(b.len() == 64, "ristretto255: from_uniform takes 64 bytes");
+    return eg_add(r255_map(r255_fe_of(b, 0)), r255_map(r255_fe_of(b, 32)));
+}
+
+// ─── Scalars mod l ──────────────────────────────────────────────────
+
+/// The scalar of 32 little-endian bytes, if it is canonical (below l).
+pub Option(Int(512)) r255_sc_decode(List(Int) b) {
+    if (b.len() != 32 || !r255_bytes_ok(b, 0)) { return None; }
+    Int(512) z = 0;
+    Int(512) s = eg_le(b, 0, 32, 0, z);
+    if (s >= eg_l()) { return None; }
+    return Some(s);
+}
+
+/// The 32 little-endian bytes of a scalar below l.
+@needs(Wide512(P, B))
+pub List(B) r255_sc_encode_b(P s) {
+    ListBuf(B) acc = ListBuf();
+    return eg_le_bytes(s, 32, 0, acc);
+}
+
+/// 64 bytes reduced mod l (uniform scalars from a hash).
+@needs(Wide512(P, B))
+pub P r255_sc_reduce64(List(B) b) { return eg_digest_mod_l(b); }
+
+/// a + b mod l, for a and b below l; branch-free.
+@needs(Wide512(P, B))
+pub P r255_sc_add(P a, P b) {
+    P ll = p_lift(eg_l());
+    P s = p_add(a, b);
+    P d = p_sub(s, ll);
+    return r255_sel(p_sign(d), s, d);
+}
+
+/// a - b mod l, for a and b below l; branch-free.
+@needs(Wide512(P, B))
+pub P r255_sc_sub(P a, P b) {
+    P ll = p_lift(eg_l());
+    P s = p_add(p_sub(a, b), ll);
+    P d = p_sub(s, ll);
+    return r255_sel(p_sign(d), s, d);
+}
+
+/// -a mod l, for a below l.
+@needs(Wide512(P, B))
+pub P r255_sc_neg(P a) {
+    P z = p_lift((Int(512)) 0);
+    return r255_sc_sub(z, a);
+}
+
+/// a * b mod l, for a and b below l; branch-free (a 506-bit product
+/// folded one bit at a time).
+@needs(Wide512(P, B))
+pub P r255_sc_mul(P a, P b) {
+    P z = p_lift((Int(512)) 0);
+    return eg_fold_l(z, p_mul(a, b), 505);
+}
+
+/// a^-1 mod l (a^(l - 2)); 0 for 0. The exponent is public.
+@needs(Wide512(P, B))
+pub P r255_sc_inv(P a) {
+    P one = p_lift((Int(512)) 1);
+    return r255_sc_pow(one, a, eg_l() - (Int(512)) 2, 252);
+}
+
+@needs(Wide512(P, B))
+P r255_sc_pow(P res, P base, Int(512) e, Int i) {
+    if (i < 0) { return res; }
+    P rs = r255_sc_mul(res, res);
+    if (((e >> (Int(512)) i) & (Int(512)) 1) == (Int(512)) 1) {
+        return r255_sc_pow(r255_sc_mul(rs, base), base, e, i - 1);
+    }
+    return r255_sc_pow(rs, base, e, i - 1);
+}
+
+// ─── Pedersen commitments ───────────────────────────────────────────
+
+/// The domain-separation label of the Pedersen generator H.
+pub Str pc_h_label() { return "resid/pedersen/H/v1"; }
+
+/// The Pedersen generator H: a hash to the group, so its discrete log to
+/// G is unknown.
+@needs(Wide512(P, B))
+pub EgPt(P) pc_h() {
+    ListBuf(B) acc = ListBuf();
+    return r255_from_uniform(r255_lift_bytes(sha512_bytes(bytes_of(pc_h_label())), 0, acc));
+}
+
+/// The i-th generator of vector commitments: from_uniform of
+/// SHA-512("resid/pedersen/G/v1" || le32(i)).
+@needs(Wide512(P, B))
+pub EgPt(P) pc_g(Int i) {
+    List(Int) le = [i & 255, (i >> 8) & 255, (i >> 16) & 255, (i >> 24) & 255];
+    ListBuf(B) acc = ListBuf();
+    return r255_from_uniform(r255_lift_bytes(sha512_bytes(bytes_of("resid/pedersen/G/v1").concat(le)), 0, acc));
+}
+
+// Public bytes taking part in a computation on B.
+@needs(Wide512(P, B))
+List(B) r255_lift_bytes(List(Int) bs, Int i, ListBuf(B) acc) {
+    if (i >= bs.len()) { return acc.finish(); }
+    P v = p_lift((Int(512)) (bs[i] & 255));
+    return r255_lift_bytes(bs, i + 1, acc.push(p_byte(v, 0)));
+}
+
+/// The commitment vG + rH to the value `v` with blinding `r` (scalars
+/// below l; secret at secret types). Constant time in both.
+@needs(Wide512(P, B))
+pub EgPt(P) pc_commit(P v, P r) { return eg_add(eg_base_mul(v), eg_mul(r, pc_h())); }
+
+/// The commitment sum_i v_i·G_i + rH to a vector of values, given as the
+/// concatenation of their 32-byte little-endian encodings `vs` (bytes,
+/// so the values may be secret: a wide secret is never kept in a list).
+@needs(Wide512(P, B))
+pub EgPt(P) pc_commit_vec(List(B) vs, P r) {
+    assert(vs.len() % 32 == 0, "pedersen: values are 32 bytes each");
+    return pc_vec_at(vs, 0, eg_mul(r, pc_h()));
+}
+
+@needs(Wide512(P, B))
+EgPt(P) pc_vec_at(List(B) vs, Int i, EgPt(P) acc) {
+    if (32 * i >= vs.len()) { return acc; }
+    P z = p_lift((Int(512)) 0);
+    return pc_vec_at(vs, i + 1, eg_add(acc, eg_mul(eg_le(vs, 32 * i, 32, 0, z), pc_g(i))));
+}
+
+// ─── The public copy ────────────────────────────────────────────────
+
+/// The canonical encoding of a public element.
+pub List(Int) r255_encode(EgPt(Int(512)) e) { return r255_encode_b(e); }
+
+/// Whether two public elements are equal.
+pub Bool r255_eq(EgPt(Int(512)) a, EgPt(Int(512)) b) { return r255_eq_mask(a, b) != (Int(512)) 0; }
+
+/// Whether the opening (v, r) matches the public commitment `c`.
+pub Bool pc_open(EgPt(Int(512)) c, Int(512) v, Int(512) r) { return r255_eq(c, pc_commit(v, r)); }

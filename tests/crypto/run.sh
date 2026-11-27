@@ -231,5 +231,18 @@ x="$(printf '%s' "$summary" | sed -n 's/.*fail=\([0-9]*\).*/\1/p')"
 if [ -z "$summary" ]; then fail=$((fail + 1)); echo "FAIL merkleprobe did not finish"; printf '%s\n' "$out" | tail -3;
 else pass=$((pass + p)); fail=$((fail + x)); [ "$x" = 0 ] || printf '%s\n' "$out" | grep '^FAIL' | head -5 | cut -c1-200; fi
 
+# ristretto255 and Pedersen commitments (lib/ristretto255g.resid's public
+# copy) against libsodium (gen_ristretto.py): multiples of the generator,
+# canonical and junk encodings, the one-way map, addition, scalar
+# multiplication, scalar arithmetic mod l and Pedersen commitments.
+(cd "$ROOT" && "$COMPILER" tests/crypto/r255probe.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/r255probe") > "$W/build.log" 2>&1 || {
+    echo "FAIL build r255probe"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
+out="$("$W/r255probe" "$ROOT/tests/crypto/vectors_r255/r255.txt" 2>&1)"
+summary="$(printf '%s\n' "$out" | sed -n 's/^SUMMARY //p')"
+p="$(printf '%s' "$summary" | sed -n 's/.*pass=\([0-9]*\).*/\1/p')"
+x="$(printf '%s' "$summary" | sed -n 's/.*fail=\([0-9]*\).*/\1/p')"
+if [ -z "$summary" ]; then fail=$((fail + 1)); echo "FAIL r255probe did not finish"; printf '%s\n' "$out" | tail -3;
+else pass=$((pass + p)); fail=$((fail + x)); [ "$x" = 0 ] || printf '%s\n' "$out" | grep '^FAIL' | head -5 | cut -c1-200; fi
+
 echo "crypto: $pass passed, $fail failed ($files vector files)"
 [ "$fail" -eq 0 ]

@@ -1,0 +1,110 @@
+// r255probe.resid — runs tests/crypto/vectors_r255/r255.txt
+// (gen_ristretto.py: libsodium's ristretto255) through
+// lib/ristretto255g.resid's public copy: multiples of the generator,
+// decoding (canonical and junk), the one-way map, addition, scalar
+// multiplication, scalar arithmetic mod l and Pedersen commitments; the
+// one-way map and the commitments also at secret types.
+//
+//   r255probe <r255.txt>
+//
+// Prints "FAIL <line>" for each disagreement, then
+// "SUMMARY pass=<n> fail=<n> skip=0"; exit status 1 when anything failed.
+
+import "../../lib/ristretto255g.resid";
+
+Int nib(Int c) {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    return 0;
+}
+
+ListBuf(Int) unhex_acc(Str s, Int i, Int n, ListBuf(Int) acc) {
+    if (i + 1 >= n) { return acc; }
+    return unhex_acc(s, i + 2, n, acc.push(nib(str_char_at(s, i)) * 16 + nib(str_char_at(s, i + 1))));
+}
+
+List(Int) unhex(Str s) {
+    if (s == "-") { List(Int) none = []; return none; }
+    return unhex_acc(s, 0, str_len(s), ListBuf()).finish();
+}
+
+Int(512) le(List(Int) b) {
+    Int(512) z = 0;
+    return eg_le(b, 0, 32, 0, z);
+}
+
+EgPt(Int(512)) pt(Str h) {
+    return match r255_decode(unhex(h)) { Some(p) => p, None => eg_id(), };
+}
+
+Str enc(EgPt(Int(512)) p) { return hex_encode(r255_encode(p)); }
+
+Str sc_hex(Int(512) s) { return hex_encode(r255_sc_encode_b(s)); }
+
+Int(512) dec_int(Str s, Int i, Int(512) acc) {
+    if (i >= str_len(s)) { return acc; }
+    return dec_int(s, i + 1, acc * (Int(512)) 10 + (Int(512)) (str_char_at(s, i) - 48));
+}
+
+// The secret copy: the same commitment with v and r secret.
+@requires(declassify)
+Str secret_commit(Int(512) v, Int(512) r) {
+    Secret(Int(512)) vs = classify(v);
+    Secret(Int(512)) rs = classify(r);
+    return hex_encode(r255_encode_g(pc_commit(vs, rs)));
+}
+
+// The one-way map at secret bytes.
+@requires(declassify)
+Str secret_uniform(List(Int) b) {
+    return hex_encode(r255_encode_g(r255_from_uniform(secret_bytes(b))));
+}
+
+@requires(declassify)
+Bool check(List(Str) f) {
+    if (f[0] == "B") { return enc(r255_base_mul(dec_int(f[1], 0, 0))) == f[2]; }
+    if (f[0] == "V") {
+        Bool ok = match r255_decode(unhex(f[1])) { Some(p) => enc(p) == f[1], None => false, };
+        return ok == (f[2] == "1");
+    }
+    if (f[0] == "U") { return enc(r255_from_uniform(unhex(f[1]))) == f[2] && secret_uniform(unhex(f[1])) == f[2]; }
+    if (f[0] == "A") {
+        EgPt(Int(512)) p = pt(f[1]);
+        EgPt(Int(512)) q = pt(f[2]);
+        return enc(r255_add(p, q)) == f[3] && enc(r255_sub(p, q)) == f[4] && r255_eq(r255_add(p, q), pt(f[3]));
+    }
+    if (f[0] == "M") { return enc(r255_mul(le(unhex(f[1])), pt(f[2]))) == f[3]; }
+    if (f[0] == "S") {
+        Int(512) a = le(unhex(f[2]));
+        Int(512) b = le(unhex(f[3]));
+        Int(512) r = if (f[1] == "add") { r255_sc_add(a, b) } else if (f[1] == "sub") { r255_sc_sub(a, b) } else if (f[1] == "mul") { r255_sc_mul(a, b) } else if (f[1] == "neg") { r255_sc_neg(a) } else { r255_sc_inv(a) };
+        return sc_hex(r) == f[4];
+    }
+    if (f[0] == "R") { return sc_hex(r255_sc_reduce64(unhex(f[1]))) == f[2]; }
+    if (f[0] == "P") {
+        Int(512) v = le(unhex(f[1]));
+        Int(512) r = le(unhex(f[2]));
+        Int(512) one = 1;
+        return enc(pc_commit(v, r)) == f[3] && pc_open(pt(f[3]), v, r) && !pc_open(pt(f[3]), r255_sc_add(v, one), r) && secret_commit(v, r) == f[3];
+    }
+    if (f[0] == "Q") { return enc(pc_commit_vec(unhex(f[1]), le(unhex(f[2])))) == f[3]; }
+    return false;
+}
+
+type Tally = { Int pass; Int fail; };
+
+@requires(declassify)
+Tally run(List(Str) lines, Int i, Tally t) {
+    if (i >= lines.len()) { return t; }
+    if (lines[i] == "") { return run(lines, i + 1, t); }
+    if (check(str_split(lines[i], " "))) { return run(lines, i + 1, Tally {.pass = t.pass + 1, .fail = t.fail}); }
+    println(f"FAIL line {i + 1}: " + lines[i]);
+    return run(lines, i + 1, Tally {.pass = t.pass, .fail = t.fail + 1});
+}
+
+@requires(args, filesystem(readonly), declassify)
+Int main() {
+    Tally t = run(str_split(filesystem.read_all(args.get(1)), "\n"), 0, Tally {.pass = 0, .fail = 0});
+    println(f"SUMMARY pass={t.pass} fail={t.fail} skip=0");
+    return if (t.fail > 0) { 1 } else { 0 };
+}
