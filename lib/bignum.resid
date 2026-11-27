@@ -587,7 +587,9 @@ List(UInt(64)) bn_or_at(List(UInt(64)) a, List(UInt(64)) b, Int i, Int n, ListBu
 
 /// The first safe prime of `bits` bits found by `bn_safe_prime` over
 /// successive chunks of `rnd` (each (bits + 6) / 8 bytes), or None when the
-/// stream runs out. A stream of 100 chunks is ample for 1024 bits.
+/// stream runs out. For 1024 bits a chunk's window holds a safe prime with
+/// probability about 1/93, so a stream must be long: cggmp_keygen's
+/// kg_safe_prime reads up to 10000 chunks, as needed.
 pub Option(List(UInt(64))) bn_safe_prime_stream(List(Int) rnd, Int bits) {
     Int nb = (bits - 1 + 7) / 8;
     return bn_sps_from(rnd, bits, nb, 0);

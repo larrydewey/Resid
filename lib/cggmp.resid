@@ -30,7 +30,27 @@ pub CgFail cg_fail(Str why, List(Int) culprits) { return CgFail {.why = why, .cu
 
 /// `n` bytes derived from the session seed and a label (SHA-256 counter mode).
 pub List(Int) cg_rng(List(Int) seed, Str label, Int n) {
-    return tr_stream(sha256_bytes(seed.concat(bytes_of(label))), 0, n);
+    return tr_stream(cg_rng_key(seed, label), 0, n);
+}
+
+/// The key of the stream for `label`: cg_rng's bytes [a, b) are
+/// tr_stream(cg_rng_key(seed, label), a, b - a), so a caller can read the
+/// stream piece by piece, as far as it needs.
+pub List(Int) cg_rng_key(List(Int) seed, Str label) {
+    return sha256_bytes(seed.concat(bytes_of(label)));
+}
+
+/// Stream bytes for `draws` values rejection-sampled below moduli of at most
+/// `bits` bits (zk_draw_below, zk_draw_unit): 128 chunks of ceil(bits/8)
+/// bytes per value. A chunk is accepted with probability at least 1/2, so
+/// k values run out of 128 k chunks with probability below 2^-120 (k = 1:
+/// 2^-128; k = 2: 2^-247), a negligible-probability event.
+pub Int cg_draw_bytes(Int bits, Int draws) { return 128 * draws * ((bits + 7) / 8); }
+
+/// The failure for a prover or sampler that ran out of its derived stream:
+/// sized by cg_draw_bytes, this happens with negligible probability.
+pub CgFail cg_exhausted(Str what) {
+    return cg_fail(f"randomness exhausted ({what}): a negligible-probability event (below 2^-100); retry with a fresh seed", []);
 }
 
 /// A signed sample of `bits` bits derived from the session seed and the label.
@@ -43,12 +63,31 @@ pub List(UInt(64)) cg_scalar(List(Int) seed, Str label) {
     return sc_of_bytes(cg_rng(seed, label, 32));
 }
 
-/// A unit mod `n` for the label (rejection sampling over a long derived stream).
-/// Falls back to 1 if the stream runs out.
+/// The number of chunks cg_unit tries: for a modulus with units, running
+/// out has probability below 2^-1024.
+pub Int cg_unit_tries() { return 1024; }
+
+/// A unit mod `n` for the label: rejection sampling over the label's stream,
+/// read one chunk of ceil(bits/8) bytes at a time. For a Paillier modulus (no
+/// small factors) a chunk is a unit with probability about 1/2 or more, so
+/// this ends after a few chunks; the first chunks are cg_rng's bytes, as before.
+/// Returns [] only for an `n` with no units (0 or 1) or past cg_unit_tries
+/// chunks (probability below 2^-1024): Paillier encryption with the nonce []
+/// gives the ciphertext 0, which hides the plaintext and which pa_ct_ok
+/// refuses. Before 2026-11-27 the stream was 8 chunks and the fallback was
+/// the nonce 1, which made the ciphertext 1 + m N and so revealed m
+/// (probability up to 2^-9.5 per call for a 2048-bit N).
 pub List(UInt(64)) cg_unit(List(Int) seed, Str label, List(UInt(64)) n) {
-    Int width = (bn_bit_len(n) + 7) / 8;
-    List(Int) stream = cg_rng(seed, label, width * 8);
-    return match zk_draw_unit(stream, 0, n) { Some(d) => d.value, None => bn_one() };
+    if (bn_cmp(n, [2]) < 0) { return []; }
+    return cg_unit_at(cg_rng_key(seed, label), n, (bn_bit_len(n) + 7) / 8, 0);
+}
+
+List(UInt(64)) cg_unit_at(List(Int) key, List(UInt(64)) n, Int nb, Int k) {
+    if (k >= cg_unit_tries()) { return []; }
+    return match zk_draw_unit(tr_stream(key, k * nb, nb), 0, n) {
+        Some(d) => d.value,
+        None => cg_unit_at(key, n, nb, k + 1)
+    };
 }
 
 // ─── Ids and per-signer lists ───────────────────────────────────
@@ -58,7 +97,8 @@ pub List(UInt(64)) cg_unit(List(Int) seed, Str label, List(UInt(64)) n) {
 /// stream for `label`, and on None again on fresh streams for
 /// label + "/retry{k}", up to 8 tries in all. Before 2026-10-30 the callers
 /// left the message out instead, so the receiver blamed an honest sender
-/// for a missing proof.
+/// for a missing proof. Callers size `n` with cg_draw_bytes, so one try
+/// already runs out only with negligible probability.
 pub Option(T) cg_retry(Option(T) closure(List(Int)) prove, List(Int) seed, Str label, Int n, Int k) {
     if (k >= 8) { return None; }
     Option(T) r = prove(cg_rng(seed, if (k == 0) { label } else { label + f"/retry{k}" }, n));
@@ -482,7 +522,7 @@ List(CgMsg) ps1_msgs(CgCtx c, List(UInt(64)) kct, List(UInt(64)) gct, CvPt zl, C
     CgPub me = cg_pub_of(c, c.self);
     EncelgPublic pub = EncelgPublic {.c = kct, .a = me.elgamal, .b = zl, .x = zm, .prover = me.pail, .aux = cg_pub_of(c, j).ped};
     Option(EncelgProof) closure(List(Int)) pf_p = lambda(r) { encelg_prove(pub, sc_to_zi(kshare), kn, en, cg_tr_for(c, c.self), r) };
-    Option(EncelgProof) pf = cg_retry(pf_p, c.seed, f"ps/encelg/{j}", 4 * 2400, 0);
+    Option(EncelgProof) pf = cg_retry(pf_p, c.seed, f"ps/encelg/{j}", 4 * 2400 + cg_draw_bytes(zk_bits_n(), 1), 0);
     CgMsg m = match pf {
         Some(p) => cg_to(c.self, j, PsM2(p)),
         None => cg_bc(c.self, SgB([]))
@@ -581,9 +621,9 @@ Ps2Acc ps2_mta(Ps1 s, Map(Int, P2Peer) peers, List(Int) others, Int i, Ps2Acc ac
     AffgSecret xsec = AffgSecret {.x = sc_to_zi(c.x), .y = xm.y, .s = xm.s, .r = xm.r};
     Transcript tr = cg_tr_for(c, c.self);
     Option(AffpProof) closure(List(Int)) dp_p = lambda(r) { affp_prove(dpub, dsec, tr, r) };
-    Option(AffpProof) dp = cg_retry(dp_p, c.seed, f"ps/affp/{j}", 4 * 4300, 0);
+    Option(AffpProof) dp = cg_retry(dp_p, c.seed, f"ps/affp/{j}", 4 * 4300 + cg_draw_bytes(zk_bits_n(), 3), 0);
     Option(AffgProof) closure(List(Int)) xp_p = lambda(r) { affg_prove(xpub, xsec, tr, r) };
-    Option(AffgProof) xp = cg_retry(xp_p, c.seed, f"ps/affg/{j}", 4 * 4300, 0);
+    Option(AffgProof) xp = cg_retry(xp_p, c.seed, f"ps/affg/{j}", 4 * 4300 + cg_draw_bytes(zk_bits_n(), 2), 0);
     return match dp {
         None => acc,
         Some(dpf) => match xp {
@@ -758,7 +798,7 @@ List(CgMsg) ps4_proofs(Ps3 s, CvPt big_gamma, List(Int) others, Int i, ListBuf(C
     CgPub me = cg_pub_of(c, c.self);
     LogstarPublic pub = LogstarPublic {.c = s1.g_ct, .x = big_gamma, .g = cv_g(), .prover = me.pail, .aux = cg_pub_of(c, j).ped};
     Option(LogstarProof) closure(List(Int)) pf_p = lambda(r) { logstar_prove(pub, sc_to_zi(s1.gamma), s1.g_nonce, cg_tr_for(c, c.self), r) };
-    Option(LogstarProof) pf = cg_retry(pf_p, c.seed, f"ps/logstar/{j}", 4 * 1500, 0);
+    Option(LogstarProof) pf = cg_retry(pf_p, c.seed, f"ps/logstar/{j}", 4 * 1500 + cg_draw_bytes(zk_bits_n(), 1), 0);
     return match pf {
         None => ps4_proofs(s, big_gamma, others, i + 1, acc),
         Some(p) => ps4_proofs(s, big_gamma, others, i + 1, acc.push(cg_to(c.self, j, PsM5(p))))
@@ -819,7 +859,7 @@ pub Result(Ps5, CgFail) ps_r5(Ps4 s, List(CgMsg) in) {
     Option(ElogProof) closure(List(Int)) pf_p = lambda(r) { elog_prove(pub, s1.kshare, s1.elg_nonce, cg_tr_for(c, c.self), r) };
     Option(ElogProof) pf = cg_retry(pf_p, c.seed, "ps/elog-k", 256, 0);
     return match pf {
-        None => Err(cg_fail("randomness exhausted", [])),
+        None => Err(cg_exhausted("elog")),
         Some(p) => Ok(Ps5 {.prev = s, .big_gammas = gs, .gamma = gamma, .big_delta = big_delta,
                             .out = [cg_bc(c.self, PsB6(PsB6R {.big_delta = big_delta, .proof = p}))]})
     };
@@ -880,7 +920,7 @@ pub Result(Ps6, CgFail) ps_r6(Ps5 s, List(CgMsg) in) {
     Option(ElogProof) closure(List(Int)) pf_p = lambda(r) { elog_prove(pub, s3.chi_share, s3.chi_nonce, cg_tr_for(c, c.self), r) };
     Option(ElogProof) pf = cg_retry(pf_p, c.seed, "ps/elog-chi", 256, 0);
     return match pf {
-        None => Err(cg_fail("randomness exhausted", [])),
+        None => Err(cg_exhausted("elog")),
         Some(p) => Ok(Ps6 {.prev = s, .big_deltas = bd, .delta = delta, .delta_inv = dinv, .r = r, .s_pt = sp,
                             .rbar = ps6_rbar(c.ids, bd, dinv, 0, {}),
                             .out = [cg_bc(c.self, PsB7(PsB7R {.s = sp, .proof = p, .decommit = s1.decommit, .presig_id = s1.pre_id}))]})
@@ -1121,7 +1161,7 @@ Result(List(CgOpen), CgFail) a1_opens(Ps5 s, List(Int) others, Int i, ListBuf(Cg
     if (i >= others.len()) { return Ok(acc.finish()); }
     CgCtx c = s.prev.prev.prev.prev.ctx;
     Int l = others[i];
-    Option(CgOpen) o = cg_open(c.psec, cg_pub_of(c, c.self).pail, a1_d_ct(s, l, c.self), cg_tr_for(c, c.self), cg_rng(c.seed, f"ps/abort1/d/{l}", 4 * 1200));
+    Option(CgOpen) o = cg_open(c.psec, cg_pub_of(c, c.self).pail, a1_d_ct(s, l, c.self), cg_tr_for(c, c.self), cg_rng(c.seed, f"ps/abort1/d/{l}", cg_draw_bytes(zk_bits_n(), 1)));
     return match o {
         None => a1_fail(acc),
         Some(x) => a1_opens(s, others, i + 1, acc.push(x))
@@ -1151,7 +1191,7 @@ Result(PsAb1, CgFail) a1_begin(Ps5 s) {
     CgCtx c = s1.ctx;
     ListBuf(Int) ob = ListBuf();
     List(Int) others = cg_others(c.ids, c.self, 0, ob);
-    Option(CgOpen) ko = cg_open(c.psec, cg_pub_of(c, c.self).pail, s1.k_ct, cg_tr_for(c, c.self), cg_rng(c.seed, "ps/abort1/k", 4 * 1200));
+    Option(CgOpen) ko = cg_open(c.psec, cg_pub_of(c, c.self).pail, s1.k_ct, cg_tr_for(c, c.self), cg_rng(c.seed, "ps/abort1/k", cg_draw_bytes(zk_bits_n(), 1)));
     return match ko {
         None => Err(cg_fail("cannot open K", [])),
         Some(k) => a1_start(s, s1, c, others, k)
@@ -1266,7 +1306,7 @@ Result(List(CgOpen), CgFail) a2_opens(Ps6 s, List(Int) others, Int i, ListBuf(Cg
     if (i >= others.len()) { return Ok(acc.finish()); }
     CgCtx c = s.prev.prev.prev.prev.prev.ctx;
     Int l = others[i];
-    Option(CgOpen) o = cg_open(c.psec, cg_pub_of(c, c.self).pail, a2_chi_ct(s, l, c.self), cg_tr_for(c, c.self), cg_rng(c.seed, f"ps/abort2/d/{l}", 4 * 1200));
+    Option(CgOpen) o = cg_open(c.psec, cg_pub_of(c, c.self).pail, a2_chi_ct(s, l, c.self), cg_tr_for(c, c.self), cg_rng(c.seed, f"ps/abort2/d/{l}", cg_draw_bytes(zk_bits_n(), 1)));
     return match o {
         None => a2_fail(acc),
         Some(x) => a2_opens(s, others, i + 1, acc.push(x))
@@ -1300,14 +1340,14 @@ pub Result(PsAb2, CgFail) a2_begin(Ps6 s) {
     CgCtx c = s1.ctx;
     ListBuf(Int) ob = ListBuf();
     List(Int) others = cg_others(c.ids, c.self, 0, ob);
-    Option(CgOpen) ko = cg_open(c.psec, cg_pub_of(c, c.self).pail, s1.k_ct, cg_tr_for(c, c.self), cg_rng(c.seed, "ps/abort2/k", 4 * 1200));
+    Option(CgOpen) ko = cg_open(c.psec, cg_pub_of(c, c.self).pail, s1.k_ct, cg_tr_for(c, c.self), cg_rng(c.seed, "ps/abort2/k", cg_draw_bytes(zk_bits_n(), 1)));
     CvPt yhat = cv_mul(s3.chi_nonce, cg_pub_of(c, c.self).elgamal);
     LogPublic pub = LogPublic {.h = s3.chi_l, .x = cg_pub_of(c, c.self).elgamal, .y = yhat};
     Option(LogProof) yp = log_prove(pub, c.elg, s3.chi_nonce, cg_tr_for(c, c.self), cg_rng(c.seed, "ps/abort2/log", 256));
     return match ko {
         None => Err(cg_fail("cannot open K", [])),
         Some(k) => match yp {
-            None => Err(cg_fail("randomness exhausted", [])),
+            None => Err(cg_exhausted("log")),
             Some(p) => a2_start(s, c, others, k, yhat, p)
         }
     };

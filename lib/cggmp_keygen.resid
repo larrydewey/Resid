@@ -91,28 +91,51 @@ List(List(UInt(64))) kg_coeffs(KgCtx c, Int i, ListBuf(List(UInt(64))) acc) {
     return kg_coeffs(c, i + 1, acc.push(v));
 }
 
+/// The number of 128-byte starting points kg_safe_prime tries. A window of
+/// 2048 candidates from one holds a 1024-bit safe prime with probability
+/// about 1/93, so 10000 of them all fail with probability below 2^-150.
+/// (The stream was 600 starting points before 2026-11-27: one prime in
+/// about 640 was not found.)
+pub Int kg_prime_tries() { return 10000; }
+
+/// A 1024-bit safe prime from the stream for `label` (bn_safe_prime from
+/// successive 128-byte pieces, read as needed); None past kg_prime_tries.
+/// The pieces are those bn_safe_prime_stream reads, so a seed gives the
+/// prime it gave before.
+pub Option(List(UInt(64))) kg_safe_prime(List(Int) seed, Str label) {
+    return kg_sp_at(cg_rng_key(seed, label), 0);
+}
+
+Option(List(UInt(64))) kg_sp_at(List(Int) key, Int k) {
+    if (k >= kg_prime_tries()) { return None; }
+    return match bn_safe_prime(tr_stream(key, k * 128, 128), 1024) {
+        Some(p) => Some(p),
+        None => kg_sp_at(key, k + 1)
+    };
+}
+
 /// The two 1024-bit safe primes of this party's Paillier key: the ones
-/// the context carries, else drawn from its seed; [] when a draw fails.
+/// the context carries, else drawn from its seed; [] when a draw fails
+/// (probability below 2^-150).
 pub List(List(UInt(64))) kg_primes(KgCtx c) {
     if (c.primes.len() == 2) { return c.primes; }
-    Option(List(UInt(64))) p = bn_safe_prime_stream(cg_rng(c.seed, "kg/p", 128 * 600), 1024);
-    Option(List(UInt(64))) q = bn_safe_prime_stream(cg_rng(c.seed, "kg/q", 128 * 600), 1024);
-    return match p {
-        Some(pp) => match q { Some(qq) => [pp, qq], None => [] },
+    return match kg_safe_prime(c.seed, "kg/p") {
+        Some(pp) => match kg_safe_prime(c.seed, "kg/q") { Some(qq) => [pp, qq], None => [] },
         None => []
     };
 }
 
 /// Runs round 1: sets up the Paillier key, Pedersen parameters and sharing polynomial.
-/// Broadcasts a commitment to them; fails when no Paillier primes or randomness are left.
+/// Broadcasts a commitment to them; fails when no Paillier primes or randomness are left,
+/// each a negligible-probability event for a context without primes of its own.
 pub Result(Kg1, CgFail) kg_start(KgCtx c) {
     List(List(UInt(64))) pq = kg_primes(c);
-    if (pq.len() != 2) { return Err(cg_fail("no Paillier primes", [])); }
+    if (pq.len() != 2) { return Err(cg_fail("no Paillier primes: a negligible-probability event (below 2^-150) unless the context carries invalid ones; retry with a fresh seed", [])); }
     PaillierSec psec = match paillier_sec(pq[0], pq[1]) { Some(s) => s, None => PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
     PaillierPub ppub = paillier_pub(bn_mul(pq[0], pq[1]));
-    Option(PedersenKey) pk = pedersen_generate(pq[0], pq[1], cg_rng(c.seed, "kg/ped", 2048));
+    Option(PedersenKey) pk = pedersen_generate(pq[0], pq[1], cg_rng(c.seed, "kg/ped", cg_draw_bytes(bn_bit_len(ppub.n), 2)));
     return match pk {
-        None => Err(cg_fail("randomness exhausted", [])),
+        None => Err(cg_exhausted("Pedersen parameters")),
         Some(k) => Ok(kg_start_with(c, pq[0], pq[1], psec, ppub, k))
     };
 }
@@ -228,14 +251,18 @@ pub Result(Kg3, CgFail) kg_r3(Kg2 s, List(CgMsg) in) {
     List(Int) chain = if (c.prev.len() > 0) { c.prev[0].chain_key } else { kg_xor_all(c.ids, peers, true, s1.chain, c.self, 0, cg_zero32()) };
     Transcript base3 = tr_item(s1.base, "RID", rid);
     Transcript tr = kg_tr(base3, c.self);
+    // mod draws one w (each 256-byte chunk has Jacobi symbol -1 with
+    // probability 1/2), prm 80 values below phi (each chunk accepted with
+    // probability at least 1/2): 128 and 512 chunks run out with
+    // probability below 2^-128 and 2^-198, before cg_retry's fresh streams.
     Option(ModProof) closure(List(Int)) md_p = lambda(r) { mod_prove(s1.p, s1.q, tr, r) };
-    Option(ModProof) md = cg_retry(md_p, c.seed, "kg/mod", 256 * 96, 0);
+    Option(ModProof) md = cg_retry(md_p, c.seed, "kg/mod", cg_draw_bytes(zk_bits_n(), 1), 0);
     Option(PrmProof) closure(List(Int)) prm_p = lambda(r) { prm_prove(s1.ped_lam, s1.psec.phi, s1.ped, tr, r) };
-    Option(PrmProof) prm = cg_retry(prm_p, c.seed, "kg/prm", 256 * 400, 0);
+    Option(PrmProof) prm = cg_retry(prm_p, c.seed, "kg/prm", cg_draw_bytes(zk_bits_n(), 4), 0);
     return match md {
-        None => Err(cg_fail("randomness exhausted (mod)", [])),
+        None => Err(cg_exhausted("mod")),
         Some(m) => match prm {
-            None => Err(cg_fail("randomness exhausted (prm)", [])),
+            None => Err(cg_exhausted("prm")),
             Some(pr) => Ok(Kg3 {
                 .prev = s, .peers = peers, .rid = rid, .chain = chain, .base3 = base3,
                 .out = kg3_msgs(s1, peers, others, base3, 0, kg_first(c.self, m, pr)) })

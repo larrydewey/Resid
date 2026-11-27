@@ -84,7 +84,7 @@ BlR2 bl_mtas(Ps2 s, BlRole role, List(UInt(64)) t, List(UInt(64)) tn, List(Int) 
     AffpPublic pub = AffpPublic {.kv = kj, .dv = m.d, .fp = m.f, .xp = t, .prover = me.pail, .verifier = pj.pail, .aux = pj.ped};
     AffpSecret sec = AffpSecret {.x = sc_to_zi(role.tau), .y = m.y, .s = m.s, .rx = tn, .r = m.r};
     Option(AffpProof) closure(List(Int)) pf_p = lambda(r) { affp_prove(pub, sec, bl_tr(c, c.self), r) };
-    Option(AffpProof) pf = cg_retry(pf_p, c.seed, f"bl/affp/{j}", 4 * 4300, 0);
+    Option(AffpProof) pf = cg_retry(pf_p, c.seed, f"bl/affp/{j}", 4 * 4300 + cg_draw_bytes(zk_bits_n(), 3), 0);
     return match pf {
         None => bl_mtas(s, role, t, tn, others, i + 1, acc),
         Some(p) => bl_mtas(s, role, t, tn, others, i + 1, BlR2 {.s = acc.s, .role = role, .tbeta = acc.tbeta.insert(j, m.beta),
