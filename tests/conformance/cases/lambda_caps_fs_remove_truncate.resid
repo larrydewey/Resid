@@ -1,0 +1,32 @@
+// filesystem.remove, rename, sync and truncate are writes (write_verbs,
+// which is_write_verb reads too) in the force-time guard as at compile
+// time: a closure made in main under the full grant and called in
+// `sandbox (filesystem(readonly))` is refused each one before the call is
+// made, and the files are left as they were. Before, the guard matched
+// symbol prefixes (resid_fs_write, _append, _create) and took these four
+// for reads: remove deleted in.txt and truncate emptied it.
+sandbox (filesystem(readonly)) {
+    Int run_ro(Int closure(Int) f, Int x) { return f(x); }
+}
+
+Int b(Bool v) { return if (v) { 1 } else { 0 }; }
+
+@requires(filesystem)
+Int main() {
+    Int r = rt 0;
+    Int closure(Int) rm = lambda(v) { b(filesystem.remove("@TMP@/in.txt")) + v };
+    Int closure(Int) mv = lambda(v) { b(filesystem.rename("@TMP@/in.txt", "@TMP@/moved.txt")) + v };
+    Int closure(Int) tr = lambda(v) { b(filesystem.truncate("@TMP@/in.txt", 0)) + v };
+    Int closure(Int) sy = lambda(v) { b(filesystem.sync("@TMP@/in.txt")) + v };
+    println(report("remove", spawn (filesystem) { return run_ro(rm, r); }));
+    println(report("rename", spawn (filesystem) { return run_ro(mv, r); }));
+    println(report("truncate", spawn (filesystem) { return run_ro(tr, r); }));
+    println(report("sync", spawn (filesystem) { return run_ro(sy, r); }));
+    println(f"in.txt: {str_trim(filesystem.read_all("@TMP@/in.txt"))}");
+    println(f"moved: {filesystem.exists("@TMP@/moved.txt")}");
+    return 0;
+}
+
+Str report(Str what, Result(Int, RegionError) r) {
+    return match r { Ok(n) => f"{what}: ok {n}", Err(e) => what + ": failed: " + e.message };
+}

@@ -4887,36 +4887,132 @@ Str cap_str_global(Str nm, Str payload) {
     return nm + f" = unnamed_addr constant [{n1} x i8] c\"" + body + "\\00\"";
 }
 
+// Capability family of an effectful runtime builtin, or "".
+Str gk_builtin_family(Str n) {
+    if (n == "declassify") { return "declassify"; }
+    if (n == "provisioned_key") { return "provision"; }
+    if (n == "assumed") { return "assume"; }
+    if (str_starts_with(n, "resid_disp_")) { return "display"; }
+    if (str_starts_with(n, "resid_a11y_")) { return "accessibility"; }
+    if (str_starts_with(n, "resid_tcp_") || str_starts_with(n, "resid_unix_") || str_starts_with(n, "resid_udp_")) { return "network"; }
+    // resid_sandbox_confine (and _listening) forks the program and confines
+    // the copy that goes on, taking away what the program granted: a write
+    // of `process`.
+    if (str_starts_with(n, "resid_dbg_") || str_starts_with(n, "resid_pty_") || n == "resid_sandbox_confine" || n == "resid_sandbox_confine_listening") { return "process"; }
+    if (str_starts_with(n, "resid_term_")) { return "terminal"; }
+    if (str_starts_with(n, "resid_clock_")) { return "clock"; }
+    if (n == "resid_device_call" || n == "resid_device_call_w" || n == "resid_device_secret" || str_starts_with(n, "resid_device_drv_")) { return "device"; }
+    return "";
+}
+
+// Builtins that change state a read-only grant does not cover.
+// Writes under a moded family: raw mode, sleeping, binding a listener
+// to an address other than loopback (exposing a port is a write), a
+// device store or write call, and every `process` builtin: the debugger
+// (resid_dbg_*: spawning and running a program, poking its memory and
+// registers, stepping, killing it), the pty (resid_pty_*: a command run on
+// a terminal) and confining the program (resid_sandbox_confine,
+// _listening). `process` has no read builtin, so process(readonly) covers
+// none of them.
+// The run-time guard reads this too (gk_builtin_need, called by
+// provider_family_of_line), so the two cannot disagree: a builtin added
+// here is a write in both places.
+Bool gk_builtin_write(Str n) {
+    if (gk_builtin_family(n) == "process") { return true; }
+    return n == "resid_device_drv_store" || n == "resid_udp_bind_at" || n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns" || n == "resid_tcp_listen_at" || n == "resid_unix_listen" || n == "resid_device_call_w";
+}
+
+// The capability a call of runtime entry `sym` needs when `sym` is an
+// effectful builtin (a builtin lowers to a call of its own name): its
+// family, with `!` when it writes, which a read-only grant does not cover;
+// "" for anything else.
+Str gk_builtin_need(Str sym) {
+    if (!str_starts_with(sym, "resid_")) { return ""; }
+    Str fam = gk_builtin_family(sym);
+    if (fam == "") { return ""; }
+    return if (gk_builtin_write(sym)) { fam + "!" } else { fam };
+}
+
+// The provider verbs that write, as "family.verb": the one list behind
+// both the compile-time check (is_write_verb: a read-only grant does not
+// cover them, E0219) and the run-time guard (provider_family_of_line: a
+// call to the verb's runtime entry, p_sym, needs `family!`). A verb added
+// here is a write in both places; one left out is a read in both.
+List(Str) write_verbs() {
+    return ["filesystem.write_all", "filesystem.write_bytes", "filesystem.write_secret", "filesystem.append_bytes",
+        "filesystem.write_hex", "filesystem.append_hex", "filesystem.create_dir",
+        "filesystem.create", "filesystem.create_new", "filesystem.write_handle",
+        "filesystem.remove", "filesystem.rename", "filesystem.write_at", "filesystem.sync", "filesystem.truncate",
+        "process.run", "process.run_with_fds", "clock.sleep_ns"];
+}
+
+Bool str_listed(List(Str) l, Str s, Int i) {
+    if (i >= l.len()) { return false; }
+    return l[i] == s || str_listed(l, s, i + 1);
+}
+
+// The family of the write verb whose runtime entry is `sym` (a verb's
+// p_sym, or create's and create_new's `_mode` forms), else "".
+Str write_family_of_sym(Str sym) {
+    Bool provider = str_starts_with(sym, "resid_fs_") || str_starts_with(sym, "resid_process_") || str_starts_with(sym, "resid_clock_");
+    return if (provider) { write_family_at(write_verbs(), sym, 0) } else { "" };
+}
+
+Str write_family_at(List(Str) l, Str sym, Int i) {
+    if (i >= l.len()) { return ""; }
+    List(Str) fv = str_split(l[i], ".");
+    Str ps = p_sym(fv[0], fv[1]);
+    if (sym == ps || sym == ps + "_mode") { return fv[0]; }
+    return write_family_at(l, sym, i + 1);
+}
+
+// The capability a call of runtime symbol `sym` needs, `fam!` for a
+// write; "" when it needs none. Writes come only from the compile-time
+// check's own sources: a provider verb's from write_verbs (is_write_verb),
+// a builtin's from gk_builtin_family and gk_builtin_write (by the
+// builtin's name, which is its runtime entry's). Every other entry of a
+// provider family is a read. `process` has no read at all (gk_direct
+// charges every use of it in full), so any process entry needs
+// `process!`.
+Str cap_need_of_sym(Str sym) {
+    Str wf = write_family_of_sym(sym);
+    if (wf != "") { return wf + "!"; }
+    Str bn = gk_builtin_need(sym);
+    if (bn != "") { return bn; }
+    if (str_starts_with(sym, "resid_fs_")) { return "filesystem"; }
+    if (str_starts_with(sym, "resid_process_")) { return "process!"; }
+    if (str_starts_with(sym, "resid_env_")) { return "environment"; }
+    if (str_starts_with(sym, "resid_args_")) { return "args"; }
+    if (str_starts_with(sym, "resid_git_")) { return "git"; }
+    return "";
+}
+
+// The end of the symbol name starting at i (letters, digits, `_`, `.`).
+Int sym_end(Str line, Int i, Int n) {
+    if (i >= n) { return n; }
+    Int c = str_char_at(line, i);
+    Bool ok = (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95 || c == 46;
+    return if (ok) { sym_end(line, i + 1, n) } else { i };
+}
+
+// The need of every `@symbol` on a line from `from`; a write wins, else
+// the first read.
+Str cap_need_scan(Str line, Int from, Int n, Str acc) {
+    Int at = str_index_of(line, "@resid_", from);
+    if (at < 0) { return acc; }
+    Int e = sym_end(line, at + 1, n);
+    Str need = cap_need_of_sym(str_slice(line, at + 1, e));
+    if (str_ends_with(need, "!")) { return need; }
+    return cap_need_scan(line, e, n, if (acc == "") { need } else { acc });
+}
+
 // Which capability family (if any) does this already-emitted LLVM line
-// invoke? Detected by the runtime symbol it calls.
-// The capability a call line needs; `fam!` marks a write, which a
-// read-only grant does not cover.
+// invoke? Detected by the runtime symbols it names (the callee, or an
+// entry passed by address). The capability a call line needs; `fam!`
+// marks a write, which a read-only grant does not cover.
 Str provider_family_of_line(Str line) {
     if (!str_contains(line, "call ")) { return ""; }
-    if (str_contains(line, "@resid_fs_write") || str_contains(line, "@resid_fs_append") || str_contains(line, "@resid_fs_create")) { return "filesystem!"; }   // create_dir, create, create_new; write_handle is a write
-    if (str_contains(line, "@resid_fs_")) { return "filesystem"; }
-    if (str_contains(line, "@resid_dbg_")) { return "process"; }
-    if (str_contains(line, "@resid_pty_read") || str_contains(line, "@resid_pty_wait") || str_contains(line, "@resid_pty_status")) { return "process"; }
-    if (str_contains(line, "@resid_pty_")) { return "process!"; }
-    if (str_contains(line, "@resid_process_run")) { return "process!"; }   // run, run_with_fds (resid_process_run_fds)
-    if (str_contains(line, "@resid_env_")) { return "environment"; }
-    if (str_contains(line, "@resid_args_")) { return "args"; }
-    if (str_contains(line, "@resid_process_run")) { return "process"; }
-    if (str_contains(line, "@resid_git_")) { return "git"; }
-    if (str_contains(line, "@resid_tcp_listen_at") || str_contains(line, "@resid_unix_listen") || str_contains(line, "@resid_udp_bind_at")) { return "network!"; }
-    if (str_contains(line, "@resid_tcp_") || str_contains(line, "@resid_unix_") || str_contains(line, "@resid_udp_")) { return "network"; }
-    if (str_contains(line, "@resid_disp_")) { return "display"; }
-    if (str_contains(line, "@resid_a11y_")) { return "accessibility"; }
-    if (str_contains(line, "@resid_term_raw") || str_contains(line, "@resid_term_restore")) { return "terminal!"; }
-    if (str_contains(line, "@resid_term_")) { return "terminal"; }
-    if (str_contains(line, "@resid_device_call_w(")) { return "device!"; }
-    if (str_contains(line, "@resid_device_call(")) { return "device"; }
-    if (str_contains(line, "@resid_device_secret(")) { return "device"; }
-    if (str_contains(line, "@resid_device_drv_store(")) { return "device!"; }
-    if (str_contains(line, "@resid_device_drv_can(") || str_contains(line, "@resid_device_drv_load(")) { return "device"; }
-    if (str_contains(line, "@resid_clock_sleep_ns")) { return "clock!"; }
-    if (str_contains(line, "@resid_clock_")) { return "clock"; }
-    return "";
+    return cap_need_scan(line, 0, str_len(line), "");
 }
 
 CapPP cap_enter_globals_at(List(Str) caps, Int i, CapPP acc) {

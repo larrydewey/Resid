@@ -1,0 +1,68 @@
+// Every `process` builtin is a write (gk_builtin_write): process(readonly)
+// covers none of them, at compile time (E0219) and in the force-time guard,
+// which reads the same function. A closure made in main under the full
+// grant and called in `sandbox (process(readonly))` is refused each one
+// before the call is made. Each call is made inside a spawn, so a refusal
+// fails that region only. Before, the guard took the debugger builtins and
+// resid_pty_read, _wait and _status for reads: the closure could run a
+// command (resid_dbg_spawn + resid_dbg_cont ran /usr/bin/touch) and write
+// another process's memory (resid_dbg_poke).
+sandbox (process(readonly)) {
+    Int run_ro(Int closure(Int) f, Int x) { return f(x); }
+}
+
+Int b(Bool v) { return if (v) { 1 } else { 0 }; }
+
+@requires(process, filesystem)
+Int main() {
+    Int r = rt 0;
+    Int closure(Int) spawn_run = lambda(v) { Int p = resid_dbg_spawn("/usr/bin/touch @TMP@/spawned"); b(resid_dbg_cont(p, 0)) + resid_dbg_wait() + v };
+    println(report("dbg_spawn", spawn (process) { return run_ro(spawn_run, r); }));
+    // A tracee of main's own, stopped at its first instruction: the calls
+    // below act on it, and it is checked after them.
+    Int pid = resid_dbg_spawn("/usr/bin/touch @TMP@/traced");
+    Int pc = resid_dbg_reg(pid, 16);
+    Int word = resid_dbg_peek(pid, pc);
+    Int t = rt pid;
+    Int a = rt pc;
+    Int closure(Int) cont = lambda(v) { b(resid_dbg_cont(t, 0)) + v };
+    Int closure(Int) step = lambda(v) { b(resid_dbg_step(t)) + v };
+    Int closure(Int) poke = lambda(v) { b(resid_dbg_poke(t, a, 0)) + v };
+    Int closure(Int) set_pc = lambda(v) { b(resid_dbg_set_pc(t, 0)) + v };
+    Int closure(Int) kill = lambda(v) { b(resid_dbg_kill()) + v };
+    Int closure(Int) wait = lambda(v) { resid_dbg_wait() + v };
+    Int closure(Int) peek = lambda(v) { resid_dbg_peek(t, a) + v };
+    Int closure(Int) reg = lambda(v) { resid_dbg_reg(t, 16) + v };
+    Int closure(Int) signal = lambda(v) { resid_dbg_signal() + v };
+    Int closure(Int) code = lambda(v) { resid_dbg_exit_code() + v };
+    Int closure(Int) f64 = lambda(v) { str_len(resid_dbg_f64(0)) + v };
+    Int closure(Int) pty_read = lambda(v) { resid_pty_read(t, 1).len() + v };
+    Int closure(Int) pty_wait = lambda(v) { resid_pty_wait(t) + v };
+    Int closure(Int) pty_status = lambda(v) { resid_pty_status(t, 0) + v };
+    println(report("dbg_cont", spawn (process) { return run_ro(cont, r); }));
+    println(report("dbg_step", spawn (process) { return run_ro(step, r); }));
+    println(report("dbg_poke", spawn (process) { return run_ro(poke, r); }));
+    println(report("dbg_set_pc", spawn (process) { return run_ro(set_pc, r); }));
+    println(report("dbg_kill", spawn (process) { return run_ro(kill, r); }));
+    println(report("dbg_wait", spawn (process) { return run_ro(wait, r); }));
+    println(report("dbg_peek", spawn (process) { return run_ro(peek, r); }));
+    println(report("dbg_reg", spawn (process) { return run_ro(reg, r); }));
+    println(report("dbg_signal", spawn (process) { return run_ro(signal, r); }));
+    println(report("dbg_exit_code", spawn (process) { return run_ro(code, r); }));
+    println(report("dbg_f64", spawn (process) { return run_ro(f64, r); }));
+    println(report("pty_read", spawn (process) { return run_ro(pty_read, r); }));
+    println(report("pty_wait", spawn (process) { return run_ro(pty_wait, r); }));
+    println(report("pty_status", spawn (process) { return run_ro(pty_status, r); }));
+    // Nothing happened: no command ran, and the tracee is where it was,
+    // its memory and program counter unchanged.
+    println(f"spawned: {filesystem.exists("@TMP@/spawned")}");
+    println(f"traced ran: {filesystem.exists("@TMP@/traced")}");
+    println(f"memory unchanged: {resid_dbg_peek(pid, pc) == word}");
+    println(f"pc unchanged: {resid_dbg_reg(pid, 16) == pc}");
+    println(f"killed: {resid_dbg_kill()}");
+    return 0;
+}
+
+Str report(Str what, Result(Int, RegionError) r) {
+    return match r { Ok(n) => f"{what}: ok {n}", Err(e) => what + ": failed: " + e.message };
+}
