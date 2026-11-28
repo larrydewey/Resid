@@ -481,20 +481,39 @@ pub Int mv_legacy() { return mv_ctx(resid_raw_tls("rg_mv_legacy", 24), 1, 922337
 // A value stored into an object of region `ro` (0: outside every
 // region): what is younger moves into that region, or to the heap. Such
 // moves nest (settling a buffer inside another move), so each takes a
-// context of its own from a stack, given back by mv_done.
-pub Int mv_into(Int ro) {
-    Int st = resid_raw_tls("rg_mv_stack", 1544);
+// context of its own from a stack, given back by mv_done. A context's
+// word 3 says what it forwards (map.resid, fw_on, bx_get): 1 everything,
+// a move that settles a buffer inside a loop's move; 2 boxes and closures
+// only, one that settles a buffer inside a spawned job's move of its
+// result; 0 nothing, a write barrier's move (mv_into), which no table
+// reset precedes (mv_into_fw).
+pub Int mv_into(Int ro) { return mv_into_fw(ro, 0); }
+
+pub Int mv_into_fw(Int ro, Int fw) {
+    Int st = mv_stack();
     Int k = ld64(st);
     if (k >= 64) { return rt_abort("moves nested too deeply"); }
     _ = st64(st, k + 1);
     Int dst = rec_of(ro);
     Int lo = if (dst == 0) { 1 } else { ro + 1 };
-    return mv_ctx(st + 8 + k * 24, lo, 9223372036854775807, dst);
+    Int c = st + 8 + k * 32;
+    return st64(c + 24, fw) * 0 + mv_ctx(c, lo, 9223372036854775807, dst);
 }
+
+// ctx is a context of the stack that forwards everything.
+pub Bool mv_into_fw_on(Int ctx) { return mv_into_fw_mode(ctx) == 1; }
+
+// What a context forwards (word 3 above); 0 for one not of the stack.
+pub Int mv_into_fw_mode(Int ctx) {
+    Int st = mv_stack();
+    return if (ult(ctx - (st + 8), 64 * 32)) { ld64(ctx + 24) } else { 0 };
+}
+
+Int mv_stack() { return resid_raw_tls("rg_mv_stack", 2056); }
 
 // The value v, after the move that used the innermost mv_into context.
 pub Int mv_done(Int v) {
-    Int st = resid_raw_tls("rg_mv_stack", 1544);
+    Int st = mv_stack();
     return st64(st, ld64(st) - 1) * 0 + v;
 }
 

@@ -1,0 +1,64 @@
+// A nested structure built through a self-recursive helper (a loop with
+// its own region, left once per level), each level holding a list one
+// element longer than its parent's, appended into the parent's buffer
+// (BurrowDB's WITH-chain planning: each level's context holds CTE lists
+// one longer than the level above). The levels share that buffer, and
+// the loop exits' moves keep them sharing one copy (map.resid, flat_more;
+// RB-31): 16000 levels in about 35 MB. Copying the buffer once per level
+// took 2.4 GB (the square of the depth).
+//
+// With "chain": a compacting loop carries a byte list and appends each
+// version to a carried list of them, whose buffer lies in the loop's old
+// generation. The compactions settle the new versions into that region
+// sharing one copy of their buffer (flat_move, mv_into_fw): 30000 steps in
+// a few MB. Copying per version took 842 MB.
+
+type Lvl = { List(Int) names; List(Node) kids; };
+type Node = { List(Lvl) sub; };
+
+Node node(List(Int) names, Int n) {
+    if (n == 0) { return Node {.sub = []}; }
+    List(Int) mine = names.concat([n]);
+    return Node {.sub = [Lvl {.names = mine, .kids = kids(mine, [n - 1], 0, [])}]};
+}
+
+List(Node) kids(List(Int) names, List(Int) ns, Int i, List(Node) acc) {
+    if (i >= ns.len()) { return acc; }
+    return kids(names, ns, i + 1, acc.concat([node(names, ns[i])]));
+}
+
+// The depth, and the sum of every level's last name and length.
+Int depth(Node t, Int acc, Int sum) {
+    if (t.sub.len() == 0) { return acc * 1000000000 + sum; }
+    List(Int) ns = t.sub[0].names;
+    return depth(t.sub[0].kids[0], acc + 1, sum + ns[ns.len() - 1] + ns.len());
+}
+
+Str junk(Int i) { return f"garbage {i} " + str_repeat("x", 1000 + i % 50); }
+
+List(List(UInt(8))) chain(Int i, Int n, List(UInt(8)) last, List(List(UInt(8))) acc, Int z) {
+    if (i >= n) { return if (z < 0) { [] } else { acc }; }
+    List(UInt(8)) next = last.concat([(UInt(8))(i % 200)]);
+    Str g = junk(i);
+    return chain(i + 1, n, next, acc.concat([next]), z + str_len(g) % 3);
+}
+
+Int bsum(List(UInt(8)) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return bsum(xs, i + 1, acc + (Int)xs[i]);
+}
+
+@requires(args)
+Int main() {
+    Int n = str_parse_int(args.get(1));
+    if (args.count() > 2 && args.get(2) == "chain") {
+        List(UInt(8)) nb = [];
+        List(List(UInt(8))) nbs = [];
+        List(List(UInt(8))) cs = chain(0, n, nb, nbs, 0);
+        println(f"{cs.len()} {cs[n - 1].len()} {cs[n / 2].len()} {bsum(cs[n - 1], 0, 0)} {bsum(cs[n / 3], 0, 0)}");
+        return 0;
+    }
+    List(Int) none = [];
+    println(f"{depth(node(none, n), 0, 0)}");
+    return 0;
+}

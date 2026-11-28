@@ -1,0 +1,88 @@
+// A loop that carries a sum value and a closure, and appends records
+// holding the same ones into the tip of a list whose buffer is older than
+// the loop. At a compaction the loop's move copies the carried box (or
+// closure) into its new region first; the settling of the older buffer's
+// new slots then meets the same box and must copy it into the buffer's own
+// region, not reuse the loop's copy: that region is freed at the loop's
+// exit while the buffer lives on, and a read of the element then found
+// freed memory (map.resid, bx_get).
+
+type Sh = Ax(Int) | Bx(Str);
+type Rec = { Sh s; Int k; };
+type Out = { Sh last; List(Rec) xs; };
+
+type CRec = { Str closure(Int) f; Int k; };
+type COut = { Str closure(Int) last; List(CRec) xs; };
+
+// Garbage left by each step, so the loop's region compacts often.
+Str junk(Int i) { return f"garbage {i} " + str_repeat("x", 20000 + i % 50); }
+
+Str tag(Int i) { return f"v{i}-" + str_repeat("y", 40); }
+
+Str disp(Sh s) {
+    return match (s) { Ax(n) => f"A{n}", Bx(t) => t };
+}
+
+// The newest element holds the box the loop carries as `last`, which the
+// loop's move reaches first.
+Out go(Int i, Int n, Sh last, List(Rec) xs, Int z) {
+    if (i >= n) { return if (z < 0) { Out {.last = Ax(0), .xs = []} } else { Out {.last = last, .xs = xs} }; }
+    Sh s = Bx(tag(i));
+    Str g = junk(i);
+    return go(i + 1, n, s, xs.concat([Rec {.s = s, .k = i}]), z + str_len(g) % 3);
+}
+
+// A list with room left in its buffer, made before the loop.
+List(Rec) fill(Int i, Int n, List(Rec) xs) {
+    if (i >= n) { return xs; }
+    return fill(i + 1, n, xs.concat([Rec {.s = Ax(i), .k = 0 - 1}]));
+}
+
+Int bad(List(Rec) xs, Int i, Int m, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    Rec r = xs[i];
+    Bool ok = if (i < m) { r.k == 0 - 1 && disp(r.s) == f"A{i}" } else { r.k == i - m && disp(r.s) == tag(i - m) };
+    return bad(xs, i + 1, m, acc + (if (ok) { 0 } else { 1 }));
+}
+
+Str closure(Int) mk(Int i) {
+    Str t = tag(i);
+    return lambda(n) { t + f"/{n}" };
+}
+
+COut cgo(Int i, Int n, Str closure(Int) last, List(CRec) xs, Int z) {
+    if (i >= n) { return if (z < 0) { COut {.last = mk(0), .xs = []} } else { COut {.last = last, .xs = xs} }; }
+    Str closure(Int) c = mk(i);
+    Str g = junk(i);
+    return cgo(i + 1, n, c, xs.concat([CRec {.f = c, .k = i}]), z + str_len(g) % 3);
+}
+
+List(CRec) cfill(Int i, Int n, List(CRec) xs) {
+    if (i >= n) { return xs; }
+    return cfill(i + 1, n, xs.concat([CRec {.f = mk(0 - i), .k = 0 - 1}]));
+}
+
+Int cbad(List(CRec) xs, Int i, Int m, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    CRec r = xs[i];
+    Bool ok = if (i < m) { r.k == 0 - 1 && r.f(1) == tag(0 - i) + "/1" } else { r.k == i - m && r.f(2) == tag(i - m) + "/2" };
+    return cbad(xs, i + 1, m, acc + (if (ok) { 0 } else { 1 }));
+}
+
+// More garbage after the loops, so freed pages are used again.
+Int churn(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Str g = junk(i) + str_repeat("z", 80);
+    return churn(i + 1, n, acc + str_len(g) % 7);
+}
+
+Int main() {
+    List(Rec) e = [];
+    Out o = go(0, 3000, Ax(0), fill(0, 1030, e), 0);
+    List(CRec) ce = [];
+    COut co = cgo(0, 3000, mk(0), cfill(0, 1030, ce), 0);
+    Int c = churn(0, 3000, 0);
+    println(f"boxes {o.xs.len()} bad {bad(o.xs, 0, 1030, 0)} last {disp(o.last)}");
+    println(f"closures {co.xs.len()} bad {cbad(co.xs, 0, 1030, 0)} last {co.last(3)} {c > 0}");
+    return 0;
+}
