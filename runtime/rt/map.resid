@@ -1902,7 +1902,7 @@ Int flat_move(Int f, Int n, Int ek, Int ctx) {
     if (!mv_src(ctx, f)) {
         Int kept = ld64(f + 16);
         if (kept >= n) { return f; }
-        _ = mv_done(move_elems(f, f, kept, n, ek, mv_into_fw(region_of(f), fw_on(ctx))));
+        _ = mv_done(move_elems(f, f, kept, n, ek, mv_into_fw(region_of(f), fw_mode(ctx))));
         return st64(f + 16, n) * 0 + f;
     }
     Int g = fwb_get(ctx, f);
@@ -1993,6 +1993,15 @@ pub Int fw_put(Int ctx, Int v, Int c) {
 }
 
 Bool fw_on(Int ctx) { return ctx == resid_raw_tls("rg_mv_loop", 24) || mv_into_fw_on(ctx); }
+
+// What a move settling a buffer's new slots inside the move ctx forwards
+// (region.resid, mv_into_fw): everything inside a loop's move; boxes and
+// closures inside a spawned job's (rt_spawn_out), or inside a move that
+// settles for one; nothing inside a write barrier's.
+Int fw_mode(Int ctx) {
+    if (fw_on(ctx)) { return 1; }
+    return if (ctx == resid_raw_tls("rg_mv_spawn", 24) || mv_into_fw_mode(ctx) == 2) { 2 } else { 0 };
+}
 
 // A list buffer's copy (flat_move, bl_move_buf): in the settling moves'
 // table under its destination whatever the context, so the loop move's own
@@ -2115,20 +2124,55 @@ pub Int rt_mv_dec(Int v, Int ctx) { return dec_move(v, ctx); }
 // A sum's box, copied whole; its slots are moved by the compiled
 // resid.sum.evac.T that calls this (and then resid_mv_leave). A constant
 // (a variant without payload) lies in no region. A box reached twice in
-// one move is copied once (mv_fwd), so a shared value is not unfolded; one
+// one move is copied once (bx_get), so a shared value is not unfolded; one
 // nested past mv_max_depth() stays, the move marked failed (region.resid
 // keeps the region), rather than run the stack out.
 @export("resid_mv_box", "ptr(ptr,ptr)")
 pub Int rt_mv_box(Int v, Int ctx) {
     if (v == 0 || ult(v, 4096) || box_imm(v) || box_fimm(v) || !mv_src(ctx, v)) { return v; }
-    Int f = fwd_get(v);
+    Int f = bx_get(ctx, v);
     // The caller moves a returned copy's slots, then leaves: count it.
     if (f != 0) { return st64(mv_depth_word(), ld64(mv_depth_word()) + 1) * 0 + f; }
     if (mv_deeper() == 0) { return v; }
     Int sz = 16 + (ld32(v + 4) & 65535) * 8;
     Int c = mv_alloc(ctx, sz);
     _ = mcopy(c, v, sz);
-    return fwd_put(v, c);
+    return bx_put(ctx, v, c);
+}
+
+// The copy of box or closure v made earlier in the move under way (ctx),
+// for ctx's destination. A loop's own move and a spawned job's move of its
+// result each send every copy to one place (fwd_get, reset as each
+// starts); a move that settles a buffer's new slots inside one sends them
+// to the buffer's region, older than the loop's, so its copies are entered
+// under that region (fws_get): a copy the loop's move made in its new
+// region, taken for a slot of the older buffer, would leave the buffer
+// pointing into a region freed before it. A write barrier's move
+// forwards nothing: no reset precedes it, so an entry of an earlier one
+// could name an address freed and used again since.
+// A loop's own move, the common case, stays inline.
+@inline
+Int bx_get(Int ctx, Int v) {
+    if (ctx == resid_raw_tls("rg_mv_loop", 24)) { return fwd_get(v); }
+    return bx_get_other(ctx, v);
+}
+
+@inline
+Int bx_put(Int ctx, Int v, Int c) {
+    if (ctx == resid_raw_tls("rg_mv_loop", 24)) { return fwd_put(v, c); }
+    return bx_put_other(ctx, v, c);
+}
+
+@noinline
+Int bx_get_other(Int ctx, Int v) {
+    if (ctx == resid_raw_tls("rg_mv_spawn", 24)) { return fwd_get(v); }
+    return if (mv_into_fw_mode(ctx) != 0) { fws_get(v, ld64(ctx + 16)) } else { 0 };
+}
+
+@noinline
+Int bx_put_other(Int ctx, Int v, Int c) {
+    if (ctx == resid_raw_tls("rg_mv_spawn", 24)) { return fwd_put(v, c); }
+    return if (mv_into_fw_mode(ctx) != 0) { fws_put(v, c, ld64(ctx + 16)) } else { c };
 }
 
 @export("resid_mv_leave", "void()")
@@ -2144,14 +2188,14 @@ pub Int rt_mv_word(Int w, Int ctx) { return elem_move(w, ctx); }
 @export("resid_mv_clo", "ptr(ptr,ptr)")
 pub Int rt_mv_clo(Int env, Int ctx) {
     if (env == 0 || !mv_src(ctx, env)) { return env; }
-    Int f = fwd_get(env);
+    Int f = bx_get(ctx, env);
     if (f != 0) { return f; }
     Int m = ld64(env - 8);
     if (m == 0) { return st64(mv_fail_word(), 1) * 0 + env; }
     if (mv_deeper() == 0) { return env; }
     Int c = resid_raw_call2(m, env, ctx);
     _ = mv_shallower();
-    return fwd_put(env, c);
+    return bx_put(ctx, env, c);
 }
 
 // The nesting of the box and closure moves under way: past the limit a
@@ -2180,6 +2224,7 @@ Int fwd_slot(Int t, Int cap, Int gen, Int p, Int i) {
 
 Int fwd_hash(Int p, Int cap) { return ((p >> 4) * 40503) & (cap - 1); }
 
+@inline
 Int fwd_get(Int p) {
     Int w = fwd_word();
     if (ld64(w + 16) == 0) { return 0; }
