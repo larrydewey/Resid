@@ -2485,35 +2485,55 @@ ORT ow_rets_kids_n(OFn o, OS s, Int id, Int i, ORT acc) { return ow_rets_kids(o,
 
 // Initial summaries: every tracked parameter owned, every function with a
 // tracked result fresh, nothing written.
-OS ow_init(Kg g, Funcs fs, OT ot, Map(Str, Int) blind, List(Int) fns, Int i, OS s) {
+// prs: each function's resolution (OPre.r): a call a local binds calls a
+// closure, never the function itself.
+OS ow_init(Kg g, Funcs fs, OT ot, Map(Str, Int) blind, List(Int) fns, List(OPre) prs, Int i, OS s) {
     if (i >= fns.len()) { return s; }
     Int f = fns[i];
+    Map(Int, Int) loc = ow_pre_def(prs, f, i);
     Int fi = if (blind.contains(g.ns[f].text)) { -1 } else { ot.fidx.get(g.ns[f].text) else { -1 } };
     Map(Int, Int) pw = if (fi < 0) { s.pown } else { ow_init_params(g, fs, f, fi * 1024, ow_param_ids(g, f, 0, ListBuf()), 0, s.pown) };
     Bool tr = ow_tracked(fs, ow_base(fs, g.ns[kg_kid(g, f, 0)].text));
-    OS s2 = OS {.need = s.need, .pown = pw, .fresh = if (tr && ow_entry_ok(g, f) && fi >= 0) { s.fresh.insert(fi, 1) } else { s.fresh }, .keeps = s.keeps, .reads = s.reads, .writes = s.writes, .curp = if (fi < 0) { s.curp } else { ow_init_curp(g, fs, f, fi * 1024, ow_param_ids(g, f, 0, ListBuf()), 0, ow_self_call(g, f) && ow_region_may(g, fs, f), s.curp) }, .rcur = if (tr && fi >= 0) { s.rcur.insert(fi, 1) } else { s.rcur }};
-    return ow_init_n(g, fs, ot, blind, fns, i, s2);
+    OS s2 = OS {.need = s.need, .pown = pw, .fresh = if (tr && ow_entry_ok(g, f) && fi >= 0) { s.fresh.insert(fi, 1) } else { s.fresh }, .keeps = s.keeps, .reads = s.reads, .writes = s.writes, .curp = if (fi < 0) { s.curp } else { ow_init_curp(g, fs, loc, f, fi * 1024, ow_param_ids(g, f, 0, ListBuf()), 0, ow_self_call(g, loc, f) && ow_region_may(g, fs, loc, f), s.curp) }, .rcur = if (tr && fi >= 0) { s.rcur.insert(fi, 1) } else { s.rcur }};
+    return ow_init_n(g, fs, ot, blind, fns, prs, i, s2);
 }
 
-OS ow_init_n(Kg g, Funcs fs, OT ot, Map(Str, Int) blind, List(Int) fns, Int i, OS s) { return ow_init(g, fs, ot, blind, fns, i + 1, s); }
+OS ow_init_n(Kg g, Funcs fs, OT ot, Map(Str, Int) blind, List(Int) fns, List(OPre) prs, Int i, OS s) { return ow_init(g, fs, ot, blind, fns, prs, i + 1, s); }
+
+// Function f's resolved names (ORS.def: a ref or a call node to the local
+// binder it names), from its OPre (at i when the lists align).
+Map(Int, Int) ow_pre_def(List(OPre) prs, Int f, Int i) {
+    if (i < prs.len() && prs[i].fnode == f) { return prs[i].r.def; }
+    return ow_pre_def_at(prs, f, 0);
+}
+
+Map(Int, Int) ow_pre_def_at(List(OPre) prs, Int f, Int j) {
+    if (j >= prs.len()) { return ow_noim(); }
+    if (prs[j].fnode == f) { return prs[j].r.def; }
+    return ow_pre_def_at(prs, f, j + 1);
+}
+
+// A call of the enclosing function by its name: not one a local binds
+// (a closure that shadows the name).
+Bool ow_named_self(Kg g, Map(Int, Int) loc, Int id, List(Str) ns) { return g.ns[id].kc == 4 && !loc.contains(id) && ns.contains(g.ns[id].text); }
 
 // The parameters that start cur. A function that calls itself may become
 // a loop with a region of its own (lower.resid's lr_region): it moves a
 // carried cur record into its region when it takes one, so only a record
 // with a mover (lr_move), in a function whose result is a scalar or moves
 // out at its exits (lr_ret_evac), may be cur there, as lowering requires.
-Map(Int, Int) ow_init_curp(Kg g, Funcs fs, Int f, Int fk0, List(Int) ps, Int i, Bool selfc, Map(Int, Int) acc) {
+Map(Int, Int) ow_init_curp(Kg g, Funcs fs, Map(Int, Int) loc, Int f, Int fk0, List(Int) ps, Int i, Bool selfc, Map(Int, Int) acc) {
     if (i >= ps.len()) { return acc; }
     Str ty = ow_base(fs, g.ns[kg_kid(g, ps[i], 0)].text);
     Str rty = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(g.ns[kg_kid(g, f, 0)].text));
     // A parameter with no mover that a self-call changes keeps the loop from a region (lr_phis_ok).
-    Bool noreg = !ow_has_move(fs, ty) && ow_arg_changed(g, kg_kid(g, f, g.ns[f].nk - 1), i, g.ns[ps[i]].text, ow_self_names(g, f));
+    Bool noreg = !ow_has_move(fs, ty) && ow_arg_changed(g, loc, kg_kid(g, f, g.ns[f].nk - 1), i, g.ns[ps[i]].text, ow_self_names(g, f));
     Bool loopok = !selfc || noreg || (struct_index(fs, ty) >= 0 && ow_has_move(fs, ty) && (ll_ty(rty) != "ptr" || lr_ret_evac(fs, rty) != ""));
     Bool ok = ow_tracked(fs, ty) && ow_entry_ok(g, f) && loopok;
-    return ow_init_curp_n(g, fs, f, fk0, ps, i, selfc, if (ok) { acc.insert(fk0 + i, 1) } else { acc });
+    return ow_init_curp_n(g, fs, loc, f, fk0, ps, i, selfc, if (ok) { acc.insert(fk0 + i, 1) } else { acc });
 }
 
-Map(Int, Int) ow_init_curp_n(Kg g, Funcs fs, Int f, Int fk0, List(Int) ps, Int i, Bool selfc, Map(Int, Int) acc) { return ow_init_curp(g, fs, f, fk0, ps, i + 1, selfc, acc); }
+Map(Int, Int) ow_init_curp_n(Kg g, Funcs fs, Map(Int, Int) loc, Int f, Int fk0, List(Int) ps, Int i, Bool selfc, Map(Int, Int) acc) { return ow_init_curp(g, fs, loc, f, fk0, ps, i + 1, selfc, acc); }
 
 Bool ow_has_move(Funcs fs, Str t) {
     Str m = lr_move(fs, t, []);
@@ -2522,34 +2542,34 @@ Bool ow_has_move(Funcs fs, Str t) {
 
 // Whether lowering may give f's loop a region: a scalar or movable result,
 // or no return surely of another pointer (lr_exits_ok).
-Bool ow_region_may(Kg g, Funcs fs, Int f) {
+Bool ow_region_may(Kg g, Funcs fs, Map(Int, Int) loc, Int f) {
     Str rty = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(g.ns[kg_kid(g, f, 0)].text));
     if (ll_ty(rty) != "ptr" || lr_ret_evac(fs, rty) != "") { return true; }
     Str nm = g.ns[f].text;
     Str base = if (str_has_suffix(nm, "__o")) { str_slice(nm, 0, str_len(nm) - 3) } else { nm };
     List(Int) ps = ow_param_ids(g, f, 0, ListBuf());
-    return ow_rets_plain(g, kg_kid(g, f, g.ns[f].nk - 1), ps, nm, base);
+    return ow_rets_plain(g, loc, kg_kid(g, f, g.ns[f].nk - 1), ps, nm, base);
 }
 
-Bool ow_rets_plain(Kg g, Int id, List(Int) ps, Str a, Str b) {
+Bool ow_rets_plain(Kg g, Map(Int, Int) loc, Int id, List(Int) ps, Str a, Str b) {
     Str k = g.ns[id].kind;
     if (k == "lambda" || k == "spawn") { return true; }
     if (k == "ret" && g.ns[id].nk > 0) {
         Int e = lo_unparen(g, kg_kid(g, id, 0));
-        Bool self = g.ns[e].kc == 4 && (g.ns[e].text == a || g.ns[e].text == b);
+        Bool self = ow_named_self(g, loc, e, [a, b]);
         // Only a call or a local surely returns a pointer that is no parameter.
         if ((g.ns[e].kc == 4 && !self) || (g.ns[e].kind == "ref" && !ow_is_param(g, ps, g.ns[e].text, 0))) { return false; }
     }
-    return ow_rets_plain_kids(g, id, 0, ps, a, b);
+    return ow_rets_plain_kids(g, loc, id, 0, ps, a, b);
 }
 
-Bool ow_rets_plain_kids(Kg g, Int id, Int i, List(Int) ps, Str a, Str b) {
+Bool ow_rets_plain_kids(Kg g, Map(Int, Int) loc, Int id, Int i, List(Int) ps, Str a, Str b) {
     if (i >= g.ns[id].nk) { return true; }
-    if (!ow_rets_plain(g, kg_kid(g, id, i), ps, a, b)) { return false; }
-    return ow_rets_plain_kids_n(g, id, i, ps, a, b);
+    if (!ow_rets_plain(g, loc, kg_kid(g, id, i), ps, a, b)) { return false; }
+    return ow_rets_plain_kids_n(g, loc, id, i, ps, a, b);
 }
 
-Bool ow_rets_plain_kids_n(Kg g, Int id, Int i, List(Int) ps, Str a, Str b) { return ow_rets_plain_kids(g, id, i + 1, ps, a, b); }
+Bool ow_rets_plain_kids_n(Kg g, Map(Int, Int) loc, Int id, Int i, List(Int) ps, Str a, Str b) { return ow_rets_plain_kids(g, loc, id, i + 1, ps, a, b); }
 
 Bool ow_is_param(Kg g, List(Int) ps, Str v, Int i) {
     if (i >= ps.len()) { return false; }
@@ -2563,43 +2583,41 @@ List(Str) ow_self_names(Kg g, Int f) {
 }
 
 // Whether some self-call passes other than parameter v as argument i.
-Bool ow_arg_changed(Kg g, Int id, Int i, Str v, List(Str) ns) {
+Bool ow_arg_changed(Kg g, Map(Int, Int) loc, Int id, Int i, Str v, List(Str) ns) {
     Str k = g.ns[id].kind;
     if (k == "lambda" || k == "spawn") { return false; }
-    if (g.ns[id].kc == 4 && ns.contains(g.ns[id].text) && i < g.ns[id].nk) {
+    if (ow_named_self(g, loc, id, ns) && i < g.ns[id].nk) {
         Int a = lo_unparen(g, kg_kid(g, id, i));
         if (!(g.ns[a].kind == "ref" && g.ns[a].text == v)) { return true; }
     }
-    return ow_arg_changed_kids(g, id, 0, i, v, ns);
+    return ow_arg_changed_kids(g, loc, id, 0, i, v, ns);
 }
 
-Bool ow_arg_changed_kids(Kg g, Int id, Int j, Int i, Str v, List(Str) ns) {
+Bool ow_arg_changed_kids(Kg g, Map(Int, Int) loc, Int id, Int j, Int i, Str v, List(Str) ns) {
     if (j >= g.ns[id].nk) { return false; }
-    if (ow_arg_changed(g, kg_kid(g, id, j), i, v, ns)) { return true; }
-    return ow_arg_changed_kids_n(g, id, j, i, v, ns);
+    if (ow_arg_changed(g, loc, kg_kid(g, id, j), i, v, ns)) { return true; }
+    return ow_arg_changed_kids_n(g, loc, id, j, i, v, ns);
 }
 
-Bool ow_arg_changed_kids_n(Kg g, Int id, Int j, Int i, Str v, List(Str) ns) { return ow_arg_changed_kids(g, id, j + 1, i, v, ns); }
+Bool ow_arg_changed_kids_n(Kg g, Map(Int, Int) loc, Int id, Int j, Int i, Str v, List(Str) ns) { return ow_arg_changed_kids(g, loc, id, j + 1, i, v, ns); }
 
 // Whether a function calls itself, by its name or its instance's base.
-Bool ow_self_call(Kg g, Int f) {
-    Str nm = g.ns[f].text;
-    Str base = if (str_has_suffix(nm, "__o")) { str_slice(nm, 0, str_len(nm) - 3) } else { nm };
-    return ow_calls_name(g, kg_kid(g, f, g.ns[f].nk - 1), nm, base);
+Bool ow_self_call(Kg g, Map(Int, Int) loc, Int f) {
+    return ow_calls_name(g, loc, kg_kid(g, f, g.ns[f].nk - 1), ow_self_names(g, f));
 }
 
-Bool ow_calls_name(Kg g, Int id, Str a, Str b) {
-    if (g.ns[id].kc == 4 && (g.ns[id].text == a || g.ns[id].text == b)) { return true; }
-    return ow_calls_name_kids(g, id, 0, a, b);
+Bool ow_calls_name(Kg g, Map(Int, Int) loc, Int id, List(Str) ns) {
+    if (ow_named_self(g, loc, id, ns)) { return true; }
+    return ow_calls_name_kids(g, loc, id, 0, ns);
 }
 
-Bool ow_calls_name_kids(Kg g, Int id, Int i, Str a, Str b) {
+Bool ow_calls_name_kids(Kg g, Map(Int, Int) loc, Int id, Int i, List(Str) ns) {
     if (i >= g.ns[id].nk) { return false; }
-    if (ow_calls_name(g, kg_kid(g, id, i), a, b)) { return true; }
-    return ow_calls_name_kids_n(g, id, i, a, b);
+    if (ow_calls_name(g, loc, kg_kid(g, id, i), ns)) { return true; }
+    return ow_calls_name_kids_n(g, loc, id, i, ns);
 }
 
-Bool ow_calls_name_kids_n(Kg g, Int id, Int i, Str a, Str b) { return ow_calls_name_kids(g, id, i + 1, a, b); }
+Bool ow_calls_name_kids_n(Kg g, Map(Int, Int) loc, Int id, Int i, List(Str) ns) { return ow_calls_name_kids(g, loc, id, i + 1, ns); }
 
 Map(Str, Int) ow_blind_all(Kg g, OT ot, List(OPre) prs, Int i, Map(Str, Int) acc) {
     if (i >= prs.len()) { return acc; }
@@ -3876,7 +3894,7 @@ OWR ow_run_s(Kg g, Int unit, Funcs fs, Bool strict, Map(Str, Str) inst, Bool rb)
     // Functions some call site of which the analysis cannot judge: named
     // as a value, or called inside a lambda or spawn body.
     Map(Str, Int) blind = ow_blind_all(g, ot, prs, 0, ow_nosm());
-    OS s0 = ow_init(g, fs, ot, blind, fns, 0, OS {.need = ow_noim(), .pown = ow_noim(), .fresh = ow_noim(), .keeps = ow_nois(), .reads = ow_nois(), .writes = ow_nois(), .curp = ow_noim(), .rcur = ow_noim()});
+    OS s0 = ow_init(g, fs, ot, blind, fns, prs, 0, OS {.need = ow_noim(), .pown = ow_noim(), .fresh = ow_noim(), .keeps = ow_nois(), .reads = ow_nois(), .writes = ow_nois(), .curp = ow_noim(), .rcur = ow_noim()});
     Map(Str, List(Int)) cl0 = {};
     Map(Str, List(Int)) callers = ow_callers(prs, 0, cl0);
     Map(Str, Int) idx = ow_index(g, prs, 0, ow_nosm());
@@ -3924,7 +3942,7 @@ OWR ow_run_warm(Kg g, Int unit, Funcs fs, Map(Str, Str) inst, Int n0, List(Str) 
     OT ot = ow_with_fids(ot1, fs);
     List(OPre) prs = ow_preps_all(g, fs, ot, fns);
     Map(Str, Int) blind = ow_blind_all(g, ot, prs, 0, ow_nosm());
-    OS si = ow_init(g, fs, ot, blind, fns, 0, OS {.need = ow_noim(), .pown = ow_noim(), .fresh = ow_noim(), .keeps = ow_nois(), .reads = ow_nois(), .writes = ow_nois(), .curp = ow_noim(), .rcur = ow_noim()});
+    OS si = ow_init(g, fs, ot, blind, fns, prs, 0, OS {.need = ow_noim(), .pown = ow_noim(), .fresh = ow_noim(), .keeps = ow_nois(), .reads = ow_nois(), .writes = ow_nois(), .curp = ow_noim(), .rcur = ow_noim()});
     Map(Str, List(Int)) cl0 = {};
     Map(Str, List(Int)) callers = ow_callers(prs, 0, cl0);
     Map(Str, Int) idx = ow_index(g, prs, 0, ow_nosm());
