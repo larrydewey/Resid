@@ -84,22 +84,30 @@ Map(Int, Int) ow_noim() {
 
 Str ow_base(Funcs fs, Str t) { return strip_owned_cg(ct_base_of(fs.ctn, fs.ctb, t)); }
 
-Bool ow_is_list(Str t) { return str_has_prefix(t, "List(") && !is_list_fixed(t); }
+// A closure type's text starts with its result type (`List(Int)
+// closure(Int)`): it is a closure, never a list or a map.
+Bool ow_is_list(Str t) { return str_has_prefix(t, "List(") && !is_list_fixed(t) && !is_fn_type(t); }
+
+Bool ow_is_mapset(Str t) { return lin_is_mapset(t) && !is_fn_type(t); }
 
 // A type whose values can be written in place: a record, a list, a map.
 Bool ow_tracked(Funcs fs, Str t) {
     if (t == "") { return false; }
-    return ow_is_list(t) || lin_is_mapset(t) || struct_index(fs, t) >= 0;
+    return ow_is_list(t) || ow_is_mapset(t) || struct_index(fs, t) >= 0;
 }
 
-OT ow_types(Funcs fs, Int i, OT acc) {
+// sts: each record type, 2 when a value of it can hold a record of its
+// own type (ow_self_reach), else 1.
+OT ow_types(Funcs fs, Map(Str, Str) dm, Int i, OT acc) {
     if (i >= fs.stn.len()) { return acc; }
     Str t = fs.stn[i];
-    OT a2 = OT {.sts = acc.sts.insert(t, 1), .fty = ow_types_fields(fs, t, str_split(fs.stf[i], ","), 0, acc.fty), .fidx = acc.fidx, .strict = acc.strict, .inst = acc.inst, .rb = acc.rb, .fid = acc.fid, .fnames = acc.fnames};
-    return ow_types_n(fs, i, a2);
+    // A name two modules declare: either one's answer may apply.
+    Int sr = if (ow_self_reach(dm, str_replace(t, " ", ""), fs.stf[i]) || (acc.sts.get(t) else { 1 }) == 2) { 2 } else { 1 };
+    OT a2 = OT {.sts = acc.sts.insert(t, sr), .fty = ow_types_fields(fs, t, str_split(fs.stf[i], ","), 0, acc.fty), .fidx = acc.fidx, .strict = acc.strict, .inst = acc.inst, .rb = acc.rb, .fid = acc.fid, .fnames = acc.fnames};
+    return ow_types_n(fs, dm, i, a2);
 }
 
-OT ow_types_n(Funcs fs, Int i, OT acc) { return ow_types(fs, i + 1, acc); }
+OT ow_types_n(Funcs fs, Map(Str, Str) dm, Int i, OT acc) { return ow_types(fs, dm, i + 1, acc); }
 
 Map(Str, Str) ow_types_fields(Funcs fs, Str t, List(Str) ents, Int j, Map(Str, Str) acc) {
     if (j >= ents.len()) { return acc; }
@@ -180,7 +188,7 @@ Str ow_ret_tyx(OX x, Str f) {
 // ow_tracked through the cached struct names.
 Bool ow_trk(OX x, Str t) {
     if (t == "") { return false; }
-    return x.t.sts.contains(t) || ow_is_list(t) || lin_is_mapset(t);
+    return x.t.sts.contains(t) || ow_is_list(t) || ow_is_mapset(t);
 }
 
 // A value that may hold a tracked object without being one itself (a sum,
@@ -244,6 +252,12 @@ Str ow_elem_ty(Funcs fs, Str t) { return if (ow_is_list(t)) { ow_base(fs, elem_t
 
 ORS ow_bind(ORS r, Int id, Str ty) { return ORS {.def = r.def, .bty = r.bty.insert(id, ty)}; }
 
+// The local binder a call node calls through (a closure), else -1.
+Int ow_callee(OX x, ORS r, Int id) { return if (x.g.ns[id].kind == "call") { r.def.get(id) else { -1 } } else { -1 }; }
+
+// A call of the user function the node names (no local shadows it).
+Bool ow_ucall(OX x, ORS r, Int id) { return x.g.ns[id].kind == "call" && ow_callee(x, r, id) < 0 && ow_fi(x, x.g.ns[id].text) >= 0; }
+
 ORS or_ref(OX x, Int id, Map(Str, Int) env, ORS r) {
     Int d = env.get(x.g.ns[id].text) else { -1 };
     if (d < 0) { return r; }
@@ -255,6 +269,10 @@ ORS or_ref(OX x, Int id, Map(Str, Int) env, ORS r) {
 ORS or_expr(OX x, Int id, Map(Str, Int) env, ORS r) {
     Str k = x.g.ns[id].kind;
     if (k == "ref") { return or_ref(x, id, env, r); }
+    // `f(..)` with f a local binder calls the closure f holds (a local
+    // shadows a function of that name, as lowering resolves it): the call
+    // node resolves to f, so the call is a use of f (SW-REUSE-1).
+    if (k == "call") { return or_kids(x, id, 0, env, or_ref(x, id, env, r)); }
     if (k == "arm") { return or_arm(x, id, env, r); }
     if (k == "lambda") { return or_lambda(x, id, 0, env, r); }
     if (k == "bexpr" || k == "block") { return or_block(x, id, 0, env, r).r; }
@@ -803,7 +821,7 @@ Str ow_expr_ty(OX x, ORS r, Int e) {
     if (p.b >= 0) { return p.ty; }
     Str k = x.g.ns[e].kind;
     if (k == "struct") { return ow_base(x.fs, x.g.ns[e].text); }
-    if (k == "call") { return ow_ret_tyx(x, x.g.ns[e].text); }
+    if (k == "call") { return if (ow_callee(x, r, e) >= 0) { "" } else { ow_ret_tyx(x, x.g.ns[e].text) }; }
     return "";
 }
 
@@ -947,8 +965,10 @@ OF ow_arm_names(OX x, Int arm, Int i, List(OE) pe, Bool owned, OF f) {
 OF ow_arm_names_n(OX x, Int arm, Int i, List(OE) pe, Bool owned, OF f) { return ow_arm_names(x, arm, i + 1, pe, owned, f); }
 
 // A closure's entries: every outer binder it mentions, with its aliases.
+// A closure called by name inside it counts as mentioned.
 List(OE) ow_caps(OX x, ORS r, Int id, OF f, ListBuf(OE) acc) {
-    Int d = if (x.g.ns[id].kind == "ref") { r.def.get(id) else { -1 } } else { -1 };
+    Str k = x.g.ns[id].kind;
+    Int d = if (k == "ref" || k == "call") { r.def.get(id) else { -1 } } else { -1 };
     ListBuf(OE) a1 = if (d >= 0) { ow_push_e(acc, ow_path_ents(f, d, 0), 0) } else { acc };
     return ow_caps_kids(x, r, id, 0, f, a1).finish();
 }
@@ -956,8 +976,10 @@ List(OE) ow_caps(OX x, ORS r, Int id, OF f, ListBuf(OE) acc) {
 ListBuf(OE) ow_caps_kids(OX x, ORS r, Int id, Int i, OF f, ListBuf(OE) acc) {
     if (i >= x.g.ns[id].nk) { return acc; }
     Int k = kg_kid(x.g, id, i);
-    Int d = if (x.g.ns[k].kind == "ref") { r.def.get(k) else { -1 } } else { -1 };
-    ListBuf(OE) a1 = if (d >= 0) { ow_push_e(acc, ow_path_ents(f, d, 0), 0) } else { ow_caps_kids(x, r, k, 0, f, acc) };
+    Str kk = x.g.ns[k].kind;
+    Int d = if (kk == "ref" || kk == "call") { r.def.get(k) else { -1 } } else { -1 };
+    ListBuf(OE) a0 = if (d >= 0) { ow_push_e(acc, ow_path_ents(f, d, 0), 0) } else { acc };
+    ListBuf(OE) a1 = if (kk == "ref") { a0 } else { ow_caps_kids(x, r, k, 0, f, a0) };
     return ow_caps_kids_n(x, r, id, i, f, a1);
 }
 
@@ -1063,7 +1085,7 @@ Bool ow_holds_src(OX x, OF f, List(OE) es, Int src, Int id) {
     // alias entries are coarse (a callee result may point "anywhere in"
     // an argument), and asking them alone refused rebuilds no value could
     // break.
-    if (!ow_self_reach(x.fs, ow_base(x.fs, x.g.ns[id].text))) { return false; }
+    if ((x.t.sts.get(ow_base(x.fs, x.g.ns[id].text)) else { 2 }) == 1) { return false; }
     if (ow_has_kind(x.g, id, "lambda") || ow_has_kind(x.g, id, "spawn")) { return true; }
     List(OLc) w = ow_roots(ow_mem(f, src, 0), 0, ListBuf());
     if (ow_holds_any(f, es, w, 0)) { return true; }
@@ -1140,23 +1162,28 @@ Bool ow_root_in_ls(Int r, List(OLc) b, Int i) {
 
 Bool ow_root_in_ls_n(Int r, List(OLc) b, Int i) { return ow_root_in_ls(r, b, i + 1); }
 
-// Whether a value of record type t can hold a record of type t: its field
-// types, and the records, sums and aliases they name, reach t's name or a
-// closure (whose environment may hold anything). A breadth-first search
-// over type texts, each named type expanded once.
-Bool ow_self_reach(Funcs fs, Str t) {
-    Int si = struct_index(fs, t);
-    if (si < 0) { return true; }
-    return ow_reach_at(fs, t, [fs.stf[si]], 0, [t]);
+// Whether a value of record type t (fields fs0) can hold a record of type
+// t: its field types, and the records, sums and aliases they name, reach
+// t or a closure (whose environment may hold anything). A breadth-first
+// search over type terms (a name with its argument list, `Tree(Int)`),
+// each named type expanded once. A generic record is a concrete
+// declaration named by its instance (mono.resid), so instances compare
+// whole; a term with arguments that names no declaration and no builtin
+// may hold anything, and so does any text the search cannot read: it
+// answers "can reach" (SWMG-1: comparing identifier tokens never matched
+// an instance's name). dm: ow_decl_map.
+Bool ow_self_reach(Map(Str, Str) dm, Str t, Str fs0) {
+    return ow_reach_at(dm, t, [fs0], 0, [t]);
 }
 
-Bool ow_reach_at(Funcs fs, Str t, List(Str) ws, Int i, List(Str) seen) {
+Bool ow_reach_at(Map(Str, Str) dm, Str t, List(Str) ws, Int i, List(Str) seen) {
     if (i >= ws.len()) { return false; }
-    List(Str) toks = ow_idents(ws[i], 0, 0, []);
-    if (toks.contains(t) || toks.contains("closure")) { return true; }
-    List(Str) more = ow_reach_more(fs, toks, seen, 0, []);
-    List(Str) names = ow_new_names(toks, seen, 0, seen);
-    return ow_reach_at(fs, t, ws.concat(more), i + 1, names);
+    if (ws.len() > 256) { return true; }
+    List(Str) terms = ow_terms(ws[i], 0, []);
+    if (terms.contains(t) || ow_reach_open(dm, terms, 0)) { return true; }
+    List(Str) more = ow_reach_more(dm, terms, seen, 0, []);
+    List(Str) names = ow_new_names(terms, seen, 0, seen);
+    return ow_reach_at(dm, t, ws.concat(more), i + 1, names);
 }
 
 List(Str) ow_new_names(List(Str) toks, List(Str) seen, Int i, List(Str) acc) {
@@ -1164,34 +1191,91 @@ List(Str) ow_new_names(List(Str) toks, List(Str) seen, Int i, List(Str) acc) {
     return ow_new_names(toks, seen, i + 1, if (acc.contains(toks[i])) { acc } else { acc.concat([toks[i]]) });
 }
 
-// The texts named by toks not yet seen: a record's fields, a sum's
-// variants, an alias's target.
-List(Str) ow_reach_more(Funcs fs, List(Str) toks, List(Str) seen, Int i, List(Str) acc) {
+// The texts named by terms not yet seen: a record's fields, a sum's
+// variants, an alias's target. A generic sum keeps one declaration under
+// its bare name: its payloads, with the parameters unsubstituted, and the
+// instance's arguments (terms of their own) cover what an instance holds.
+List(Str) ow_reach_more(Map(Str, Str) dm, List(Str) toks, List(Str) seen, Int i, List(Str) acc) {
     if (i >= toks.len()) { return acc; }
     Str n = toks[i];
-    if (seen.contains(n)) { return ow_reach_more(fs, toks, seen, i + 1, acc); }
-    Int a = ow_name_at(fs.stn, n, 0);
-    Int b = ow_name_at(fs.sun, n, 0);
-    Int c = ow_name_at(fs.ctn, n, 0);
-    List(Str) a1 = if (a >= 0) { acc.concat([fs.stf[a]]) } else { acc };
-    List(Str) a2 = if (b >= 0 && b < fs.suv.len()) { a1.concat([fs.suv[b]]) } else { a1 };
-    List(Str) a3 = if (c >= 0 && c < fs.ctb.len()) { a2.concat([fs.ctb[c]]) } else { a2 };
-    return ow_reach_more(fs, toks, seen, i + 1, a3);
+    if (seen.contains(n)) { return ow_reach_more(dm, toks, seen, i + 1, acc); }
+    Str body = dm.get(n) else { dm.get(ty_head_cg(n)) else { "" } };
+    return ow_reach_more(dm, toks, seen, i + 1, if (body == "") { acc } else { acc.concat([body]) });
 }
 
-Int ow_name_at(List(Str) ns, Str n, Int i) {
-    if (i >= ns.len()) { return -1; }
-    if (ns[i] == n) { return i; }
-    return ow_name_at(ns, n, i + 1);
+// Every declared type's name, spaces dropped, to the texts it expands to
+// (a record's fields, a sum's variants, an alias's target; ";" between
+// declarations sharing a name).
+Map(Str, Str) ow_decl_map(Funcs fs) {
+    Map(Str, Str) m0 = {};
+    Map(Str, Str) m1 = ow_decl_put(m0, fs.stn, fs.stf, 0);
+    Map(Str, Str) m2 = ow_decl_put(m1, fs.sun, fs.suv, 0);
+    return ow_decl_put(m2, fs.ctn, fs.ctb, 0);
 }
 
-// The identifiers of a type text (letters, digits, `_`); a token starts at b.
-List(Str) ow_idents(Str t, Int i, Int b, List(Str) acc) {
-    if (i >= str_len(t)) { return if (i > b) { acc.concat([str_slice(t, b, i)]) } else { acc }; }
+Map(Str, Str) ow_decl_put(Map(Str, Str) m, List(Str) ns, List(Str) bs, Int i) {
+    if (i >= ns.len() || i >= bs.len()) { return m; }
+    Str k = str_replace(ns[i], " ", "");
+    Str old = m.get(k) else { "" };
+    // A declaration with an empty body still names a type.
+    Str b = if (bs[i] == "") { " " } else { bs[i] };
+    return ow_decl_put(m.insert(k, if (old == "") { b } else { old + ";" + b }), ns, bs, i + 1);
+}
+
+// Whether a term may hold anything the search cannot follow: a closure, an
+// unbalanced text, or a name with arguments that is neither a builtin nor
+// a declaration (a generic not instantiated under that spelling).
+Bool ow_reach_open(Map(Str, Str) dm, List(Str) terms, Int i) {
+    if (i >= terms.len()) { return false; }
+    Str n = terms[i];
+    Int lp = str_index_of(n, "(", 0);
+    Str head = if (lp >= 0) { str_slice(n, 0, lp) } else { n };
+    if (head == "closure" || n == "(") { return true; }
+    Bool known = lp < 0 || ow_builtin_head(head) || dm.contains(n) || dm.contains(head);
+    if (!known) { return true; }
+    return ow_reach_open(dm, terms, i + 1);
+}
+
+// Type constructors the language provides: their arguments are terms of
+// their own, followed by the search.
+Bool ow_builtin_head(Str h) {
+    return h == "List" || h == "Map" || h == "Set" || h == "Option" || h == "Result" || h == "Secret" || h == "Int" || h == "UInt" || h == "Float" || h == "Dec" || h == "Str" || h == "Bytes";
+}
+
+// The type terms of a type text, spaces dropped: each name, with the
+// argument list that directly follows it, and (as the scan goes on inside
+// that list) the terms of its arguments. An unbalanced list yields "(".
+List(Str) ow_terms(Str t, Int i, List(Str) acc) {
+    Int n = str_len(t);
+    if (i >= n) { return acc; }
+    if (!ow_word_ch(str_char_at(t, i))) { return ow_terms(t, i + 1, acc); }
+    Int e = ow_word_end(t, i);
+    Int a = ow_skip_sp(t, e);
+    Bool args = a < n && str_char_at(t, a) == 40;
+    Int c = if (args) { ow_close_paren(t, a + 1, 1) } else { e };
+    Str term = if (!args) { str_slice(t, i, e) } else { if (c < 0) { "(" } else { str_replace(str_slice(t, i, c + 1), " ", "") } };
+    return ow_terms(t, e, if (acc.contains(term)) { acc } else { acc.concat([term]) });
+}
+
+Bool ow_word_ch(Int ch) { return (ch >= 48 && ch <= 57) || (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95; }
+
+Int ow_word_end(Str t, Int i) {
+    if (i >= str_len(t) || !ow_word_ch(str_char_at(t, i))) { return i; }
+    return ow_word_end(t, i + 1);
+}
+
+Int ow_skip_sp(Str t, Int i) {
+    if (i >= str_len(t) || str_char_at(t, i) != 32) { return i; }
+    return ow_skip_sp(t, i + 1);
+}
+
+// The index of the `)` closing a list opened before i at depth d; -1 when
+// the text ends first.
+Int ow_close_paren(Str t, Int i, Int d) {
+    if (i >= str_len(t)) { return -1; }
     Int ch = str_char_at(t, i);
-    Bool w = (ch >= 48 && ch <= 57) || (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95;
-    if (w) { return ow_idents(t, i + 1, b, acc); }
-    return ow_idents(t, i + 1, i + 1, if (i > b) { acc.concat([str_slice(t, b, i)]) } else { acc });
+    if (ch == 41 && d == 1) { return i; }
+    return ow_close_paren(t, i + 1, if (ch == 40) { d + 1 } else { if (ch == 41) { d - 1 } else { d } });
 }
 
 // Whether the subtree at id has a node of kind k.
@@ -1254,21 +1338,27 @@ OV ow_list_n(OX x, ORS r, OS s, Int id, Int i, OV acc) { return ow_list(x, r, s,
 // argument (keeps, conservatively) unless the callee's result is fresh.
 OV ow_call(OX x, ORS r, OS s, Int id, OF f) {
     Str cal0 = x.g.ns[id].text;
-    Bool user = ow_fi(x, cal0) >= 0;
+    Int clo = ow_callee(x, r, id);
+    Bool user = clo < 0 && ow_fi(x, cal0) >= 0;
     OV a0 = ow_args(x, r, s, id, 0, cal0, user, ow_ov([], true, f));
     // A call whose every argument at a writing parameter the write rule
     // allows goes to the owned instance, when there is one: the arguments
     // are judged again against it.
-    Str oi = x.t.inst.get(cal0) else { "" };
+    Str oi = if (user) { x.t.inst.get(cal0) else { "" } } else { "" };
     Bool rt = oi != "" && ow_call_ok(x, a0.f, id, 0);
     Str cal = if (rt) { oi } else { cal0 };
     OV a1 = if (rt) { ow_args(x, r, s, id, 0, cal, user, ow_ov([], true, f)) } else { a0 };
     OV a = if (rt) { ow_ov(a1.es, a1.owned, OF {.al = a1.f.al, .own = a1.f.own, .ev = a1.f.ev, .why = a1.f.why, .rok = a1.f.rok, .rents = a1.f.rents, .rev = a1.f.rev, .route = a1.f.route.insert(id, oi), .hz = a1.f.hz, .cur = a1.f.cur, .rcur = a1.f.rcur}) } else { a0 };
     Bool fr = user && s.fresh.contains(ow_fi(x, cal));
     Bool tr = ow_trk(x, ow_ret_tyx(x, cal));
-    // A builtin or a constructor (`Some(f)`) may hold any argument.
+    // A builtin or a constructor (`Some(f)`) may hold any argument; a
+    // closure's result may also hold anything the closure holds.
+    if (clo >= 0) { return ow_ov(a.es.concat(ow_path_ents(a.f, clo, 0)), false, a.f); }
     if (!user) { return ow_ov(a.es, false, a.f); }
-    if (!tr) { return ow_ov([], false, a.f); }
+    // A result that is no tracked object may still hold one (an Option, a
+    // closure, a sum, a fixed list): like a builtin's, it may hold any
+    // argument. Only a result that can hold nothing holds none.
+    if (!tr) { return ow_ov(if (ow_may_hold(x, ow_ret_tyx(x, cal), [])) { a.es } else { [] }, false, a.f); }
     return ow_ovc(a.es, fr && a.owned, s.rcur.contains(ow_fi(x, cal)), a.f);
 }
 
@@ -1355,7 +1445,7 @@ Str ow_arg_ty(OX x, Str f, Int i) {
 }
 
 Str ow_path_ty(OX x, ORS r, Int id) {
-    if (x.g.ns[id].kind == "call") { return ow_ret_tyx(x, x.g.ns[id].text); }
+    if (x.g.ns[id].kind == "call") { return if (ow_callee(x, r, id) >= 0) { "" } else { ow_ret_tyx(x, x.g.ns[id].text) }; }
     OP p = ow_path(x, r, id);
     return p.ty;
 }
@@ -1509,7 +1599,10 @@ OL ow_lv(OX x, ORS r, Map(Int, Int) evn, Int id, OL l) {
     OP p = ow_path(x, r, id);
     // Snapshots only where a write or move is judged.
     Bool snap = k == "struct" || k == "mcall" || k == "call" || (p.b >= 0 && ow_trk(x, p.ty));
-    OL l0 = if (snap) { ow_live_snap(l, id) } else { l };
+    OL ls = if (snap) { ow_live_snap(l, id) } else { l };
+    // A closure called by name is used whole until the call (SW-REUSE-1).
+    Int clo = ow_callee(x, r, id);
+    OL l0 = if (clo >= 0) { ow_live_add(ls, f"{clo}|0") } else { ls };
     if (p.b >= 0) {
         OL l1 = ow_live_add(l0, ow_use_key(x, p));
         return ow_lv_list(x, r, evn, p.idx, p.idx.len() - 1, l1);
@@ -1564,13 +1657,30 @@ OL ow_lv(OX x, ORS r, Map(Int, Int) evn, Int id, OL l) {
 }
 
 // A use's live key: "b|path", "#s" for a scalar read through fields only
-// (it can be hoisted above a write, as lo_snap does), "#u" for an
-// untracked value read through an index.
+// (it can be hoisted above a write, as lo_snap does), "#u" for a scalar
+// read through an index.
 // Hoistable reads are never a conflict (ow_judge_live skips them), so
 // they are not kept live at all: "".
+// Only a plain scalar is such a read. Any other value (a closure, an
+// Option, a Result, a sum, a fixed list, an unknown type) may point at a
+// record a write changes: hoisting the read keeps the pointer, not what
+// it points to, so its use is a whole use (SW-REUSE-2).
 Str ow_use_key(OX x, OP p) {
-    Bool hs = !ow_trk(x, p.ty) && !ow_has_idx(p.path, 0);
-    return if (!hs) { if (ow_trk(x, p.ty)) { f"{p.b}|{p.path}" } else { f"{p.b}|{p.path}#u" } } else { if (x.t.strict) { f"{p.b}|{p.path}#s" } else { "" } };
+    if (!ow_plain_scalar(p.ty)) { return f"{p.b}|{p.path}"; }
+    Bool hs = !ow_has_idx(p.path, 0);
+    return if (!hs) { f"{p.b}|{p.path}#u" } else { if (x.t.strict) { f"{p.b}|{p.path}#s" } else { "" } };
+}
+
+// A value that holds no pointer at all: a number or a Bool that fits a
+// machine word, loaded whole. A wider number, a Str (a pointer the
+// analysis does not follow), a fixed Str(N) or Bytes(N) (which lies
+// inside its record) is not plain: when unsure, its read is a use.
+Bool ow_plain_scalar(Str t) {
+    Str h = ty_head_cg(t);
+    Bool num = t == "Bool" || h == "Int" || h == "UInt" || h == "Float" || h == "Dec";
+    if (!num) { return false; }
+    Str l = ll_ty(t);
+    return l == "i64" || l == "i32" || l == "i16" || l == "i8" || l == "i1" || l == "double" || l == "float";
 }
 
 Bool ow_has_idx(Int p, Int i) {
@@ -1642,7 +1752,7 @@ Str ow_pend_key(OX x, ORS r, Int id, Int kid, Int j) {
     if (p.b < 0) { return str_join(ow_pend_deep(x, r, e, f"%{id}.{j}", ListBuf()).finish(), "\n"); }
     if (!ow_trk(x, p.ty) && !ow_hold(x, p.ty)) { return ""; }
     Str cal = x.g.ns[id].text;
-    Bool user = x.g.ns[id].kind == "call" && ow_fi(x, cal) >= 0;
+    Bool user = ow_ucall(x, r, id);
     Int wk = if (j == 0) { ow_with_key(x, r, id) } else { -1 };
     Int path = if (wk >= 0) { ow_papp(p.path, ow_kstep(wk, true)) } else { p.path };
     // The call node makes the key unique, so dropping it after its operand
@@ -1669,7 +1779,7 @@ ListBuf(Str) ow_pend_deep_kids_n(OX x, ORS r, Int id, Int i, Str tag, ListBuf(St
 // callee and position, so a write to a field the callee never reads (a
 // hole) does not conflict with it.
 Str ow_arg_key(OX x, ORS r, Int id, Int kid, Int j) {
-    if (x.g.ns[id].kind != "call" || ow_fi(x, x.g.ns[id].text) < 0) { return ""; }
+    if (!ow_ucall(x, r, id)) { return ""; }
     OP p = ow_path(x, r, kid);
     if (p.b < 0 || !ow_trk(x, p.ty)) { return ""; }
     return f"{p.b}|{p.path}@{ow_fk(x, x.g.ns[id].text, j)}";
@@ -1736,7 +1846,7 @@ Map(Str, Int) ow_union_n(Map(Str, Int) m, List(Str) ks, Int i) { return ow_union
 // A closure keeps every outer binder it mentions alive (whole).
 OL ow_lv_caps(OX x, ORS r, Int id, OL l) {
     Str k = x.g.ns[id].kind;
-    Int d = if (k == "ref") { r.def.get(id) else { -1 } } else { -1 };
+    Int d = if (k == "ref" || k == "call") { r.def.get(id) else { -1 } } else { -1 };
     OL l1 = if (d >= 0) { ow_live_add(l, f"{d}|0") } else { l };
     return ow_lv_caps_kids(x, r, id, 0, l1);
 }
@@ -3361,7 +3471,7 @@ Map(Int, Str) ow_rdm(OFn o, OS s, Int id, Map(Int, Int) pix, Map(Int, Str) acc) 
         Map(Int, Str) a1 = if (!pix.contains(pp.b)) { acc } else { acc.insert(pp.b, if (pp.path == 0) { "*" } else { ow_rd_add(acc.get(pp.b) else { "," }, ow_first_step(pp.path)) }) };
         return ow_rdm_list(o, s, pp.idx, 0, pix, a1);
     }
-    if (g.ns[id].kc == 4 && ow_fi(o.x, g.ns[id].text) >= 0) { return ow_rdm_args(o, s, id, 0, pix, acc); }
+    if (g.ns[id].kc == 4 && ow_ucall(o.x, o.r, id)) { return ow_rdm_args(o, s, id, 0, pix, acc); }
     return ow_rdm_kids(o, s, id, 0, pix, acc);
 }
 
@@ -3760,7 +3870,7 @@ OWR ow_run_s(Kg g, Int unit, Funcs fs, Bool strict, Map(Str, Str) inst, Bool rb)
     List(Int) fns = ow_fns(g, unit, 0, ListBuf());
     Map(Str, Int) st0 = {};
     Map(Str, Str) ft0 = {};
-    OT ot1 = ow_types(fs, 0, OT {.sts = st0, .fty = ft0, .fidx = ow_fidx(fs, 0, ow_nosm()), .strict = strict, .inst = inst, .rb = rb, .fid = ow_nosm(), .fnames = []});
+    OT ot1 = ow_types(fs, ow_decl_map(fs), 0, OT {.sts = st0, .fty = ft0, .fidx = ow_fidx(fs, 0, ow_nosm()), .strict = strict, .inst = inst, .rb = rb, .fid = ow_nosm(), .fnames = []});
     OT ot = ow_with_fids(ot1, fs);
     List(OPre) prs = ow_preps_all(g, fs, ot, fns);
     // Functions some call site of which the analysis cannot judge: named
@@ -3810,7 +3920,7 @@ OWR ow_run_warm(Kg g, Int unit, Funcs fs, Map(Str, Str) inst, Int n0, List(Str) 
     List(Int) fns = ow_fns(g, unit, 0, ListBuf());
     Map(Str, Int) st0 = {};
     Map(Str, Str) ft0 = {};
-    OT ot1 = ow_types(fs, 0, OT {.sts = st0, .fty = ft0, .fidx = ow_fidx(fs, 0, ow_nosm()), .strict = true, .inst = inst, .rb = true, .fid = ow_nosm(), .fnames = []});
+    OT ot1 = ow_types(fs, ow_decl_map(fs), 0, OT {.sts = st0, .fty = ft0, .fidx = ow_fidx(fs, 0, ow_nosm()), .strict = true, .inst = inst, .rb = true, .fid = ow_nosm(), .fnames = []});
     OT ot = ow_with_fids(ot1, fs);
     List(OPre) prs = ow_preps_all(g, fs, ot, fns);
     Map(Str, Int) blind = ow_blind_all(g, ot, prs, 0, ow_nosm());

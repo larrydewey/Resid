@@ -1,0 +1,129 @@
+// A value that may hold a record without being one (a closure, an
+// Option, a Result, a user sum, a fixed list) is not a scalar: using it
+// after a write is a use of the record it holds, whether as a later
+// operand of the call that writes, as a field read of a binder lowering
+// loads early, or as an element read. The record is not rebuilt in place
+// while such a holder may still read it (SW-REUSE-2). A function result
+// of such a type may hold any argument.
+type Rc = { Int n; Str s; List(Int) xs; };
+type Gb(T) = Gx(T) | Gn;
+type Wo = { Option(Rc) o; Int k; };
+type Wf = { Int closure(Int) f; Int k; };
+type Wl = { List(Rc, 2) fl; Int k; };
+
+Option(Rc) wrap(Rc r) { return Some(r); }
+Result(Rc, Str) wr(Rc r) { return Ok(r); }
+Gb(Rc) wg(Rc r) { return Gx(r); }
+List(Rc, 2) mk2(Rc r) { return [r, r]; }
+Int on(Option(Rc) o) { return match (o) { Some(z) => z.n, None => -1 }; }
+
+// A holder as a later operand of the call that rebuilds the record.
+Int h1(Rc r, Option(Rc) o) {
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    return on(o) * 1000 + q.n;
+}
+Int h2(Rc r, Result(Rc, Str) o) {
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    Rc z = o else { q };
+    return z.n * 1000 + q.n;
+}
+Int h3(Rc r, Gb(Rc) o) {
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    Int v = match (o) { Gx(z) => z.n, Gn => -1 };
+    return v * 1000 + q.n;
+}
+Int h5(Rc r, Int closure(Int) f) {
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    return f(0) * 1000 + q.n;
+}
+Int h6(Rc r, List(Rc, 2) fl) {
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    return fl[0].n * 1000 + q.n;
+}
+
+Int a1(Int k) { Rc r = Rc { .n = k, .s = "a", .xs = [1] }; Option(Rc) o = Some(r); return h1(r, o); }
+Int a2(Int k) { Rc r = Rc { .n = k, .s = "a", .xs = [1] }; Option(Rc) o = wrap(r); return h1(r, o); }
+Int a3(Int k) { Rc r = Rc { .n = k, .s = "a", .xs = [1] }; Result(Rc, Str) o = wr(r); return h2(r, o); }
+Int a4(Int k) { Rc r = Rc { .n = k, .s = "a", .xs = [1] }; Gb(Rc) o = wg(r); return h3(r, o); }
+Int a6(Int k) { Rc r = Rc { .n = k, .s = "a", .xs = [1] }; Int closure(Int) f = lambda(z) { r.n + z }; return h5(r, f); }
+Int a7(Int k) { Rc r = Rc { .n = k, .s = "a", .xs = [1] }; List(Rc, 2) fl = [r, r]; return h6(r, fl); }
+
+// A holder in a field of a binder whose fields lowering loads early.
+Int b1(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Wo w = Wo { .o = wrap(r), .k = 1 };
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    return on(w.o) * 1000 + q.n;
+}
+Int b2(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Wo w = Wo { .o = wrap(r), .k = 1 };
+    return h1(r, w.o);
+}
+Int b3(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Wf w = Wf { .f = lambda(z) { r.n + z }, .k = 1 };
+    return h5(r, w.f);
+}
+Int b4(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Wl w = Wl { .fl = [r, r], .k = 0 };
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    return w.fl[1].n * 1000 + q.n;
+}
+Int b5(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    List(Rc, 2) fl = [r, r];
+    Wl w = Wl { .fl = fl, .k = 0 };
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    return w.fl[1].n * 1000 + q.n;
+}
+Int b6(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Wl w = Wl { .fl = [r, r], .k = 0 };
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    List(Rc, 2) f2 = w.fl;
+    return f2[1].n * 1000 + q.n;
+}
+
+// A holder read through an index.
+Int c1(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    List(Option(Rc)) lo = [wrap(r)];
+    return h1(r, lo[0]);
+}
+
+// A holder a user function returned.
+Int d1(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    List(Rc, 2) fl = mk2(r);
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    return fl[1].n * 1000 + q.n;
+}
+Int d2(Int k) {
+    Rc r = Rc { .n = k, .s = "a", .xs = [1] };
+    Gb(Rc) o = wg(r);
+    Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs };
+    Int v = match (o) { Gx(z) => z.n, Gn => -1 };
+    return v * 1000 + q.n;
+}
+
+Int main() {
+    Int k = rt 7;
+    println(f"a1 {a1(k)}");
+    println(f"a2 {a2(k)}");
+    println(f"a3 {a3(k)}");
+    println(f"a4 {a4(k)}");
+    println(f"a6 {a6(k)}");
+    println(f"a7 {a7(k)}");
+    println(f"b1 {b1(k)}");
+    println(f"b2 {b2(k)}");
+    println(f"b3 {b3(k)}");
+    println(f"b4 {b4(k)}");
+    println(f"b5 {b5(k)}");
+    println(f"b6 {b6(k)}");
+    println(f"c1 {c1(k)}");
+    println(f"d1 {d1(k)}");
+    println(f"d2 {d2(k)}");
+    return 0;
+}
