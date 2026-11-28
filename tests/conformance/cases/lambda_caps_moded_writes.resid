@@ -1,0 +1,59 @@
+// The other builtin and provider writes of moded families, each called
+// through a closure made in main under the full grant, inside the matching
+// read-only sandbox: the force-time guard refuses every one before the
+// call is made (gk_builtin_write and write_verbs, which the compile-time
+// check reads too), and nothing happens: no command runs, no file or
+// socket is made. Each call is made inside a spawn, so a refusal fails
+// that region only.
+sandbox (process(readonly)) { Int run_p(Int closure(Int) f, Int x) { return f(x); } }
+sandbox (clock(readonly)) { Int run_c(Int closure(Int) f, Int x) { return f(x); } }
+sandbox (network(readonly)) { Int run_n(Int closure(Int) f, Int x) { return f(x); } }
+sandbox (terminal(readonly)) { Int run_t(Int closure(Int) f, Int x) { return f(x); } }
+
+Int b(Bool v) { return if (v) { 1 } else { 0 }; }
+
+@requires(process, clock, network, terminal, filesystem)
+Int main() {
+    Int r = rt 0;
+    List(Str) none = [];
+    List(Int) fds = [];
+    Int closure(Int) pty_spawn = lambda(v) { resid_pty_spawn("/usr/bin/touch @TMP@/pty", 24, 80).len() + v };
+    Int closure(Int) pty_open = lambda(v) { resid_pty_open(24, 80, 0).len() + v };
+    Int closure(Int) pty_broker = lambda(v) { resid_pty_broker("@TMP@/broker") + v };
+    Int closure(Int) pty_write = lambda(v) { resid_pty_write(r, [10]) + v };
+    Int closure(Int) pty_resize = lambda(v) { b(resid_pty_resize(r, 24, 80)) + v };
+    Int closure(Int) pty_close = lambda(v) { b(resid_pty_close(r)) + v };
+    Int closure(Int) confine = lambda(v) { resid_sandbox_confine(none, none) + v };
+    Int closure(Int) confine_l = lambda(v) { resid_sandbox_confine_listening(none, none) + v };
+    Int closure(Int) run = lambda(v) { process.run("/usr/bin/touch @TMP@/run") + v };
+    Int closure(Int) run_fds = lambda(v) { process.run_with_fds("/usr/bin/touch @TMP@/run_fds", fds) + v };
+    Int closure(Int) sleep = lambda(v) { clock.sleep_ns(1000) + v };
+    Int closure(Int) listen_at = lambda(v) { resid_tcp_listen_at("0.0.0.0", 0) + v };
+    Int closure(Int) bind_at = lambda(v) { resid_udp_bind_at("0.0.0.0", 0) + v };
+    Int closure(Int) unix_listen = lambda(v) { resid_unix_listen("@TMP@/sock") + v };
+    Int closure(Int) raw = lambda(v) { b(resid_term_raw()) + v };
+    Int closure(Int) restore = lambda(v) { b(resid_term_restore()) + v };
+    println(report("pty_spawn", spawn (process) { return run_p(pty_spawn, r); }));
+    println(report("pty_open", spawn (process) { return run_p(pty_open, r); }));
+    println(report("pty_broker", spawn (process) { return run_p(pty_broker, r); }));
+    println(report("pty_write", spawn (process) { return run_p(pty_write, r); }));
+    println(report("pty_resize", spawn (process) { return run_p(pty_resize, r); }));
+    println(report("pty_close", spawn (process) { return run_p(pty_close, r); }));
+    println(report("sandbox_confine", spawn (process) { return run_p(confine, r); }));
+    println(report("sandbox_confine_listening", spawn (process) { return run_p(confine_l, r); }));
+    println(report("process.run", spawn (process) { return run_p(run, r); }));
+    println(report("process.run_with_fds", spawn (process) { return run_p(run_fds, r); }));
+    println(report("clock.sleep_ns", spawn (clock) { return run_c(sleep, r); }));
+    println(report("tcp_listen_at", spawn (network) { return run_n(listen_at, r); }));
+    println(report("udp_bind_at", spawn (network) { return run_n(bind_at, r); }));
+    println(report("unix_listen", spawn (network) { return run_n(unix_listen, r); }));
+    println(report("term_raw", spawn (terminal) { return run_t(raw, r); }));
+    println(report("term_restore", spawn (terminal) { return run_t(restore, r); }));
+    println(f"ran: {filesystem.exists("@TMP@/pty") || filesystem.exists("@TMP@/run") || filesystem.exists("@TMP@/run_fds")}");
+    println(f"made: {filesystem.exists("@TMP@/broker") || filesystem.exists("@TMP@/sock")}");
+    return 0;
+}
+
+Str report(Str what, Result(Int, RegionError) r) {
+    return match r { Ok(n) => f"{what}: ok {n}", Err(e) => what + ": failed: " + e.message };
+}

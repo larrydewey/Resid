@@ -1,0 +1,18 @@
+pty_spawn: failed: capability not granted: process (write)
+pty_open: failed: capability not granted: process (write)
+pty_broker: failed: capability not granted: process (write)
+pty_write: failed: capability not granted: process (write)
+pty_resize: failed: capability not granted: process (write)
+pty_close: failed: capability not granted: process (write)
+sandbox_confine: failed: capability not granted: process (write)
+sandbox_confine_listening: failed: capability not granted: process (write)
+process.run: failed: capability not granted: process (write)
+process.run_with_fds: failed: capability not granted: process (write)
+clock.sleep_ns: failed: capability not granted: clock (write)
+tcp_listen_at: failed: capability not granted: network (write)
+udp_bind_at: failed: capability not granted: network (write)
+unix_listen: failed: capability not granted: network (write)
+term_raw: failed: capability not granted: terminal (write)
+term_restore: failed: capability not granted: terminal (write)
+ran: false
+made: false

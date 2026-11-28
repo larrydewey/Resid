@@ -1288,7 +1288,11 @@ only where `main` (or a `test` block) declares it:
 read-only grant does not cover a write (filesystem write
 verbs, process.run, clock.sleep_ns, terminal raw mode,
 binding a listener to an address other than loopback, a
-device descriptor whose `write` is true).
+device descriptor whose `write` is true). Every use of
+`process` is a write: process(readonly) covers none of its
+verbs or builtins (the debugger, the pty, confinement).
+The run-time guard of a sandbox or spawn frame classes
+each call as the compile-time check does.
 Families:
 
   filesystem, environment, args, process   (providers)

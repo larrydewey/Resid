@@ -1,0 +1,6 @@
+remove: failed: capability not granted: filesystem (write)
+rename: failed: capability not granted: filesystem (write)
+truncate: failed: capability not granted: filesystem (write)
+sync: failed: capability not granted: filesystem (write)
+in.txt: hi
+moved: false

@@ -3825,19 +3825,9 @@ Bool grant_readonly_only(Str caps_csv, Str family) {
     return grant_readonly_only_at(str_split(caps_csv, ","), family, 0, false);
 }
 
-Bool is_write_verb(Str family, Str verb) {
-    if (family == "filesystem" && verb == "write_all") { return true; }
-    if (family == "filesystem" && (verb == "write_bytes" || verb == "write_secret")) { return true; }
-    if (family == "filesystem" && verb == "append_bytes") { return true; }
-    if (family == "filesystem" && (verb == "write_hex" || verb == "append_hex")) { return true; }
-    if (family == "filesystem" && verb == "create_dir") { return true; }
-    if (family == "filesystem" && (verb == "create" || verb == "create_new" || verb == "write_handle")) { return true; }
-    if (family == "filesystem" && (verb == "remove" || verb == "rename")) { return true; }
-    if (family == "filesystem" && (verb == "write_at" || verb == "sync" || verb == "truncate")) { return true; }
-    if (family == "process" && (verb == "run" || verb == "run_with_fds")) { return true; }
-    if (family == "clock" && verb == "sleep_ns") { return true; }
-    return false;
-}
+// The provider verbs that write are codegen.resid's write_verbs, the list
+// the run-time guard (provider_family_of_line) reads too.
+Bool is_write_verb(Str family, Str verb) { return str_listed(write_verbs(), family + "." + verb, 0); }
 
 // Meet (set intersection by family, with readonly-wins mode lattice):
 // caps present in both `a` and `b`; readonly if either operand is.

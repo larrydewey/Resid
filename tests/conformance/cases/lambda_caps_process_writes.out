@@ -1,0 +1,20 @@
+dbg_spawn: failed: capability not granted: process (write)
+dbg_cont: failed: capability not granted: process (write)
+dbg_step: failed: capability not granted: process (write)
+dbg_poke: failed: capability not granted: process (write)
+dbg_set_pc: failed: capability not granted: process (write)
+dbg_kill: failed: capability not granted: process (write)
+dbg_wait: failed: capability not granted: process (write)
+dbg_peek: failed: capability not granted: process (write)
+dbg_reg: failed: capability not granted: process (write)
+dbg_signal: failed: capability not granted: process (write)
+dbg_exit_code: failed: capability not granted: process (write)
+dbg_f64: failed: capability not granted: process (write)
+pty_read: failed: capability not granted: process (write)
+pty_wait: failed: capability not granted: process (write)
+pty_status: failed: capability not granted: process (write)
+spawned: false
+traced ran: false
+memory unchanged: true
+pc unchanged: true
+killed: true
