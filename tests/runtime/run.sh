@@ -611,6 +611,21 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/spawn_strand.resid -o "$W/spawn_
 else
     fail=$((fail + 1)); echo "FAIL caches of parked workers under a budget: $(tail -1 "$W/spawn_strand.out" "$W/spawn_strand.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# A large region block is charged by the pages it covers, not by its
+# whole power-of-two run (region.resid, lg_new): jobs holding a 17 MB and
+# a 9 MB string (25 MB resident) run under RESID_MEM_LIMIT=30. Before,
+# they were charged 48 MB and refused even at a 48 MB limit.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/large_block.resid -o "$W/large_block") > "$W/large_block.log" 2>&1 \
+    && python3 -I -c '
+import resource, subprocess, sys, os
+r = subprocess.run([sys.argv[1]], capture_output=True, text=True, timeout=120, env=dict(os.environ, RESID_MEM_LIMIT="30"))
+peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+print(f"rc {r.returncode} peak {peak} KB: {r.stdout.strip()} {r.stderr.strip()}")
+sys.exit(0 if r.returncode == 0 and r.stdout == "26000000 26000000 26000000\n" and peak < 30 * 1024 else 1)' "$W/large_block" > "$W/large_block.out" 2>&1; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL large blocks charged by the pages they cover: $(tail -1 "$W/large_block.out" "$W/large_block.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # A large object whose page charge the budget refuses (region.resid,
 # lg_new) is linked into its region first, so the pop frees its page.
 # Under ulimit -v the region range is 1024 pages; 1100 jobs are refused

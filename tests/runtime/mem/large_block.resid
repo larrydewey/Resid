@@ -1,0 +1,23 @@
+// A large region block (more than half a page) is charged to the memory
+// budget by the pages it covers, not by its whole power-of-two run
+// (runtime/rt/region.resid, lg_new). Each job holds a 17 MB string (a
+// 32-page run) and a 9 MB one (16 pages): 25 MB resident. run.sh sets
+// RESID_MEM_LIMIT=30, 1.2 times that, and checks the peak stays under it.
+// Before, the runs were charged whole, 48 MB, and every job was refused
+// even at a 48 MB limit (sha512's g5_lift_bytes met it at 64 MB: a list
+// buffer just over 16 MB).
+Int job(Int k) {
+    Result(Int, RegionError) r = spawn () {
+        Str a = str_repeat("x", 17000000 * k);
+        Str b = str_repeat("y", 9000000 * k);
+        return str_len(a) + str_len(b);
+    };
+    return r else { 0 - 1 };
+}
+
+@requires(args)
+Int main() {
+    Int k = args.count();
+    println(f"{job(k)} {job(k)} {job(k)}");
+    return 0;
+}
