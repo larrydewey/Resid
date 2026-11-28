@@ -1,0 +1,25 @@
+// Regression test for SW-MOVERS-TEXT-2 (fixed): the red-team proof of concept, kept as
+// found. Comments below describe the defect as it was.
+// List of closures whose result type is UInt(8): the text
+// "UInt(8) closure(Int)" passes lr_sized_int (str_parse_int("8) closure(Int"))?
+UInt(8) closure(Int) mk(Str s) {
+    return lambda(v) { (UInt(8)) (str_len(s) % 256) };
+}
+
+List(UInt(8) closure(Int)) step(Int i, Int n, List(UInt(8) closure(Int)) acc) {
+    if (i >= n) { return acc; }
+    Str s = f"str-{i}-" + str_repeat("x", i % 50);
+    List(UInt(8) closure(Int)) a2 = if (i % 1000 == 0) { acc.concat([mk(s)]) } else { acc };
+    return step(i + 1, n, a2);
+}
+
+Int sum(List(UInt(8) closure(Int)) fs, Int i, Int acc) {
+    if (i >= fs.len()) { return acc; }
+    return sum(fs, i + 1, acc + (Int) fs[i](0));
+}
+
+Int main() {
+    List(UInt(8) closure(Int)) fs = step(0, 40000, []);
+    println(f"{fs.len()} {sum(fs, 0, 0)}");
+    return 0;
+}

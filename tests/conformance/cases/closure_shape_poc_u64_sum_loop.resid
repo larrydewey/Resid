@@ -1,0 +1,31 @@
+// Regression test for SW-MOVERS-TEXT-2 (fixed): the red-team proof of concept, kept as
+// found. Comments below describe the defect as it was.
+// A sum whose payload is a closure returning a narrow integer:
+// sum_raw_kinds -> lst_raw -> int_fam("UInt(64) closure(Int)") marks the
+// slot raw, so the sum's loop-region mover treats it as a plain value and
+// does not move the closure (or what it captured).
+type Act = Run(UInt(64) closure(Int)) | Idle(Str);
+
+UInt(64) closure(Int) mk(Str s) { return lambda(v) { (UInt(64)) (str_len(s) + v) }; }
+
+Act step(Int i, Int n, Act acc) {
+    if (i >= n) { return acc; }
+    Str s = f"str-{i}-" + str_repeat("x", i % 50);
+    Act a2 = if (i % 1000 == 0) { Run(mk(s)) } else { acc };
+    return step(i + 1, n, a2);
+}
+
+Int burn(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Str s = f"junk-{i}-" + str_repeat("y", i % 60);
+    return burn(i + 1, n, acc + str_len(s) % 3);
+}
+
+Int val(Act a) { return match (a) { Run(f) => (Int) f(0), Idle(s) => 0 - 1 }; }
+
+Int main() {
+    Act a = step(0, 40000, Idle("start"));
+    Int b = burn(0, 40000, 0);
+    println(f"{val(a)} (want {str_len(f"str-39000-" + str_repeat("x", 39000 % 50))}) {b}");
+    return 0;
+}

@@ -1,0 +1,18 @@
+// Regression test for SWMG-2 (fixed): the red-team proof of concept, kept as
+// found. Comments below describe the defect as it was.
+// lo_freeze calls resid_map_freeze (st64(m + 24, 0)) on a closure whose
+// type text starts with "Map(": the closure's third capture is zeroed.
+Map(Str, Int) closure(Int) mkm(Int a, Int b, Int c) {
+    return lambda(k) {
+        Map(Str, Int) m = {};
+        m.insert("sum", a + b + c + k)
+    };
+}
+
+Int main() {
+    Map(Str, Int) closure(Int) g = mkm(rt 1, rt 20, rt 300);
+    Map(Str, Int) r = g(4000);
+    Int s = r.get("sum") else { -1 };
+    println(f"sum {s} (want 4321)");
+    return 0;
+}

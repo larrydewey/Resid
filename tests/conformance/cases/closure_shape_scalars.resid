@@ -1,0 +1,145 @@
+// Closures whose result is a scalar: `UInt(64) closure(Int)`, `UInt(8)
+// closure(Int)`, `Float(32) closure(Int)` and `Bool closure(Int)` are
+// closures, not raw words. Their text once began as an integer's or a
+// float's does, so int_fam, lst_raw and lr_sized_int took a list or a sum
+// of them for raw scalar slots: a loop region would have moved the list
+// with plain resid_mv_list and left the closures (and what they captured)
+// in the freed region. Code generation broke first (invalid IR, or the
+// compiler aborting), so no program ran (SW-MOVERS-TEXT-2); they now build
+// and move as closures. Each is used as a return value, an argument, a list
+// element, a record field, a sum payload, a loop carry (tail, for and
+// while loops with garbage made each step) and a spawn's result.
+type Act = Run(UInt(64) closure(Int)) | Tiny(UInt(8) closure(Int)) | Idle(Str);
+type Hold = { UInt(64) closure(Int) f; UInt(8) closure(Int) g; Float(32) closure(Int) h; Bool closure(Int) p; };
+
+Str pad(Int i) { return f"{i}-" + str_repeat("x", 60); }
+Bool churn(Int i) { return str_len(pad(i) + pad(i + 1)) == 0; }
+
+UInt(64) closure(Int) mk64(Str s) { return lambda(v) { (UInt(64)) (str_len(s) + v) }; }
+UInt(8) closure(Int) mk8(Str s) { return lambda(v) { (UInt(8)) ((str_len(s) + v) % 256) }; }
+Float(32) closure(Int) mkf(Str s) { return lambda(v) { (Float(32)) (Float) (str_len(s) + v) }; }
+Bool closure(Int) mkp(Str s) { return lambda(v) { str_len(s) > v }; }
+
+Int c64(UInt(64) closure(Int) f, Int v) { return (Int) f(v); }
+Int c8(UInt(8) closure(Int) f, Int v) { return (Int) f(v); }
+Int cf(Float(32) closure(Int) f, Int v) { Float(32) r = f(v); return (Int) (Float) r; }
+
+Int sum64(List(UInt(64) closure(Int)) fs, Int i, Int acc) {
+    if (i >= fs.len()) { return acc; }
+    return sum64(fs, i + 1, acc + c64(fs[i], 0));
+}
+
+Int sum8(List(UInt(8) closure(Int)) fs, Int i, Int acc) {
+    if (i >= fs.len()) { return acc; }
+    return sum8(fs, i + 1, acc + c8(fs[i], 0));
+}
+
+// Tail loops carrying lists of them, a sum holding one, and one alone.
+List(UInt(64) closure(Int)) step64(Int i, Int n, List(UInt(64) closure(Int)) acc) {
+    if (churn(i)) { println("never"); }
+    if (i >= n) { return acc; }
+    Str s = f"s{i}-" + str_repeat("x", i % 50);
+    return step64(i + 1, n, if (i % 500 == 0) { acc.concat([mk64(s)]) } else { acc });
+}
+
+List(UInt(8) closure(Int)) step8(Int i, Int n, List(UInt(8) closure(Int)) acc) {
+    if (churn(i)) { println("never"); }
+    if (i >= n) { return acc; }
+    Str s = f"s{i}-" + str_repeat("x", i % 50);
+    return step8(i + 1, n, if (i % 500 == 0) { acc.concat([mk8(s)]) } else { acc });
+}
+
+Act stepa(Int i, Int n, Act acc) {
+    if (churn(i)) { println("never"); }
+    if (i >= n) { return acc; }
+    Str s = f"s{i}-" + str_repeat("x", i % 50);
+    return stepa(i + 1, n, if (i % 500 == 0) { Run(mk64(s)) } else { acc });
+}
+
+Float(32) closure(Int) stepf(Int i, Int n, Float(32) closure(Int) acc) {
+    if (churn(i)) { println("never"); }
+    if (i >= n) { return acc; }
+    return stepf(i + 1, n, if (i % 500 == 0) { mkf(pad(i)) } else { acc });
+}
+
+Int aval(Act a) { return match (a) { Run(f) => c64(f, 0), Tiny(g) => c8(g, 0), Idle(s) => 0 - 1 }; }
+
+List(UInt(64) closure(Int)) for64(Int n) {
+    for (Int i in 0..n) {
+        List(UInt(64) closure(Int)) fs = [mk64(pad(i)), mk64(f"{i}")];
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return fs; }
+    }
+    return [];
+}
+
+Act fora(Int n) {
+    for (Int i in 0..n) {
+        Act a = Tiny(mk8(pad(i)));
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return a; }
+    }
+    return Idle("none");
+}
+
+Bool step_ok(Int i, Int n) { return i < n; }
+
+List(UInt(8) closure(Int)) while8(Int n) {
+    while (step_ok(n - 1, n)) {
+        for (Int j in 0..n) { if (churn(j)) { println("never"); } }
+        return [mk8(pad(n)), mk8("ab")];
+    }
+    return [];
+}
+
+List(UInt(64) closure(Int)) spawn64(Int k) {
+    Result(List(UInt(64) closure(Int)), RegionError) r = spawn () { return [mk64(pad(k)), mk64("abc")]; };
+    return r else { [] };
+}
+
+Act spawna(Int k) {
+    Result(Act, RegionError) r = spawn () { return Tiny(mk8(pad(k))); };
+    return r else { Idle("ERR") };
+}
+
+Int scrub() {
+    for (Int i in 0..rt 20000) {
+        Str z = f"zz{i}" + str_repeat("Q", 90);
+        if (str_len(z) == 0) { return i; }
+    }
+    return 0;
+}
+
+Int main() {
+    UInt(64) closure(Int) f = mk64("hello");
+    UInt(8) closure(Int) g = mk8("hi");
+    Float(32) closure(Int) h = mkf("abc");
+    Bool closure(Int) p = mkp("abcd");
+    println(f"return: {f(1)} {g(1)} {cf(h, 1)} {p(1)} {p(9)}");
+    println(f"argument: {c64(f, 2)} {c8(g, 2)} {cf(h, 2)}");
+    List(UInt(64) closure(Int)) l64 = [f, mk64("xy")];
+    List(UInt(8) closure(Int)) l8 = [g, mk8("xyz")];
+    List(Float(32) closure(Int)) lff = [h];
+    List(Bool closure(Int)) lp = [p, mkp("")];
+    println(f"list: {sum64(l64, 0, 0)} {sum8(l8, 0, 0)} {cf(lff[0], 0)} {lp[0](0)} {lp[1](0)}");
+    Hold hd = Hold {.f = f, .g = g, .h = h, .p = p};
+    println(f"field: {c64(hd.f, 3)} {c8(hd.g, 3)} {cf(hd.h, 3)} {hd.p(3)}");
+    println(f"sum: {aval(Run(f))} {aval(Tiny(g))} {aval(Idle("x"))}");
+    List(UInt(64) closure(Int)) t64 = step64(0, rt 3000, []);
+    List(UInt(8) closure(Int)) t8 = step8(0, rt 3000, []);
+    Act ta = stepa(0, rt 3000, Idle("start"));
+    Float(32) closure(Int) tf = stepf(0, rt 3000, mkf(""));
+    List(UInt(64) closure(Int)) f64 = for64(rt 300);
+    Act fa = fora(rt 300);
+    List(UInt(8) closure(Int)) w8 = while8(rt 300);
+    List(UInt(64) closure(Int)) p64 = spawn64(rt 7);
+    Act pa = spawna(rt 8);
+    _ = scrub();
+    Result(Int, RegionError) z = spawn () { return scrub(); };
+    Int zz = z else { 0 };
+    println(f"tail: {t64.len()} {sum64(t64, 0, 0)} {t8.len()} {sum8(t8, 0, 0)} {aval(ta)} {cf(tf, 0)}");
+    println(f"for: {sum64(f64, 0, 0)} {aval(fa)}");
+    println(f"while: {sum8(w8, 0, 0)}");
+    println(f"spawn: {sum64(p64, 0, 0)} {aval(pa)} {zz >= 0}");
+    return 0;
+}

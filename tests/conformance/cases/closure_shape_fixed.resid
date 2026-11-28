@@ -1,0 +1,127 @@
+// Closures whose result is a fixed-capacity value: `Str(8) closure(Int)`
+// and `Bytes(4) closure(Int)` are closures (a pointer to their
+// environment), not a Str(8) or a Bytes(4). Their text once began as a fixed
+// value's does, so a prefix test (is_str_fixed, is_bytes_fixed, then
+// fixed_bytes = str_parse_int("8) closure(Int") + 1) gave them a 1-byte
+// frame slot: a returned closure was copied one byte at a time and the call
+// jumped through a pointer that was mostly uninitialised stack or heap
+// (SW-MOVERS-TEXT-1). Every type decision now reads the type's shape
+// (ty_clo / ty_is in compiler/codegen.resid). Each closure is used as a
+// return value, an argument, a list element, a record field, a loop carry
+// (tail, for and while loops, with garbage made each step) and a spawn's
+// result, then called after later allocations reuse freed memory.
+type HoldS = { Str(8) closure(Int) f; Int n; };
+type HoldB = { Bytes(4) closure(Int) f; Int n; };
+
+Str pad(Int i) { return f"{i}-" + str_repeat("x", 60); }
+Bool churn(Int i) { return str_len(pad(i) + pad(i + 1)) == 0; }
+
+Str(8) closure(Int) mks(Str s) {
+    Str t = s + "!";
+    return lambda(v) { (Str(8)) (str_slice(t, 0, 3) + f"{v}") };
+}
+
+Bytes(4) closure(Int) mkb(Bytes(4) b, Str s) {
+    Str t = s + "?";
+    return lambda(v) { if (str_len(t) + v > 0) { b } else { (Bytes(4)) b"zzzz" } };
+}
+
+Str ss(Str(8) closure(Int) f, Int v) { Str(8) r = f(v); return (Str) r; }
+Str bs(Bytes(4) closure(Int) f, Int v) { Bytes(4) r = f(v); return (Str) r; }
+
+// Tail loops carrying the closure while every step allocates.
+Str(8) closure(Int) carry_s(Int i, Int n, Str(8) closure(Int) f) {
+    if (churn(i)) { println("never"); }
+    if (i >= n) { return f; }
+    return carry_s(i + 1, n, if (i % 500 == 0) { mks(f"c{i}-" + pad(i)) } else { f });
+}
+
+Bytes(4) closure(Int) carry_b(Int i, Int n, Bytes(4) closure(Int) f) {
+    if (churn(i)) { println("never"); }
+    if (i >= n) { return f; }
+    return carry_b(i + 1, n, if (i % 500 == 0) { mkb(b"abcd", pad(i)) } else { f });
+}
+
+// For and while loops returning one.
+Str(8) closure(Int) for_s(Int n) {
+    for (Int i in 0..n) {
+        Str(8) closure(Int) f = mks(f"f{i}-" + pad(i));
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return f; }
+    }
+    return mks("none");
+}
+
+Bytes(4) closure(Int) for_b(Int n) {
+    for (Int i in 0..n) {
+        Bytes(4) closure(Int) f = mkb(b"efgh", pad(i));
+        if (churn(i)) { println("never"); }
+        if (i == n - 1) { return f; }
+    }
+    return mkb(b"none", "");
+}
+
+Bool step_ok(Int i, Int n) { return i < n; }
+
+Str(8) closure(Int) while_s(Int n) {
+    while (step_ok(n - 1, n)) {
+        for (Int j in 0..n) { if (churn(j)) { println("never"); } }
+        return mks(f"w{n}-" + pad(n));
+    }
+    return mks("none");
+}
+
+Bytes(4) closure(Int) while_b(Int n) {
+    while (step_ok(n - 1, n)) {
+        for (Int j in 0..n) { if (churn(j)) { println("never"); } }
+        return mkb(b"ijkl", pad(n));
+    }
+    return mkb(b"none", "");
+}
+
+Str(8) closure(Int) spawn_s(Int k) {
+    Result(Str(8) closure(Int), RegionError) r = spawn () { return mks(f"s{k}-" + pad(k)); };
+    return r else { mks("ERR") };
+}
+
+Bytes(4) closure(Int) spawn_b(Int k) {
+    Result(Bytes(4) closure(Int), RegionError) r = spawn () { return mkb(b"mnop", pad(k)); };
+    return r else { mkb(b"ERR!", "") };
+}
+
+Int scrub() {
+    for (Int i in 0..rt 20000) {
+        Str z = f"zz{i}" + str_repeat("Q", 90);
+        if (str_len(z) == 0) { return i; }
+    }
+    return 0;
+}
+
+Int main() {
+    Str(8) closure(Int) f = mks("hello");
+    Bytes(4) closure(Int) g = mkb(b"wxyz", "hi");
+    println("return: " + ss(f, 1) + " " + bs(g, 1));
+    List(Str(8) closure(Int)) fs = [mks("one"), mks("two"), f];
+    List(Bytes(4) closure(Int)) gs = [mkb(b"aaaa", "a"), g];
+    println("list: " + ss(fs[1], 2) + " " + ss(fs[2], 3) + " " + bs(gs[0], 0) + " " + bs(gs[1], 0) + f" {fs.len()} {gs.len()}");
+    HoldS hs = HoldS {.f = mks("rec"), .n = 1};
+    HoldB hb = HoldB {.f = mkb(b"recb", "r"), .n = 2};
+    Str(8) direct = hs.f(4);
+    println("field: " + ss(hs.f, 5) + " " + (Str) direct + " " + bs(hb.f, 0) + f" {hs.n + hb.n}");
+    Str(8) closure(Int) cs = carry_s(0, rt 3000, mks("start"));
+    Bytes(4) closure(Int) cb = carry_b(0, rt 3000, mkb(b"strt", ""));
+    Str(8) closure(Int) fs2 = for_s(rt 300);
+    Bytes(4) closure(Int) fb2 = for_b(rt 300);
+    Str(8) closure(Int) ws = while_s(rt 300);
+    Bytes(4) closure(Int) wb = while_b(rt 300);
+    Str(8) closure(Int) ps = spawn_s(rt 7);
+    Bytes(4) closure(Int) pb = spawn_b(rt 8);
+    _ = scrub();
+    Result(Int, RegionError) z = spawn () { return scrub(); };
+    Int zz = z else { 0 };
+    println("tail: " + ss(cs, 6) + " " + bs(cb, 0));
+    println("for: " + ss(fs2, 7) + " " + bs(fb2, 0));
+    println("while: " + ss(ws, 8) + " " + bs(wb, 0));
+    println("spawn: " + ss(ps, 9) + " " + bs(pb, 0) + f" {zz >= 0}");
+    return 0;
+}

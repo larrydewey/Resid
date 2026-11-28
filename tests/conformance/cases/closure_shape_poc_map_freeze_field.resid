@@ -1,0 +1,15 @@
+// Regression test for SWMG-2 (fixed): the red-team proof of concept, kept as
+// found. Comments below describe the defect as it was.
+// The same through a record field: resid.rec.freeze.Hold freezes field f as a map.
+type Hold = { Map(Str, Int) closure(Int) f; Map(Str, Int) m; };
+Hold mk(Int a, Int b, Int c) {
+    Map(Str, Int) m0 = {};
+    return Hold { .f = lambda(k) { m0.insert("s", a + b + c + k) }, .m = m0.insert("x", 1) };
+}
+Int main() {
+    Hold h = mk(rt 1, rt 20, rt 300);
+    Map(Str, Int) r = h.f(4000);
+    Int s = r.get("s") else { -1 };
+    println(f"sum {s} (want 4321)");
+    return 0;
+}

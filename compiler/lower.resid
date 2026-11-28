@@ -514,9 +514,9 @@ GT lw_bexpr(LW w, Int id, Int i, List(Str) env, GT c) {
     Str recty0 = pick_str(adopt, dn, pick_str(fl_adopt, dn, v.ty));
     Str recty = lw_bind_ty(dtyb, recty0);
     Str ent2 = name + ":" + cv.val + ":" + recty;
-    Str ent2f = pick_str(v.ty == "Option(_)" && str_has_prefix_cg(dtyb, "Option("), name + ":" + cv.val + ":" + dtyb, ent2);
-    Bool res_ok_hole = str_has_prefix_cg(cv.ty, "Result(") && res_elem_ok_cg(cv.ty) == "_";
-    Str ent2g = pick_str(res_ok_hole && str_has_prefix_cg(dtyb, "Result("), name + ":" + cv.val + ":" + dtyb, ent2f);
+    Str ent2f = pick_str(v.ty == "Option(_)" && ty_is(dtyb, "Option("), name + ":" + cv.val + ":" + dtyb, ent2);
+    Bool res_ok_hole = ty_is(cv.ty, "Result(") && res_elem_ok_cg(cv.ty) == "_";
+    Str ent2g = pick_str(res_ok_hole && ty_is(dtyb, "Result("), name + ":" + cv.val + ":" + dtyb, ent2f);
     GT c2 = GT {.pos = 0, .val = cv.val, .ty = cv.ty, .cnt = cv.cnt, .err = "", .glines = cv.glines, .lines = cv.lines, .tmp = cv.tmp, .lbl = cv.lbl, .tail = false};
     return lw_bexpr(w, id, i + 1, env_add(env, ent2g), c2);
 }
@@ -898,7 +898,7 @@ GT lw_show(LW w, GT v, Bool trim, List(Str) env) {
     // Byte strings show as their literal: b"xy\x00".
     if (t == "Bytes") { return lw_rt1(vt, "ptr", "@resid_bytes_show(ptr " + v.val + ", i64 -1)", "Str"); }
     if (is_bytes_fixed(t)) { return lw_rt1(vt, "ptr", "@resid_bytes_show(ptr " + v.val + f", i64 {fixed_cap(t)})", "Str"); }
-    if (str_has_prefix_cg(t, "List(")) {
+    if (ty_is(t, "List(")) {
         Str et = str_slice(t, 5, str_len(t) - 1);
         Bool strs = num_norm_cg(et) == "Str";
         // Unsigned 64-bit and 128-bit integers need their kind (the boxes
@@ -922,8 +922,8 @@ GT lw_show(LW w, GT v, Bool trim, List(Str) env) {
     // format (or Show), its value.
     Str pn = f"__sh{v.tmp}";
     Str pv = f"__sp{v.tmp}";
-    if (str_has_prefix_cg(t, "Option(") && t != "Option(_)") { return lw_src_expr(w, "match " + pn + " { Some(" + pv + ") => \"Some(\" + __show_nested(" + pv + ") + \")\", None => \"None\" }", pn, vt, env); }
-    if (str_has_prefix_cg(t, "Result(") && res_elem_ok_cg(t) != "_") { return lw_src_expr(w, "match " + pn + " { Ok(" + pv + ") => \"Ok(\" + __show_nested(" + pv + ") + \")\", Err(" + pv + ") => \"Err(\" + __show_nested(" + pv + ") + \")\" }", pn, vt, env); }
+    if (ty_is(t, "Option(") && t != "Option(_)") { return lw_src_expr(w, "match " + pn + " { Some(" + pv + ") => \"Some(\" + __show_nested(" + pv + ") + \")\", None => \"None\" }", pn, vt, env); }
+    if (ty_is(t, "Result(") && res_elem_ok_cg(t) != "_") { return lw_src_expr(w, "match " + pn + " { Ok(" + pv + ") => \"Ok(\" + __show_nested(" + pv + ") + \")\", Err(" + pv + ") => \"Err(\" + __show_nested(" + pv + ") + \")\" }", pn, vt, env); }
     if (ll_ty(t) != "ptr") { return gt_err("cannot interpolate a value of type " + t, v); }
     return lw_rt1(vt, "ptr", "@ToString(ptr " + v.val + ")", "Str");
 }
@@ -1072,7 +1072,7 @@ GT kd_def(LW w, Str t, Bool hash, GT g) {
     List(Str) head = ["define internal i64 @\"" + nm + "\"(i64 %ka, i64 %kb) {", "entry:"];
     // A list the runtime cannot compare by kind: element by element,
     // through the element type's own functions.
-    if (str_has_prefix(ct, "List(") && key_list_kind(ct) == 0) {
+    if (ty_is(ct, "List(") && key_list_kind(ct) == 0) {
         Str et = kd_key(elem_type(ct));
         GT ge = kd_need(w, et, g);
         if (ge.err != "") { return ge; }
@@ -1098,8 +1098,8 @@ GT kd_def(LW w, Str t, Bool hash, GT g) {
 // A sum's variants as "name|payload type\x1fpayload type..." entries.
 List(Str) kd_variants(Funcs fs, Str t) {
     List(Str) a = ty_args_cg(t);
-    if (str_has_prefix(t, "Option(")) { return if (a.len() == 1) { ["Some|" + a[0], "None|"] } else { [] }; }
-    if (str_has_prefix(t, "Result(")) { return if (a.len() == 2) { ["Ok|" + a[0], "Err|" + a[1]] } else { [] }; }
+    if (ty_is(t, "Option(")) { return if (a.len() == 1) { ["Some|" + a[0], "None|"] } else { [] }; }
+    if (ty_is(t, "Result(")) { return if (a.len() == 2) { ["Ok|" + a[0], "Err|" + a[1]] } else { [] }; }
     Int sx = sumtype_index_cg(fs, t);
     if (sx < 0) { return []; }
     return kd_variants_at(sumv_names_cg(fs.suv[sx]), sum_payloads_cg(fs, sx, t), 0, []);
@@ -1513,8 +1513,8 @@ LMM lw_mm_args(LW w, Int id, Int i, Int n, List(Str) env, LMM acc) {
 GT lw_match(LW w, Int id, List(Str) env, GT c) {
     GT sc = lw_expr(lw_wanting(w, ""), lw_kid(w, id, 0), env, c);
     if (sc.err != "") { return sc; }
-    Bool is_opt = str_has_prefix_cg(sc.ty, "Option(") || sc.ty == "Option(_)";
-    Bool is_res = str_has_prefix_cg(sc.ty, "Result(");
+    Bool is_opt = ty_is(sc.ty, "Option(") || sc.ty == "Option(_)";
+    Bool is_res = ty_is(sc.ty, "Result(");
     Str g1 = f"%t{sc.tmp + 1}";
     Str g2 = f"%t{sc.tmp + 2}";
     List(Str) q2 = sc.lines.concat([g1 + " = getelementptr {i32, i32, ptr}, ptr " + sc.val + ", i32 0, i32 0", g2 + "w = load i32, ptr " + g1, g2 + " = sext i32 " + g2 + "w to i64"]);
@@ -1774,16 +1774,16 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
     // Text counts codepoints, as str_len does (a Str(N) passes its inline,
     // NUL-terminated buffer).
     Str lty = strip_owned_cg(base.ty);
-    if (m == "len" && (lty == "Str" || str_has_prefix_cg(lty, "Str("))) { return lw_rt1(base, "i64", "@str_len(ptr " + base.val + ")", "Int"); }
+    if (m == "len" && (lty == "Str" || ty_is(lty, "Str("))) { return lw_rt1(base, "i64", "@str_len(ptr " + base.val + ")", "Int"); }
     if (m == "len" && lty == "Bytes") { return lw_rt1(base, "i64", "@resid_bytes_len(ptr " + base.val + ")", "Int"); }
-    Int lrw = if (m == "len" && str_has_prefix_cg(lty, "List(")) { lst_rec(w.fs, elem_type(lty)) } else { 0 };
+    Int lrw = if (m == "len" && ty_is(lty, "List(")) { lst_rec(w.fs, elem_type(lty)) } else { 0 };
     if (lrw > 0) {
         return lw_rt1(base, "i64", "@resid_list_elems(ptr " + base.val + f", i64 {lrw + 1})", "Int");
     }
     if (m == "len") { return lw_rt1(base, "i64", "@resid_list_len(ptr " + base.val + ")", "Int"); }
     if (m == "with" && is_list_fixed(base.ty)) { return lw_fixed_with(w, id, base, env); }
-    if (m == "with" && str_has_prefix_cg(strip_owned_cg(base.ty), "List(")) { return lw_list_with(w, id, base, env); }
-    if ((m == "fill" || m == "grow") && str_has_prefix_cg(strip_owned_cg(base.ty), "List(")) { return lw_list_run(w, id, base, m, env); }
+    if (m == "with" && ty_is(strip_owned_cg(base.ty), "List(")) { return lw_list_with(w, id, base, env); }
+    if ((m == "fill" || m == "grow") && ty_is(strip_owned_cg(base.ty), "List(")) { return lw_list_run(w, id, base, m, env); }
     Bool crec = m == "concat" && lst_rec(w.fs, elem_type(strip_owned_cg(base.ty))) > 0;
     if (m == "concat" && lo_is(w, id, 1) && (lw_list_keepable(elem_type(strip_owned_cg(base.ty))) || crec)) {
         GT oarg = lw_marg_as(w, id, 0, base.ty, env, base);
@@ -1837,7 +1837,7 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
     }
     if (is_expect_type(base.ty)) { return lw_expect_method(w, id, base, m, env); }
     Int midx = fn_index(fs, m);
-    if (midx < 0 && gk_list_verb(m) && str_has_prefix_cg(strip_owned_cg(base.ty), "List(")) { return lw_list_method(w, id, base, m, env); }
+    if (midx < 0 && gk_list_verb(m) && ty_is(strip_owned_cg(base.ty), "List(")) { return lw_list_method(w, id, base, m, env); }
     if (midx >= 0 && fs.pts[midx] != "") {
         List(Str) mpl = split_rest_depth(fs.pts[midx], ", ");
         GT basew = widen_val(base, mpl[0]);
@@ -1977,7 +1977,7 @@ GT lw_list_push(LW w, Int id, GT base, GT ka, Int cv, Int sid, Str kt, Str vt, B
 // Vec(T, N) is <N x T> in registers; masks are <N x i1>. Integer lanes
 // are checked like scalars: one overflow test per vector operation.
 
-Bool lv_is(Str t) { return str_has_prefix_cg(t, "Vec("); }
+Bool lv_is(Str t) { return ty_is(t, "Vec("); }
 Str lv_elem(Str t) { return str_trim(str_slice(t, 4, str_find_char(t, 44, 4))); }
 Int lv_lanes(Str t) { return str_parse_int(str_trim(str_slice(t, str_find_char(t, 44, 4) + 1, str_len(t) - 1))); }
 Str lv_ell(Str t) { return ll_ty(lv_elem(t)); }
@@ -2002,7 +2002,7 @@ GT lw_expr_as(LW w, Int id, Str want, List(Str) env, GT c) {
     // to its branches (a literal there gets its own storage).
     Str bk = lw_kind(w, id);
     Bool branches = bk == "ifx" || bk == "match" || bk == "tern" || bk == "bexpr" || bk == "paren";
-    Bool cwant = str_has_prefix_cg(want, "List(") || str_has_prefix_cg(want, "Map(");
+    Bool cwant = ty_is(want, "List(") || ty_is(want, "Map(");
     if (branches && (lw_mentions_fixed(want) || lw_fixed_bkind(want) || cwant)) { return lw_expr(lw_wanting(w, want), id, env, c); }
     // A fresh builder where a fixed-capacity one is expected: no storage
     // yet (fb_block allocates it on first use).
@@ -2016,10 +2016,10 @@ GT lw_expr_as(LW w, Int id, Str want, List(Str) env, GT c) {
     if (parts && lw_mentions_fixed(want)) { return lw_expr(lw_wanting(w, want), id, env, c); }
     // A container literal takes the wanted type's parts: raw slots are read
     // as the declared element type, so the literal must store that.
-    Bool lit_want = (bk == "list" && str_has_prefix_cg(want, "List(")) || (bk == "map" && str_has_prefix_cg(want, "Map("));
+    Bool lit_want = (bk == "list" && ty_is(want, "List(")) || (bk == "map" && ty_is(want, "Map("));
     if (lit_want && !is_fixed_type(want)) { return lw_expr(lw_wanting(w, want), id, env, c); }
     // A fresh ListBuf() takes its slots' kind from the wanted element type.
-    Bool lb_new = bk == "call" && lw_text(w, id) == "ListBuf" && w.g.ns[id].nk == 0 && str_has_prefix_cg(want, "ListBuf(");
+    Bool lb_new = bk == "call" && lw_text(w, id) == "ListBuf" && w.g.ns[id].nk == 0 && ty_is(want, "ListBuf(");
     if (lb_new && !lw_fixed_bkind(want)) { return lw_expr(lw_wanting(w, want), id, env, c); }
     if (is_fixed_type(want)) { return lw_fixed_as(w, id, want, env, c); }
     if (!lv_is(want)) { return lw_expr(w, id, env, c); }
@@ -2431,9 +2431,11 @@ GT lw_sbv_push(Str bv, GT a, Bool ch, Int t1) {
 // ListBuf(T, N); "" for other types.
 Str lw_bkind(Str t) {
     if (t == "StrBuf") { return "sb"; }
-    if (str_has_prefix_cg(t, "StrBuf(")) { return "fsb"; }
-    if (str_has_prefix_cg(t, "BytesBuf(")) { return "fbb"; }
-    if (!str_has_prefix_cg(t, "ListBuf(")) { return ""; }
+    // The builder itself: `ListBuf(Int) closure(Int, Int)` is a closure
+    // (and the comma of its parameters is at depth 0).
+    if (ty_is(t, "StrBuf(")) { return "fsb"; }
+    if (ty_is(t, "BytesBuf(")) { return "fbb"; }
+    if (!ty_is(t, "ListBuf(")) { return ""; }
     return if (_find_comma_at_depth_cg(t, 8, 0, 0) >= 0) { "flb" } else { "lb" };
 }
 
@@ -2627,7 +2629,7 @@ GT lw_inline(Funcs fs, GT v, Str ety) {
 // A runtime call's List result, as raw slots when its type has them.
 GT lw_rawify_ret(GT v) {
     Str t = strip_owned_cg(v.ty);
-    if (!str_has_prefix_cg(t, "List(") || is_list_fixed(t)) { return v; }
+    if (!ty_is(t, "List(") || is_list_fixed(t)) { return v; }
     return lw_rawify(v, elem_type(t));
 }
 
@@ -2681,7 +2683,7 @@ pub Bool lin_typed_key(Str kt) { return lin_kk(kt) == 1 || key_str(kt) || lr_lis
 pub Bool key_custom(Str kt0) {
     Str kt = str_trim(strip_owned_cg(kt0));
     if (kt == "" || lin_kk(kt) == 1 || key_str(kt) || key_scalar(kt) || key_list_kind(kt) != 0) { return false; }
-    return !str_contains(kt, "Unknown") && !is_fn_type(kt) && !str_has_prefix(kt, "Map(") && !str_has_prefix(kt, "Set(") && !str_has_prefix(kt, "Secret(");
+    return !str_contains(kt, "Unknown") && !is_fn_type(kt) && !ty_is(kt, "Map(") && !ty_is(kt, "Set(") && !ty_is(kt, "Secret(");
 }
 
 // The key kind of kt as IR text: a number, or for a compiled key a
@@ -3643,7 +3645,7 @@ GT lw_print(LW w, Int id, Str n, List(Str) env, GT c) {
     // Any other `.finish()` (a ListBuf, or a user function called with
     // method syntax) is lowered afresh: the receiver's code above was only
     // looked at.
-    GT v = if (fin && str_has_prefix_cg(fr.ty, "ListBuf(")) { lw_builder(w, a, fr, "finish", env) } else { lw_expr(w, a, env, c) };
+    GT v = if (fin && ty_is(fr.ty, "ListBuf(")) { lw_builder(w, a, fr, "finish", env) } else { lw_expr(w, a, env, c) };
     if (v.err != "") { return v; }
     Int t1 = v.tmp + 1;
     Str reg = f"%t{t1}";
@@ -4595,10 +4597,10 @@ ST lw_bind(LW w, Int id, List(Str) env, ST g) {
     Str recty = lw_bind_ty(dtyb, recty0);
     Str ent2 = name + ":" + v2.val + ":" + recty;
     Bool opt_hole = v.ty == "Option(_)";
-    Bool opt_expected = str_has_prefix_cg(dtyb, "Option(");
+    Bool opt_expected = ty_is(dtyb, "Option(");
     Str ent2f = pick_str(opt_hole && opt_expected, name + ":" + v2.val + ":" + dtyb, ent2);
-    Bool res_ok_hole = str_has_prefix_cg(v2.ty, "Result(") && res_elem_ok_cg(v2.ty) == "_";
-    Bool res_expected = str_has_prefix_cg(dtyb, "Result(");
+    Bool res_ok_hole = ty_is(v2.ty, "Result(") && res_elem_ok_cg(v2.ty) == "_";
+    Bool res_expected = ty_is(dtyb, "Result(");
     Str ent2g = pick_str(res_ok_hole && res_expected, name + ":" + v2.val + ":" + dtyb, ent2f);
     List(Str) vlines = if (scoped) { v2.lines.concat(["call void @resid_scope_pop(i64 " + screg + ")"]) } else { v2.lines };
     return ST {.pos = 0, .dead = g.dead, .err = "", .env = env_add(env, ent2g), .glines = v2.glines, .hlines = g.hlines, .lines = vlines, .tmp = v2.tmp, .lbl = v2.lbl, .rety = g.rety};
@@ -5177,9 +5179,9 @@ Str zero_src(Funcs fs, Str t, Int depth) {
     if (int_fam(t)) { return "0"; }
     if (is_float_cg(t)) { return "0.0"; }
     if (is_dec_cg(t)) { return "(" + t + ")0"; }
-    if (str_has_prefix_cg(t, "List(")) { return "[]"; }
+    if (ty_is(t, "List(")) { return "[]"; }
     if (is_map_type_cg(t) || is_set_type_cg(t)) { return "{}"; }
-    if (str_has_prefix_cg(t, "Option(")) { return "None"; }
+    if (ty_is(t, "Option(")) { return "None"; }
     Int si = struct_index(fs, t);
     if (si < 0) { return ""; }
     Str inits = zero_fields(fs, fs.stf[si], 0, depth, "");
@@ -6214,7 +6216,7 @@ Str lr_why_ty(Funcs fs, Str t0, List(Str) seen) {
     List(Str) s2 = seen.concat([t]);
     Int si = struct_index(fs, t);
     if (si >= 0) { return t + lr_why_field(fs, fs.stf[si], 0, s2); }
-    if (str_has_prefix(t, "List(") && !is_list_fixed(t)) { return "a list of " + lr_why_ty(fs, elem_type(t), s2); }
+    if (ty_is(t, "List(") && !is_list_fixed(t)) { return "a list of " + lr_why_ty(fs, elem_type(t), s2); }
     if (lr_is_sum(fs, t)) { return t + lr_why_sum(fs, lr_sum_vars(fs, t), 0, s2); }
     return t;
 }
@@ -6427,7 +6429,7 @@ List(Str) lsv_params(List(Str) ls, Int i, List(Str) tyl) {
     Str l = ls[i];
     Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
     Int j = str_parse_int(str_slice(reg, 2, str_len(reg)));
-    Bool lst = j >= 0 && j < tyl.len() && str_has_prefix(tyl[j], "List(") && str_starts_with(l, reg + " = phi ptr ");
+    Bool lst = j >= 0 && j < tyl.len() && ty_is(tyl[j], "List(") && str_starts_with(l, reg + " = phi ptr ");
     Str k1 = "@resid_list_get(ptr " + reg + ", ";
     Str k2 = "@resid_list_get_nc(ptr " + reg + ", ";
     // A packed list (List(UInt(8)), List(Bool)) is read by resid_bl_get:
@@ -6522,7 +6524,7 @@ List(OL) ol_lists(List(Str) f, Int i, Int h1, Int b, List(Str) tyl, List(OL) acc
     Str l = f[i];
     Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
     Int j = str_parse_int(str_slice(reg, 2, str_len(reg)));
-    Bool lst = j >= 0 && j < tyl.len() && str_has_prefix(tyl[j], "List(") && str_starts_with(l, reg + " = phi ptr ");
+    Bool lst = j >= 0 && j < tyl.len() && ty_is(tyl[j], "List(") && str_starts_with(l, reg + " = phi ptr ");
     if (!lst) { return ol_lists(f, i + 1, h1, b, tyl, acc); }
     Map(Str, Int) m0 = {};
     OL v0 = ol_grow(f, b, OL {.reg = reg, .ok = true, .wrote = false, .borrow = false, .fam = m0.insert(reg, 1), .n = 1, .bytes = 0}, 0);
@@ -6976,7 +6978,7 @@ BV bv_find(List(Str) ls, Int i, Int b, List(Str) tyl) {
     Str l = ls[i];
     Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
     Int j = str_parse_int(str_slice(reg, 2, str_len(reg)));
-    Bool lb = j >= 0 && j < tyl.len() && str_has_prefix(tyl[j], "ListBuf(") && str_starts_with(l, reg + " = phi ptr ");
+    Bool lb = j >= 0 && j < tyl.len() && ty_is(tyl[j], "ListBuf(") && str_starts_with(l, reg + " = phi ptr ");
     BV v = if (lb) { bv_check(ls, i, b, reg) } else { none };
     if (v.reg != "") { return v; }
     return bv_find(ls, i + 1, b, tyl);
@@ -7962,50 +7964,41 @@ Bool lr_word_ty(Str t) { return lin_kk(t) == 1 || lin_vk(t) != 0 || t == "Str" |
 // carried by a loop region before, so a loop over secret bytes or words
 // (Argon2's memory) kept every iteration's garbage.
 Bool lr_sized_int(Str t0) {
-    Str t = if (str_starts_with(t0, "Secret(") && str_ends_with(t0, ")")) { str_slice(t0, 7, str_len(t0) - 1) } else { t0 };
-    Int open = if (str_starts_with(t, "UInt(")) { 5 } else { if (str_starts_with(t, "Int(")) { 4 } else { 0 } };
-    if (open == 0 || !str_ends_with(t, ")")) { return false; }
+    Str t = if (ty_wraps(t0, "Secret(")) { str_slice(t0, 7, str_len(t0) - 1) } else { t0 };
+    // UInt(8) itself: `UInt(8) closure(Int)` is a closure, not a word.
+    Int open = if (ty_wraps(t, "UInt(")) { 5 } else { if (ty_wraps(t, "Int(")) { 4 } else { 0 } };
+    if (open == 0) { return false; }
     Int n = str_parse_int(str_slice(t, open, str_len(t) - 1));
     return n > 0 && n <= 32;
 }
 
 Bool lr_list_word(Str t) { return lr_wraps(t, "List(") && lr_word_ty(str_slice(t, 5, str_len(t) - 1)); }
 
-// Whether t is itself a closure, `<ret> closure(<params>)`: a " closure("
-// outside every bracket, and t ends with its parameters' ")". A type that
-// only holds one (List(Str closure(Int)), Option(..), Map(Str, ..)) is
-// not. is_fn_type only asks whether " closure(" is anywhere in t.
-Bool lr_is_clo(Str t) { return str_ends_with(t, ")") && lr_clo_at(t, 0, 0); }
+// Whether t is itself a closure, and whether t is the type `pre`...`)`
+// itself: the movers' names for the type-shape readers ty_clo and ty_wraps
+// (compiler/codegen.resid), which every layout, freeze, fixed-capacity,
+// raw-slot and builder decision goes through as well.
+Bool lr_is_clo(Str t) { return ty_clo(t); }
+Bool lr_wraps(Str t, Str pre) { return ty_wraps(t, pre); }
 
-Bool lr_clo_at(Str t, Int i, Int d) {
-    if (i + 9 > str_len(t)) { return false; }
-    Int c = str_char_at(t, i);
-    if (d == 0 && c == 32 && str_slice(t, i, i + 9) == " closure(") { return true; }
-    return lr_clo_at(t, i + 1, if (c == 40) { d + 1 } else { if (c == 41) { d - 1 } else { d } });
-}
+// A map value word's kind for resid_mv_map (word_move in
+// runtime/rt/map.resid): 4 a string, 5 a list, 8 a tagged word (a UInt(8)
+// value is boxed, lin_vk 0, and a box may lie in the region), 0 a raw
+// scalar (Int, Float, Bool: lin_vk) with nothing to move.
+Int lr_kind(Str t) { return if (t == "Str") { 4 } else { if (lr_list_word(t)) { 5 } else { if (lin_vk(t) == 0 && lr_word_ty(t)) { 8 } else { 0 } } }; }
 
-// Whether t is the type `pre`...`)` itself: the bracket that `pre` opens
-// closes at t's last character. `List(Int) closure(Int)` begins as a list
-// does but is a closure (its bracket closes before " closure(").
-Bool lr_wraps(Str t, Str pre) { return str_has_prefix(t, pre) && str_ends_with(t, ")") && lr_close_at(t, str_len(pre), 1) == str_len(t) - 1; }
-
-// The index of the ")" that closes depth d's bracket, from i; -1 if none.
-Int lr_close_at(Str t, Int i, Int d) {
-    if (i >= str_len(t)) { return 0 - 1; }
-    Int c = str_char_at(t, i);
-    Int d2 = if (c == 40) { d + 1 } else { if (c == 41) { d - 1 } else { d } };
-    if (d2 == 0) { return i; }
-    return lr_close_at(t, i + 1, d2);
-}
-
-// A word's kind for resid_map_evac: 4 a string, 5 a list, 0 plain.
-Int lr_kind(Str t) { return if (t == "Str") { 4 } else { if (lr_list_word(t)) { 5 } else { 0 } }; }
+// A map key's or set element's kind: only an Int key is a raw word
+// (lin_kk 1); every other word key is stored boxed (lin_word), and a Float
+// key under about 1e-303 is a scalar box allocated where it was made, which
+// a loop region or a spawn's region frees. Kind 8 moves it (elem_move):
+// as kind 0 the keys were left in the freed region (SW-REGIONS-1).
+Int lr_kkind(Str t) { return if (t == "Str") { 4 } else { if (lr_list_word(t)) { 5 } else { if (lin_kk(t) == 1) { 0 } else { 8 } } }; }
 
 // The call that moves a carried value of type `ty` to the heap, or "".
 Str lr_evac_fn(Str ty) {
-    if (lr_wraps(ty, "Set(") && lr_word_ty(set_elem_type_cg(ty))) { return f"@resid_mv_map(ptr %V, i8 {lr_kind(set_elem_type_cg(ty))}, i8 0, ptr %C)"; }
+    if (lr_wraps(ty, "Set(") && lr_word_ty(set_elem_type_cg(ty))) { return f"@resid_mv_map(ptr %V, i8 {lr_kkind(set_elem_type_cg(ty))}, i8 0, ptr %C)"; }
     if (lr_wraps(ty, "Map(") && lr_word_ty(map_key_type_cg(ty)) && (lr_word_ty(map_val_type_cg(ty)) || lr_list_word(map_val_type_cg(ty)))) {
-        return f"@resid_mv_map(ptr %V, i8 {lr_kind(map_key_type_cg(ty))}, i8 {lr_kind(map_val_type_cg(ty))}, ptr %C)";
+        return f"@resid_mv_map(ptr %V, i8 {lr_kkind(map_key_type_cg(ty))}, i8 {lr_kind(map_val_type_cg(ty))}, ptr %C)";
     }
     if (lr_list_word(ty)) { return "@resid_mv_list(ptr %V, ptr %C)"; }
     if (is_dec_cg(ty) && ll_ty(ty) == "ptr") { return "@resid_mv_dec(ptr %V, ptr %C)"; }
@@ -8086,7 +8079,7 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
     if (lr_wraps(t, "Map(") && lr_word_ty(map_key_type_cg(t)) && !resid_internals()) {
         Str vt = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(map_val_type_cg(t)));
         Str vm = if (ll_ty(vt) == "ptr" && !lr_word_ty(vt)) { lr_move(fs, vt, seen.concat([t])) } else { "" };
-        if (vm != "" && vm != "-") { return f"@resid_mv_map_f(ptr %V, i8 {lr_kind(map_key_type_cg(t))}, ptr @" + lr_mv_fn(vt) + ", ptr %C)"; }
+        if (vm != "" && vm != "-") { return f"@resid_mv_map_f(ptr %V, i8 {lr_kkind(map_key_type_cg(t))}, ptr @" + lr_mv_fn(vt) + ", ptr %C)"; }
     }
     if (lr_wraps(t, "List(") && !is_list_fixed(t)) {
         Str et = ct_base_of(fs.ctn, fs.ctb, elem_type(t));
@@ -8156,7 +8149,7 @@ Str lr_lost_err(List(Str) ls, Int i) {
 Bool lr_list_wide(Str t) {
     if (!lr_wraps(t, "List(") || is_list_fixed(t)) { return false; }
     Str e = str_slice(t, 5, str_len(t) - 1);
-    return !str_starts_with(e, "Secret(") && !lr_word_ty(e) && lst_raw(e) == 1;
+    return !ty_wraps(e, "Secret(") && !lr_word_ty(e) && lst_raw(e) == 1;
 }
 
 Bool lr_fx_flat(Str t) {
@@ -8235,8 +8228,8 @@ Bool lr_is_sum(Funcs fs, Str t) {
 // The variants as "tag|inline fields|raw kinds|payload types" lines.
 List(Str) lr_sum_vars(Funcs fs, Str t) {
     List(Str) a = ty_args_cg(t);
-    if (str_has_prefix(t, "Option(")) { return if (a.len() == 1) { ["1|-1||" + a[0]] } else { [] }; }
-    if (str_has_prefix(t, "Result(")) { return if (a.len() == 2) { ["1|-1||" + a[0], "2|-1||" + a[1]] } else { [] }; }
+    if (ty_is(t, "Option(")) { return if (a.len() == 1) { ["1|-1||" + a[0]] } else { [] }; }
+    if (ty_is(t, "Result(")) { return if (a.len() == 2) { ["1|-1||" + a[0], "2|-1||" + a[1]] } else { [] }; }
     Int sx = sumtype_index_cg(fs, t);
     if (sx < 0) { return []; }
     return lr_sum_vars_at(fs, t, sx, 0, sumv_names_cg(fs.suv[sx]).len(), []);
@@ -8270,7 +8263,7 @@ Str lr_slot_move(Funcs fs, Str p0, List(Str) seen) {
 Bool lr_sum_ok(Funcs fs, Str t, List(Str) seen) {
     if (seen.contains(t)) { return true; }
     List(Str) vs = lr_sum_vars(fs, t);
-    Bool known = str_has_prefix(t, "Option(") || str_has_prefix(t, "Result(") || sumtype_index_cg(fs, t) >= 0;
+    Bool known = ty_is(t, "Option(") || ty_is(t, "Result(") || sumtype_index_cg(fs, t) >= 0;
     return known && lr_sum_vars_ok(fs, vs, 0, seen.concat([t]));
 }
 
@@ -8405,11 +8398,11 @@ Map(Str, Int) lr_sum_refs_in(Str l, Int from, Map(Str, Int) acc) {
 Bool lr_new_kind(Funcs fs, Str t0, List(Str) seen) {
     Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(t0));
     if (is_fn_type(t) || lr_is_sum(fs, t)) { return true; }
-    if (str_has_prefix(t, "Map(") && !lr_user_ty(fs, t) && lr_evac_fn(t) == "" && !resid_internals()) { return true; }
+    if (ty_wraps(t, "Map(") && !lr_user_ty(fs, t) && lr_evac_fn(t) == "" && !resid_internals()) { return true; }
     if (seen.contains(t)) { return false; }
     Int si = struct_index(fs, t);
     if (si >= 0) { return lr_fields_new(fs, fs.stf[si], 0, seen.concat([t])); }
-    if (str_has_prefix(t, "List(")) { return lr_new_kind(fs, elem_type(t), seen.concat([t])); }
+    if (ty_wraps(t, "List(")) { return lr_new_kind(fs, elem_type(t), seen.concat([t])); }
     return false;
 }
 
@@ -9011,7 +9004,8 @@ Bool lo_has_str(List(Str) xs, Str s, Int i) {
 // A Map/Set type, or a struct type.
 Bool lo_tracked(LOP lop, Str ty) { return lo_whole(lop, ty) || lop.sm.contains(strip_owned_cg(ty)); }
 // A heap List (not a List(T, N)).
-Bool lo_is_list(Str ty) { return str_has_prefix(ty, "List(") && !is_list_fixed(ty); }
+// (A closure whose result is a List is neither: it is never frozen.)
+Bool lo_is_list(Str ty) { return ty_is(ty, "List(") && !is_list_fixed(ty); }
 // A tracked value updated as a whole: a Map/Set, or a List when tracked.
 Bool lo_whole(LOP lop, Str ty) { return lin_is_mapset(ty) || (lop.lists && lo_is_list(strip_owned_cg(ty))); }
 Bool lo_tracked_ret(LOP lop, Str f) { return lo_tracked(lop, lop.ret.get(f) else { "" }); }

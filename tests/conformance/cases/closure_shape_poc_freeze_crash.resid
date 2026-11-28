@@ -1,0 +1,25 @@
+// Regression test for SWMG-2 (fixed): the red-team proof of concept, kept as
+// found. Comments below describe the defect as it was.
+// A call returning a closure whose type text starts with "List(" or "Map(":
+// lo_freeze (lower.resid) takes it for a list or map (lo_whole's prefix
+// test) and calls resid_list_freeze / resid_map_freeze on the closure's
+// environment.
+List(Int) closure(Int) mkl(Int a) { return lambda(k) { [a, k] }; }
+
+Map(Str, Int) closure(Int) mkm(Str x, Str y, Str z) {
+    return lambda(k) {
+        Map(Str, Int) m = {};
+        m.insert(x, k).insert(y, k + 1).insert(z, k + 2)
+    };
+}
+
+Int main() {
+    Int n = rt 2;
+    List(Int) closure(Int) f = mkl(0 - n);
+    println(f"list-clo {f(5)[0]} (want -2)");
+    Map(Str, Int) closure(Int) g = mkm(f"x{n}", f"y{n}", f"z{n}");
+    Map(Str, Int) r = g(10);
+    Int z = r.get("z2") else { -1 };
+    println(f"map-clo {r.len()} {z} (want 3 12)");
+    return 0;
+}

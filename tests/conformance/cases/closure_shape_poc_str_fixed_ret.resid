@@ -1,0 +1,14 @@
+// Regression test for SW-MOVERS-TEXT-1 (fixed): the red-team proof of concept, kept as
+// found. Comments below describe the defect as it was.
+// is_str_fixed(t) is str_has_prefix(t, "Str(") in an ordinary program
+// (fixed_cap_named returns true when no user type is named Str), so the
+// closure type `Str(8) closure(Int)` is taken for a fixed-capacity Str of
+// fixed_bytes = str_parse_int("8) closure(Int") + 1 = 1 byte.
+Str(8) closure(Int) mk(Str s) { return lambda(v) { (Str(8)) s }; }
+
+Int main() {
+    Str(8) closure(Int) f = mk("hello");
+    Str(8) r = f(1);
+    println(f"{r}");
+    return 0;
+}

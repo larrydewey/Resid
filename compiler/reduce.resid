@@ -127,8 +127,8 @@ pub Str rd_norm_ty(Str t) {
 pub Str rd_int_head(Str t) {
     if (t == "Int" || t == "UInt") { return t; }
     if (!str_ends_with(t, ")")) { return ""; }
-    if (str_starts_with(t, "Int(")) { return "Int"; }
-    if (str_starts_with(t, "UInt(")) { return "UInt"; }
+    if (ty_is(t, "Int(")) { return "Int"; }
+    if (ty_is(t, "UInt(")) { return "UInt"; }
     return "";
 }
 
@@ -253,14 +253,14 @@ pub Str rd_coerce(Str have, Str want) {
         if (rd_iw(w) < rd_iw(h)) { return ""; }
         return w;
     }
-    if (h == "List(?)" && str_starts_with(w, "List(")) { return w; }
+    if (h == "List(?)" && ty_is(w, "List(")) { return w; }
     // A closure or function value made while reducing takes its slot's type.
     if (h == "λ" && str_contains(w, " closure(")) { return w; }
     // `{}` is an empty map or set, whichever the slot is.
-    if (h == "{}" && (str_starts_with(w, "Map(") || str_starts_with(w, "Set("))) { return w; }
+    if (h == "{}" && (ty_is(w, "Map(") || ty_is(w, "Set("))) { return w; }
     // An untyped builder takes the slot's element type; never a fixed one's.
-    if (h == "ListBuf(?)" && str_starts_with(w, "ListBuf(") && rd_targs(w).len() == 1) { return w; }
-    if (h == "Option(_)" && str_starts_with(w, "Option(")) { return w; }
+    if (h == "ListBuf(?)" && ty_is(w, "ListBuf(") && rd_targs(w).len() == 1) { return w; }
+    if (h == "Option(_)" && ty_is(w, "Option(")) { return w; }
     // A value made by a constructor knows the type arguments its payloads
     // give (Ok, Err, a generic variant): "_" stands for the others.
     Int ho = str_find_char(h, 40, 0);
@@ -362,17 +362,17 @@ pub Str rd_coerce_v(Str have, Str want, Str v) {
     Str w = rd_norm_ty(want);
     if (rd_is_int_ty(h) && rd_is_int_ty(w) && rd_int_fits(v, w)) { return w; }
     // So do a list's items.
-    if (str_starts_with(h, "List(") && str_starts_with(w, "List(") && rd_targs(w).len() == 1) {
+    if (ty_is(h, "List(") && ty_is(w, "List(") && rd_targs(w).len() == 1) {
         Str we = rd_inner(w, "List(");
         return if (rd_items_fit(rd_dec(v), rd_inner(h, "List("), we, 0)) { w } else { "" };
     }
     // An Option's or a Result's payload flows by its value, as an integer does.
-    if (str_starts_with(h, "Option(") && str_starts_with(w, "Option(")) {
+    if (ty_is(h, "Option(") && ty_is(w, "Option(")) {
         if (v == "N") { return w; }
         Str pc = rd_coerce_v(rd_inner(h, "Option("), rd_inner(w, "Option("), str_slice(v, 1, str_len(v)));
         return if (pc != "") { w } else { "" };
     }
-    if (str_starts_with(h, "Result(") && str_starts_with(w, "Result(")) {
+    if (ty_is(h, "Result(") && ty_is(w, "Result(")) {
         List(Str) hs = rd_targs(h);
         List(Str) ws = rd_targs(w);
         if (hs.len() != 2 || ws.len() != 2) { return ""; }

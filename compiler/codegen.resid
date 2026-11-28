@@ -781,12 +781,12 @@ Bool ty_same_cg(Str a, Str b) {
 
 // Floating-point family (spec §6): Float(16|32|64|128).
 Bool is_float_cg(Str ty) {
-    return str_has_prefix_cg(num_norm_cg(ty), "Float(");
+    return ty_is(num_norm_cg(ty), "Float(");
 }
 
 Int float_bits_cg(Str ty) {
     Str n = num_norm_cg(ty);
-    if (!str_has_prefix_cg(n, "Float(")) { return 0; }
+    if (!ty_is(n, "Float(")) { return 0; }
     return str_parse_int(str_slice(n, 6, str_len(n) - 1));
 }
 
@@ -809,7 +809,7 @@ Str ll_ty(Str ty) {
     if (ty == "Float") { return "double"; }
     if (ty == "Str") { return "ptr"; }
     // Vec(T, N) is an LLVM vector <N x T> in registers (spec §46).
-    if (str_has_prefix_cg(ty, "Vec(")) {
+    if (ty_is(ty, "Vec(")) {
         Int c = str_find_char(ty, 44, 4);
         return "<" + str_trim(str_slice(ty, c + 1, str_len(ty) - 1)) + " x " + ll_ty(str_trim(str_slice(ty, 4, c))) + ">";
     }
@@ -818,9 +818,9 @@ Str ll_ty(Str ty) {
     // A closure is a pointer, whatever its result type (`Int(64) closure(Int)`).
     if (is_fn_type(ty)) { return "ptr"; }
     // width-parameterized numerics: Int(256) -> i256 etc.
-    Bool si = str_has_prefix_cg(ty, "Int(");
-    Bool ui = str_has_prefix_cg(ty, "UInt(");
-    Bool fi = str_has_prefix_cg(ty, "Float(");
+    Bool si = ty_is(ty, "Int(");
+    Bool ui = ty_is(ty, "UInt(");
+    Bool fi = ty_is(ty, "Float(");
     if (fi) {
         Str fdigits = str_slice(ty, 6, str_len(ty) - 1);
         if (fdigits == "16") { return "half"; }
@@ -927,7 +927,7 @@ Str default_zero_for(Str llty) {
 
 // Signedness of an integer type string; true for signed families.
 Bool ll_is_signed(Str ty) {
-    return str_has_prefix_cg(ty, "Int(") || ty == "Int" || ty == "ISize";
+    return ty_is(ty, "Int(") || ty == "Int" || ty == "ISize";
 }
 
 // Bit width of an integer-family type string (spec v3.2 S6.1).
@@ -944,14 +944,13 @@ Bool int_fam(Str ty) {
     if (ty == "Int") { return true; }
     if (ty == "UInt") { return true; }
     if (ty == "ISize" || ty == "USize") { return true; }
-    Bool si = str_has_prefix_cg(ty, "Int(");
-    Bool ui = str_has_prefix_cg(ty, "UInt(");
-    return si || ui;
+    // Int(N) / UInt(N) itself: `UInt(64) closure(Int)` is a closure.
+    return ty_is(ty, "Int(") || ty_is(ty, "UInt(");
 }
 
 // Family head: "Int" or "UInt".
 Str fam_head(Str ty) {
-    if (ty == "UInt" || ty == "USize" || str_has_prefix_cg(ty, "UInt(")) { return "UInt"; }
+    if (ty == "UInt" || ty == "USize" || ty_is(ty, "UInt(")) { return "UInt"; }
     return "Int";
 }
 
@@ -970,7 +969,7 @@ List(Str) hdr_extra() {
 }
 
 Bool is_dec_cg(Str t) {
-    return t == "Dec" || str_has_prefix_cg(t, "Dec(");
+    return t == "Dec" || ty_is(t, "Dec(");
 }
 
 Int dec_prec_cg(Str t) {
@@ -1180,8 +1179,8 @@ pub Bool is_known_type_cg(Str ty) {
     if (ty == "Str") { return true; }
     if (ty == "Bytes") { return true; }
     if (ty == "Option") { return true; }
-    Bool w = str_has_prefix_cg(ty, "Int(") || str_has_prefix_cg(ty, "UInt(");
-    Bool wf = str_has_prefix_cg(ty, "Float(") || str_has_prefix_cg(ty, "Dec(");
+    Bool w = ty_is(ty, "Int(") || ty_is(ty, "UInt(");
+    Bool wf = ty_is(ty, "Float(") || ty_is(ty, "Dec(");
     if (w || wf) { return true; }
     return is_fixed_type(ty);
 }
@@ -1805,7 +1804,7 @@ Str elem_type(Str ty) {
 
 // Map/Set type helpers for codegen.
 Bool is_map_type_cg(Str t) {
-    return str_has_prefix_cg(t, "Map(");
+    return ty_is(t, "Map(");
 }
 
 // Recursive helper to find comma at given depth
@@ -1830,7 +1829,7 @@ Int _skip_ws_cg(Str t, Int i) {
 Str map_key_type_cg(Str t) {
     Str head = "Map(";
     Int h = str_len(head);
-    if (!str_has_prefix_cg(t, head)) { return ""; }
+    if (!ty_is(t, head)) { return ""; }
     Int comma = _find_comma_at_depth_cg(t, h, 1, 1);
     if (comma < 0) { return ""; }
     return str_trim(str_slice(t, h, comma));
@@ -1839,7 +1838,7 @@ Str map_key_type_cg(Str t) {
 Str map_val_type_cg(Str t) {
     Str head = "Map(";
     Int h = str_len(head);
-    if (!str_has_prefix_cg(t, head)) { return ""; }
+    if (!ty_is(t, head)) { return ""; }
     Int n = str_len(t);
     Int comma = _find_comma_at_depth_cg(t, h, 1, 1);
     if (comma < 0) { return ""; }
@@ -1848,13 +1847,13 @@ Str map_val_type_cg(Str t) {
 }
 
 Bool is_set_type_cg(Str t) {
-    return str_has_prefix_cg(t, "Set(");
+    return ty_is(t, "Set(");
 }
 
 Str set_elem_type_cg(Str t) {
     Str head = "Set(";
     Int h = str_len(head);
-    if (!str_has_prefix_cg(t, head)) { return ""; }
+    if (!ty_is(t, head)) { return ""; }
     Int n = str_len(t);
     return str_trim(str_slice(t, h, n - 1));
 }
@@ -1863,7 +1862,7 @@ Str set_elem_type_cg(Str t) {
 // generic value holder, `Expect(T)` — analogous to Option(T). Defined in
 // both halves; tools/merge_driver.py keeps this (base) copy.
 Bool is_expect_type(Str t) {
-    return str_has_prefix_cg(t, "Expect(");
+    return ty_is(t, "Expect(");
 }
 
 // "Expect(X)" -> "X" (element type of a concrete Expect container).
@@ -1894,6 +1893,55 @@ Str expect_elem(Str t) {
 Bool is_fn_type(Str t) {
     return str_contains(t, " closure(");
 }
+
+// ─── Type shapes ────────────────────────────────────────────────────
+// Every decision that picks a layout, a mover, a freeze, a fixed capacity,
+// a raw slot or a builder kind reads the type's text through ty_clo and
+// ty_is, never through a bare prefix test. A closure, `<ret>
+// closure(<params>)`, is a closure first, whatever its result's text begins
+// with: `Str(8) closure(Int)` is no fixed string (a 1-byte frame slot
+// holding a truncated function pointer), `Map(Str, Int) closure(Int)` no map
+// to freeze, `UInt(64) closure(Int)` no raw integer word. A constructor
+// `C(..)` matches only when the bracket it opens closes at the type's last
+// character, which a closure's never does: its own parameters follow it.
+// An ":owned" marker is not part of the shape.
+
+// Whether t is itself a closure: " closure(" outside every bracket, and t
+// ends with its parameters' ")". A type that only holds one
+// (List(Str closure(Int)), Option(..), Map(Str, ..)) is not; is_fn_type
+// asks only whether " closure(" is anywhere in t.
+pub Bool ty_clo(Str t0) {
+    Str t = strip_owned_cg(t0);
+    return str_ends_with(t, ")") && ty_clo_at(t, 0, 0);
+}
+
+Bool ty_clo_at(Str t, Int i, Int d) {
+    if (i + 9 > str_len(t)) { return false; }
+    Int c = str_char_at(t, i);
+    if (d == 0 && c == 32 && str_slice(t, i, i + 9) == " closure(") { return true; }
+    return ty_clo_at(t, i + 1, if (c == 40) { d + 1 } else { if (c == 41) { d - 1 } else { d } });
+}
+
+// Whether t is the type `pre`...`)` itself (pre ends with its "("), its
+// ":owned" marker aside.
+pub Bool ty_is(Str t, Str pre) { return ty_wraps(strip_owned_cg(t), pre); }
+
+// ty_is on a type without a marker: the bracket `pre` opens closes at t's
+// last character. `List(Int) closure(Int)` begins as a list does but is a
+// closure (its bracket closes before " closure(").
+pub Bool ty_wraps(Str t, Str pre) { return str_has_prefix_cg(t, pre) && str_ends_with(t, ")") && ty_close_at(t, str_len(pre), 1) == str_len(t) - 1; }
+
+// The index of the ")" that closes depth d's bracket, from i; -1 if none.
+pub Int ty_close_at(Str t, Int i, Int d) {
+    if (i >= str_len(t)) { return 0 - 1; }
+    Int c = str_char_at(t, i);
+    Int d2 = if (c == 40) { d + 1 } else { if (c == 41) { d - 1 } else { d } };
+    if (d2 == 0) { return i; }
+    return ty_close_at(t, i + 1, d2);
+}
+
+// Float or Float(N) itself (not a closure returning one).
+pub Bool ty_float(Str t) { return t == "Float" || ty_is(t, "Float("); }
 
 // "Int closure(A, B)" -> "Int" (return type before " closure(").
 Str fn_ret(Str t) {
@@ -1975,7 +2023,7 @@ Bool lambda_capturable(Str ent) {
     Str ty = cg_env_ty(ent);
     if (ty == "") { return false; }
     if (ty == "Void") { return false; }
-    if (str_has_prefix_cg(ty, "Expect(")) { return false; }
+    if (ty_is(ty, "Expect(")) { return false; }
     if (str_has_prefix_cg(ty, "fn")) { return false; }
     return true;
 }
@@ -1996,20 +2044,20 @@ Bool can_i64_store(Str ty) {
     if (ty == "Float") { return true; }
     if (ty == "Float(64)") { return true; }
     if (ty == "Str") { return true; }
-    if (str_has_prefix_cg(ty, "List(")) { return true; }
-    if (str_has_prefix_cg(ty, "Map(")) { return true; }
-    if (str_has_prefix_cg(ty, "Set(")) { return true; }
-    if (str_has_prefix_cg(ty, "Option(")) { return true; }
-    if (str_has_prefix_cg(ty, "Result(")) { return true; }
+    if (ty_is(ty, "List(")) { return true; }
+    if (ty_is(ty, "Map(")) { return true; }
+    if (ty_is(ty, "Set(")) { return true; }
+    if (ty_is(ty, "Option(")) { return true; }
+    if (ty_is(ty, "Result(")) { return true; }
     // Records, sums and closures are pointers too.
     return ll_ty(ty) == "ptr";
 }
 
 Bool is_str_fixed(Str t) {
-    return str_has_prefix_cg(t, "Str(") && fixed_cap_named(t, 4);
+    return ty_is(t, "Str(") && fixed_cap_named(t, 4);
 }
 Bool is_bytes_fixed(Str t) {
-    return str_has_prefix_cg(t, "Bytes(") && fixed_cap_named(t, 6);
+    return ty_is(t, "Bytes(") && fixed_cap_named(t, 6);
 }
 
 // Set (lw_program) while lowering a program that declares a record or a
@@ -2034,7 +2082,7 @@ Bool _all_digits(Str t, Int i) {
     return _all_digits(t, i + 1);
 }
 Bool is_list_fixed(Str t) {
-    if (!str_has_prefix_cg(t, "List(")) { return false; }
+    if (!ty_is(t, "List(")) { return false; }
     Int comma = _find_comma_at_depth_cg(t, 5, 0, 0);
     if (comma < 0) { return false; }
     Int n = str_len(t);
@@ -2044,7 +2092,7 @@ Bool is_list_fixed(Str t) {
     return _all_digits(cap, 0);
 }
 Str fixed_elem(Str t) {
-    if (!str_has_prefix_cg(t, "List(")) { return ""; }
+    if (!ty_is(t, "List(")) { return ""; }
     Int comma = _find_comma_at_depth_cg(t, 5, 0, 0);
     if (comma < 0) { return ""; }
     return str_trim(str_slice(t, 5, comma));
@@ -2052,13 +2100,13 @@ Str fixed_elem(Str t) {
 Int fixed_cap(Str t) {
     Int n = str_len(t);
     Int rparen = n - 1;
-    if (str_has_prefix_cg(t, "Str(")) {
+    if (ty_is(t, "Str(")) {
         return str_parse_int(str_trim(str_slice(t, 4, rparen)));
     }
-    if (str_has_prefix_cg(t, "Bytes(")) {
+    if (ty_is(t, "Bytes(")) {
         return str_parse_int(str_trim(str_slice(t, 6, rparen)));
     }
-    if (str_has_prefix_cg(t, "List(")) {
+    if (ty_is(t, "List(")) {
         Int comma = _find_comma_at_depth_cg(t, 5, 0, 0);
         if (comma < 0) { return 0; }
         return str_parse_int(str_trim(str_slice(t, comma + 1, rparen)));
@@ -2589,7 +2637,7 @@ GT box_heap_(Str s, GT v, List(Str) env, Funcs fs) {
     // passes through like Str and the other composites. Without this it fell
     // through to the scalar path and got wrapped in resid_box_i64, which
     // rejects a `ptr` argument.
-    if (str_has_prefix_cg(v.ty, "Option(") || str_has_prefix_cg(v.ty, "Sum(") || is_map_type_cg(v.ty) || is_set_type_cg(v.ty) || str_has_prefix_cg(v.ty, "List(") || is_fn_type(v.ty) || v.ty == "Str" || v.ty == "Struct" || v.ty == "Ptr" || v.ty == "SourceLoc" || v.ty == "File") {
+    if (ty_is(v.ty, "Option(") || ty_is(v.ty, "Sum(") || is_map_type_cg(v.ty) || is_set_type_cg(v.ty) || ty_is(v.ty, "List(") || is_fn_type(v.ty) || v.ty == "Str" || v.ty == "Struct" || v.ty == "Ptr" || v.ty == "SourceLoc" || v.ty == "File") {
         return v;
     }
     // Anything already represented by a pointer (structs, Results, sum
@@ -2749,9 +2797,9 @@ GT cg_expect_assert(Str s, GT self, GT y, Str et, Str method, Int pos, List(Str)
     Str ieq = if (want) { "eq" } else { "ne" };
     Str feq = if (want) { "oeq" } else { "one" };
     Str seq = if (want) { "ne" } else { "eq" };
-    Bool flt = et == "Float" || str_has_prefix_cg(et, "Float(");
+    Bool flt = ty_float(et);
     Bool bl = et == "Bool";
-    Bool ist = et == "Int" || et == "UInt" || str_has_prefix_cg(et, "Int(") || str_has_prefix_cg(et, "UInt(");
+    Bool ist = et == "Int" || et == "UInt" || ty_is(et, "Int(") || ty_is(et, "UInt(");
     Bool isstr = et == "Str";
     Bool is128 = is_wide_box(et);
     Int t1 = y.tmp + 1;
@@ -2994,7 +3042,7 @@ GT cg_expect_contains(Str s, GT self, GT item, Str et, Int pos, List(Str) env, F
         return cg_expect_guard2(s, ok, "toContain", fl, fa, "", pos, z);
     }
     Str cet = list_elem_cg(et);
-    Bool cflt = cet == "Float" || str_has_prefix_cg(cet, "Float(");
+    Bool cflt = ty_float(cet);
     Bool cstr = cet == "Str";
     Str prim = if (cstr) { "@list_contains_str" } else if (cflt) { "@list_contains_float" } else { "@list_contains_int" };
     Str aty = if (cstr) { "ptr" } else if (cflt) { "double" } else { "i64" };
@@ -3049,7 +3097,7 @@ GT cg_expect_throw(Str s, GT self, Int pos, List(Str) env, Funcs fs) {
 // box holds; only the scalars need a resid_unbox_* round trip.
 GT cg_expect_unbox(GT self, Str et, GT c) {
     Bool ist = int_fam(et);
-    Bool flt = et == "Float" || str_has_prefix_cg(et, "Float(");
+    Bool flt = ty_float(et);
     Bool bl = et == "Bool";
     if (!ist && !flt && !bl) {
         return GT {.pos = c.pos, .val = self.val, .ty = et, .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines, .tmp = c.tmp, .lbl = c.lbl, .tail = false};
@@ -3747,7 +3795,7 @@ GT cg_cast_fixed(GT inner, Str toty, GT c) {
         return GT {.pos = inner.pos, .val = dst, .ty = toty, .cnt = 0, .err = "", .glines = inner.glines, .lines = l2, .tmp = t2, .lbl = inner.lbl, .tail = false};
     }
     // List(T, N) -> List(T): dense-box every inline slot into a heap list.
-    Bool to_heap_list = str_has_prefix_cg(toty, "List(") && !is_list_fixed(toty);
+    Bool to_heap_list = ty_is(toty, "List(") && !is_list_fixed(toty);
     if (to_heap_list && is_list_fixed(inner.ty)) {
         Str ety = fixed_elem(inner.ty);
         Str toety = elem_type(toty);
@@ -3813,7 +3861,7 @@ Int lst_raw(Str ety0) {
     Str ety = sec_inner(strip_owned_cg(ety0));
     if (is_fixed_type(ety)) { return 0; }
     if (ety == "Bool") { return 3; }
-    if (ety == "Float" || str_has_prefix_cg(ety, "Float(")) { return 2; }
+    if (ty_float(ety)) { return 2; }
     if (int_fam(ety) && ll_width_of(ety) <= 64) { return 1; }
     return 0;
 }
@@ -3935,7 +3983,7 @@ List(Str) lst_word_lines(Str ety, Str ev, Int tb) {
 // Register holding the boxed (heap) form of a literal element value. Scalars
 // go through a resid_box_* call into %t{tb}; pointers pass through as-is.
 Str lst_box_reg(Str ety, Str ev, Int tb) {
-    if (is_fixed_type(ety) || int_fam(ety) || ety == "Bool" || ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
+    if (is_fixed_type(ety) || int_fam(ety) || ety == "Bool" || ty_float(ety)) {
         return f"%t{tb}";
     }
     return ev;
@@ -3953,7 +4001,7 @@ List(Str) lst_box_lines(Str ety, Str ev, Int tb) {
         Str box = r + " = call ptr @resid_box_bool(i8 " + z + ")";
         return [cnv, box];
     }
-    if (ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
+    if (ty_float(ety)) {
         // A narrower float is boxed as a double (lst_read_reg narrows back).
         Str lt = ll_ty(ety);
         if (lt != "double") { return [r + "e = fpext " + lt + " " + ev + " to double", r + " = call ptr @resid_box_f64(double " + r + "e)"]; }
@@ -3974,7 +4022,7 @@ List(Str) lst_box_lines(Str ety, Str ev, Int tb) {
 // Register holding the unboxed value read from a list slot. Scalars unbox via
 // resid_unbox_* into %t{tr}; pointers (char* / composite) pass through as-is.
 Str lst_read_reg(Str ety, Str slot, Int tr) {
-    if (int_fam(ety) || ety == "Bool" || ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
+    if (int_fam(ety) || ety == "Bool" || ty_float(ety)) {
         return f"%t{tr}";
     }
     return slot;
@@ -3999,7 +4047,7 @@ List(Str) lst_read_lines(Str ety, Str slot, Int tr, List(Str) acc) {
         Str z = f"%t{tr + 1}";
         return acc.concat([z + " = call i8 @resid_unbox_bool(ptr " + slot + ")", r + " = trunc i8 " + z + " to i1"]);
     }
-    if (ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
+    if (ty_float(ety)) {
         Str lt = ll_ty(ety);
         if (lt != "double") { return acc.concat([r + "d = call double @resid_unbox_f64(ptr " + slot + ")", r + " = fptrunc double " + r + "d to " + lt]); }
         return acc.concat([r + " = call double @resid_unbox_f64(ptr " + slot + ")"]);
@@ -4417,7 +4465,7 @@ GT gt_tmp(GT v, Int t) {
 }
 
 Bool is_opt_ty_cg(Str t) {
-    return t == "Option(_)" || str_has_prefix_cg(t, "Option(");
+    return t == "Option(_)" || ty_is(t, "Option(");
 }
 
 // Result type helpers (codegen half).
@@ -4443,7 +4491,7 @@ Str res_elem_ok_cg(Str t) {
     return t;
 }
 Bool is_res_ty_cg(Str t) {
-    return str_has_prefix_cg(t, "Result(");
+    return ty_is(t, "Result(");
 }
 
 // A record payload stored inline (sum_inline_fields): the slot array.
@@ -4488,7 +4536,7 @@ GT cg_match_payload(GT sc, Str ety, Int slot, GT c) {
     // A narrower integer or float was widened into its slot (box_heap_):
     // read the i64/double back and narrow it.
     Bool narrow_int = int_fam(typ) && ll_width_of(typ) < 64;
-    Bool narrow_flt = str_has_prefix_cg(typ, "Float(") && ll_ty(typ) != "double";
+    Bool narrow_flt = ty_is(typ, "Float(") && ll_ty(typ) != "double";
     if (narrow_int || narrow_flt) {
         Int t5 = c.tmp + 5;
         Int t6 = c.tmp + 6;
@@ -5241,7 +5289,7 @@ Str lin_from_word(Str reg, Str w, Str vt) {
 }
 
 Bool lin_is_mapset(Str ty) {
-    return str_has_prefix(ty, "Map(") || str_has_prefix(ty, "Set(");
+    return ty_is(ty, "Map(") || ty_is(ty, "Set(");
 }
 
 Bool lin_has_int(List(Int) xs, Int v, Int i) {
@@ -5388,7 +5436,7 @@ Str rt_itoa_def() {
 Str cmp_read(Str src, Str dst, Str pty) {
     Str s = "%" + src;
     Str d = "%" + dst;
-    if (pty == "Str" || str_has_prefix_cg(pty, "List(") || str_has_prefix_cg(pty, "Map(") || str_has_prefix_cg(pty, "Set(") || str_has_prefix_cg(pty, "Option(") || str_has_prefix_cg(pty, "Result(") || str_has_prefix_cg(pty, "Sum(")) {
+    if (pty == "Str" || ty_is(pty, "List(") || ty_is(pty, "Map(") || ty_is(pty, "Set(") || ty_is(pty, "Option(") || ty_is(pty, "Result(") || ty_is(pty, "Sum(") || ty_clo(pty)) {
         return "  " + d + " = bitcast ptr " + s + " to ptr\n";
     }
     // Slots of a raw list (lst_raw) hold the values.
@@ -5407,7 +5455,7 @@ Str cmp_read(Str src, Str dst, Str pty) {
         Str raw = "%" + dst + "b";
         return "  " + raw + " = call i8 @resid_unbox_bool(ptr " + s + ")\n  " + d + " = trunc i8 " + raw + " to i1\n";
     }
-    if (pty == "Float" || str_has_prefix_cg(pty, "Float(")) {
+    if (ty_float(pty)) {
         return "  " + d + " = call double @resid_unbox_f64(ptr " + s + ")\n";
     }
     if (int_fam(pty)) {

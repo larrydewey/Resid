@@ -1,0 +1,10 @@
+// Regression test for SW-MOVERS-TEXT-2 (fixed): the red-team proof of concept, kept as
+// found. Comments below describe the defect as it was.
+UInt(8) closure(Int) mk(Str s) { return lambda(v) { (UInt(8)) (str_len(s) % 256) }; }
+List(UInt(8) closure(Int)) two() { return [mk("ab"), mk("abc")]; }
+Int main() {
+    List(UInt(8) closure(Int)) xs = two();
+    UInt(8) closure(Int) f = xs[1];
+    println(f"{xs.len()} {f(0)}");
+    return 0;
+}

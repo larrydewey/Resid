@@ -1,0 +1,16 @@
+// Regression test for SW-MOVERS-TEXT-1 (fixed): the red-team proof of concept, kept as
+// found. Comments below describe the defect as it was.
+// The same text test on a closure held in a record field and passed as an
+// argument: `Bytes(4) closure(Int)` (is_bytes_fixed: prefix "Bytes(").
+type Holder = { Bytes(4) closure(Int) f; Int n; };
+
+Bytes(4) closure(Int) mk(Bytes(4) b) { return lambda(v) { b }; }
+
+Int use(Bytes(4) closure(Int) g) { Bytes(4) r = g(0); return r.len(); }
+
+Int main() {
+    Bytes(4) b = b"wxyz";
+    Holder h = Holder {.f = mk(b), .n = 3};
+    println(f"{use(h.f)}");
+    return 0;
+}

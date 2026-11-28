@@ -1,0 +1,35 @@
+// Regression test for SW-MOVERS-TEXT-2 (fixed): the red-team proof of concept, kept as
+// found. Comments below describe the defect as it was.
+// List(UInt(64) closure(Int)) built without an element store (a map's
+// values()), then carried by a tail loop. lr_list_wide(text) -> lst_raw ->
+// int_fam("UInt(64) closure(Int)") says "list of 64-bit integers", so the
+// loop region moves it with resid_mv_list and leaves the closures behind.
+UInt(64) closure(Int) mk(Str s) { return lambda(v) { (UInt(64)) (str_len(s) + v) }; }
+
+List(UInt(64) closure(Int)) step(Int i, Int n, List(UInt(64) closure(Int)) acc) {
+    if (i >= n) { return acc; }
+    Str s = f"str-{i}-" + str_repeat("x", i % 50);
+    Map(Int, UInt(64) closure(Int)) m = {i: mk(s)};
+    List(UInt(64) closure(Int)) a2 = if (i % 1000 == 0) { acc.concat(m.values()) } else { acc };
+    return step(i + 1, n, a2);
+}
+
+Int burn(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Str s = f"junk-{i}-" + str_repeat("y", i % 60);
+    return burn(i + 1, n, acc + str_len(s) % 3);
+}
+
+Int call1(UInt(64) closure(Int) f) { return (Int) f(0); }
+
+Int sum(List(UInt(64) closure(Int)) fs, Int i, Int acc) {
+    if (i >= fs.len()) { return acc; }
+    return sum(fs, i + 1, acc + call1(fs[i]));
+}
+
+Int main() {
+    List(UInt(64) closure(Int)) fs = step(0, 40000, []);
+    Int b = burn(0, 40000, 0);
+    println(f"{fs.len()} {sum(fs, 0, 0)} {b}");
+    return 0;
+}

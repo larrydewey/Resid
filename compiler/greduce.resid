@@ -542,7 +542,7 @@ GV gx_try(GXT ft, Int id, RdE env, GS st) {
         return gx_folded_r(str_slice(l.v, 1, str_len(l.v)), qt, rq.id, true, rq.st, "unwrap");
     }
     // So does a known Ok; a known Err returns early.
-    GXS rs = if (l.k && str_starts_with(rd_norm_ty(l.ty), "Result(")) { gx_sum_of(ft, l.v, l.ty) } else { gx_sum_of(ft, "", "") };
+    GXS rs = if (l.k && ty_is(rd_norm_ty(l.ty), "Result(")) { gx_sum_of(ft, l.v, l.ty) } else { gx_sum_of(ft, "", "") };
     if (rs.ok && rs.tag == "Ok" && rs.pts[0] != "") { return gx_folded_r(rs.ps[0], rs.pts[0], rq.id, true, rq.st, "unwrap"); }
     return gx_unk(rq.id, l.ch, rq.st);
 }
@@ -587,7 +587,7 @@ GV gx_orelse(GXT ft, Int id, RdE env, GS st) {
     GXN fbn = gx_bexpr_node(fb.st, fbx, fb);
     GXN re = if (ech) { gx_re(fbn.st, id, [l.r, fbn.id]) } else { gx_n(fb.st, id) };
     GXS sv = if (l.k) { gx_sum_of(ft, l.v, l.ty) } else { gx_sum_of(ft, "", "") };
-    Bool opt = str_starts_with(rd_norm_ty(l.ty), "Option(") || str_starts_with(rd_norm_ty(l.ty), "Result(");
+    Bool opt = ty_is(rd_norm_ty(l.ty), "Option(") || ty_is(rd_norm_ty(l.ty), "Result(");
     if (sv.ok && opt) {
         if ((sv.tag == "Some" || sv.tag == "Ok") && sv.pts[0] != "") { return gx_folded_r(sv.ps[0], sv.pts[0], re.id, true, re.st, "unwrap"); }
         if ((sv.tag == "None" || sv.tag == "Err") && fb.k && fb.bs.len() == 0) { return gx_folded_r(fb.v, fb.ty, re.id, true, re.st, "select"); }
@@ -852,7 +852,7 @@ GXS gx_sum_of(GXT ft, Str v, Str ty) {
     List(Str) items = rd_dec(v);
     if (items.len() == 0) { return none; }
     Str tag = items[0];
-    if (str_starts_with(t, "Result(")) {
+    if (ty_is(t, "Result(")) {
         List(Str) args = rd_targs(t);
         if (args.len() != 2 || items.len() != 2) { return none; }
         Str pt = if (tag == "Ok") { args[0] } else { args[1] };
@@ -1029,8 +1029,8 @@ SV sv_scan(Str v, Str ty, Int n) { return SV {.k = true, .v = v, .ty = ty, .scan
 // `b.name(args)` on a known value: lists, builders, maps and sets.
 SV sem_mcall(GXT ft, Str name, Str bv, Str bty, List(Str) vs, List(Str) ts) {
     Str bt = rd_norm_ty(bty);
-    if (bt == "StrBuf" || str_starts_with(bt, "ListBuf(")) { return sem_builder(name, bt, bv, vs, ts); }
-    if (bt == "{}" || str_starts_with(bt, "Map(") || str_starts_with(bt, "Set(")) { return sem_map(name, bt, bv, vs, ts); }
+    if (bt == "StrBuf" || ty_is(bt, "ListBuf(")) { return sem_builder(name, bt, bv, vs, ts); }
+    if (bt == "{}" || ty_is(bt, "Map(") || ty_is(bt, "Set(")) { return sem_map(name, bt, bv, vs, ts); }
     Str et = rd_inner(bty, "List(");
     if (et == "") { return sv_no(); }
     Int n = ts.len();
@@ -1099,7 +1099,7 @@ List(Str) gx_copies(Str v, Int n, ListBuf(Str) acc) {
 // `b[x]` on a known list (an index out of range aborts at run time) or
 // map (`m.get(x)`).
 SV sem_index(GXT ft, Str bv, Str bty, Str xv, Str xty) {
-    if (str_starts_with(rd_norm_ty(bty), "Map(")) { return sem_map("get", rd_norm_ty(bty), bv, [xv], [xty]); }
+    if (ty_is(rd_norm_ty(bty), "Map(")) { return sem_map("get", rd_norm_ty(bty), bv, [xv], [xty]); }
     Str et = rd_inner(bty, "List(");
     if (et == "" || et == "?" || !rd_is_int_ty(rd_norm_ty(xty)) || !rd_small(xv)) { return sv_no(); }
     Int i = rd_atoi(xv);
@@ -1194,7 +1194,7 @@ Str gx_set_fill(List(Str) vs, List(Str) ts, Str kt, Int i, Str acc) {
 SV sem_map(Str name, Str bt, Str bv, List(Str) vs, List(Str) ts) {
     Int n = ts.len();
     Bool emp = bt == "{}";
-    Bool isset = str_starts_with(bt, "Set(") || (emp && name == "insert" && n == 1);
+    Bool isset = ty_is(bt, "Set(") || (emp && name == "insert" && n == 1);
     List(Str) targs = if (emp) { gx_nos() } else { rd_targs(bt) };
     Str kt = if (emp) { if (n > 0) { rd_norm_ty(ts[0]) } else { "" } } else { targs[0] };
     Str vt = if (emp) { if (n > 1) { rd_norm_ty(ts[1]) } else { "" } } else if (isset) { "" } else { targs[1] };
@@ -2582,7 +2582,7 @@ YV gy_try(GYC c, Int id, RdE env, GY st) {
     YV l = gy_expr(c, gy_kid(c, id, 0), env, st);
     if (!l.ok) { return gy_fail(l.st); }
     Str t = rd_norm_ty(l.ty);
-    if (!str_starts_with(t, "Option(") && !str_starts_with(t, "Result(")) { return gy_fail(l.st); }
+    if (!ty_is(t, "Option(") && !ty_is(t, "Result(")) { return gy_fail(l.st); }
     GXS sv = gx_sum_of(c.ft, l.v, l.ty);
     if (!sv.ok) { return gy_fail(l.st); }
     if (sv.tag == "Some" || sv.tag == "Ok") { return if (sv.pts[0] != "") { gy_val(sv.ps[0], rd_norm_ty(sv.pts[0]), l.st) } else { gy_fail(l.st) }; }
@@ -2598,7 +2598,7 @@ YV gy_orelse(GYC c, Int id, RdE env, GY st) {
     YV l = gy_expr(c, gy_kid(c, id, 0), env, st);
     if (!l.ok) { return gy_fail(l.st); }
     Str t = rd_norm_ty(l.ty);
-    if (!str_starts_with(t, "Option(") && !str_starts_with(t, "Result(")) { return gy_fail(l.st); }
+    if (!ty_is(t, "Option(") && !ty_is(t, "Result(")) { return gy_fail(l.st); }
     GXS sv = gx_sum_of(c.ft, l.v, l.ty);
     if (!sv.ok) { return gy_fail(l.st); }
     if (sv.tag == "Some" || sv.tag == "Ok") { return if (sv.pts[0] != "") { gy_val(sv.ps[0], rd_norm_ty(sv.pts[0]), l.st) } else { gy_fail(l.st) }; }

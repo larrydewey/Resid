@@ -1,0 +1,9 @@
+return: 6 3 4 true false
+argument: 7 4 5
+list: 7 5 3 true false
+field: 8 5 6 true
+sum: 5 2 -1
+tail: 6 32 6 32 6 65
+for: 67 64
+while: 66
+spawn: 65 62 true

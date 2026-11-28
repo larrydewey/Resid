@@ -1,0 +1,37 @@
+// Regression test for SW-REGIONS-1 (fixed): the red-team proof of concept, kept as
+// found. Comments below describe the defect as it was.
+Float shrink(Float x, Int k) { if (k == 0) { return x; } return shrink(x / 10.0, k - 1); }
+Float tiny(Int i) { return shrink((Float) (i + 1), 310); }
+Map(Float, Int) build(Int i, Int n, Map(Float, Int) m) {
+    if (i >= n) { return m; }
+    return build(i + 1, n, m.insert(tiny(i), i));
+}
+Int scrub() {
+    for (Int i in 0..rt 100000) {
+        Str z = f"zz{i}" + str_repeat("Q", 90);
+        if (str_len(z) == 0) { return i; }
+    }
+    return 0;
+}
+Int main() {
+    Int n = rt 200;
+    Result(Map(Float, Int), RegionError) r = spawn () {
+        Map(Float, Int) e = {};
+        return build(0, n, e);
+    };
+    Map(Float, Int) m = r else { {} };
+    _ = scrub();
+    Result(Int, RegionError) z2 = spawn () { Map(Float, Int) e2 = {}; Map(Float, Int) q = build(1000, 1000 + n, e2); return scrub() + q.len(); };
+    Int zz = z2 else { 0 };
+    Float d = shrink(1.0, 310);
+    List(Float) ks = m.keys();
+    Int bad = count_bad(ks, m, 0, 0);
+    println(f"{m.len()} keys, {bad} keys that no longer look up their own value");
+    return 0;
+}
+Int count_bad(List(Float) ks, Map(Float, Int) m, Int i, Int acc) {
+    if (i >= ks.len()) { return acc; }
+    Int v = m.get(ks[i]) else { 0 - 1 };
+    Bool ok = v >= 0 && tiny(v) == ks[i];
+    return count_bad(ks, m, i + 1, acc + (if (ok) { 0 } else { 1 }));
+}
