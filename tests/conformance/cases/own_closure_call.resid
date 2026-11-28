@@ -103,6 +103,25 @@ Int c11s(Int k) {
     return c11(r, f, 3);
 }
 
+// A closure named like its enclosing function: calling it is a use of the
+// record it captured, and never a self-call (the loop analysis must not
+// take it for one).
+Int c12(Rc r, Int i) {
+    Int closure(Int) c12 = lambda(z) { r.n + z };
+    if (i <= 0) { Rc q = Rc { .n = r.n + 100, .s = r.s, .xs = r.xs }; return c12(0) * 1000 + q.n; }
+    return c12(i);
+}
+Rc c13(Rc r, Int i) {
+    if (i <= 0) { return r; }
+    if (i == 77) { Rc closure(Rc, Int) c13 = lambda(a, b) { Rc { .n = a.n + b, .s = a.s, .xs = [b] } }; return c13(r, i); }
+    return c13(Rc { .n = r.n + 1, .s = r.s, .xs = r.xs.concat([i]) }, i - 1);
+}
+Str c13s(Int k) {
+    Rc a = c13(Rc { .n = k, .s = "a", .xs = [1] }, k - 2);
+    Rc b = c13(Rc { .n = k, .s = "a", .xs = [1] }, k + 70);
+    return f"{a.n} {a.xs.len()} {b.n} {b.xs.len()}";
+}
+
 Int main() {
     Int k = rt 7;
     println(f"c1 {c1(k)}");
@@ -116,5 +135,8 @@ Int main() {
     println(f"c9 {c9(k)}");
     println(f"c10 {c10(k)}");
     println(f"c11 {c11s(k)}");
+    Int v12 = c12(Rc { .n = k, .s = "a", .xs = [1] }, k - 7);
+    println(f"c12 {v12}");
+    println(f"c13 {c13s(k)}");
     return 0;
 }
