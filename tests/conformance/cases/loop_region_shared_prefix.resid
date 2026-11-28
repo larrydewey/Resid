@@ -1,0 +1,142 @@
+// Lists that share a buffer (each one a prefix of the next, made by
+// appending into the tip) keep sharing one copy when a loop's region moves
+// them out (map.resid, flat_more; RB-31), and each still sees exactly its
+// own elements. After the move every level is appended to on its own: the
+// longest one appends in place, once, and every other append copies, so no
+// level's view changes. Nested records sharing a record or a list keep
+// their values through the move too.
+
+type Lvl = { List(Int) names; List(Node) kids; };
+type Node = { List(Lvl) sub; };
+
+Node node(List(Int) names, Int n) {
+    if (n == 0) { return Node {.sub = []}; }
+    List(Int) mine = names.concat([n]);
+    return Node {.sub = [Lvl {.names = mine, .kids = kids(mine, [n - 1], 0, [])}]};
+}
+
+// A self-call: a loop with its own region, left once per level.
+List(Node) kids(List(Int) names, List(Int) ns, Int i, List(Node) acc) {
+    if (i >= ns.len()) { return acc; }
+    return kids(names, ns, i + 1, acc.concat([node(names, ns[i])]));
+}
+
+// Every level's names, outermost first.
+List(List(Int)) levels(Node t, List(List(Int)) acc) {
+    if (t.sub.len() == 0) { return acc; }
+    return levels(t.sub[0].kids[0], acc.concat([t.sub[0].names]));
+}
+
+// Level k (from 0) of a chain from n down holds n, n - 1, ..., n - k.
+Bool level_ok(List(Int) xs, Int n, Int k) {
+    if (xs.len() != k + 1) { return false; }
+    return prefix_ok(xs, n, 0, k + 1);
+}
+
+Bool prefix_ok(List(Int) xs, Int n, Int i, Int m) {
+    if (i >= m) { return true; }
+    if (xs[i] != n - i) { return false; }
+    return prefix_ok(xs, n, i + 1, m);
+}
+
+Int bad_levels(List(List(Int)) ls, Int n, Int k, Int acc) {
+    if (k >= ls.len()) { return acc; }
+    return bad_levels(ls, n, k + 1, acc + (if (level_ok(ls[k], n, k)) { 0 } else { 1 }));
+}
+
+// Each level appended to on its own, its own element last; the result
+// must be its prefix and that element only.
+Int bad_appends(List(List(Int)) ls, Int n, Int k, Int acc) {
+    if (k >= ls.len()) { return acc; }
+    List(Int) a = ls[k].concat([0 - k - 1]);
+    Bool ok = a.len() == k + 2 && prefix_ok(a, n, 0, k + 1) && a[k + 1] == 0 - k - 1;
+    return bad_appends(ls, n, k + 1, acc + (if (ok) { 0 } else { 1 }));
+}
+
+// Garbage left behind by a loop's step, so its region compacts.
+Str junk(Int i) { return f"garbage {i} " + str_repeat("x", 1000 + i % 50); }
+
+// The same chain carried by a loop that compacts: the carried levels share
+// one buffer through every compaction and the exit.
+List(List(Int)) chain(Int i, Int n, List(Int) last, List(List(Int)) acc, Int z) {
+    if (i >= n) { return if (z < 0) { [] } else { acc }; }
+    List(Int) next = last.concat([n - i]);
+    Str g = junk(i);
+    return chain(i + 1, n, next, acc.concat([next]), z + str_len(g) % 3);
+}
+
+// Byte lists the same way (packed).
+List(List(UInt(8))) bchain(Int i, Int n, List(UInt(8)) last, List(List(UInt(8))) acc, Int z) {
+    if (i >= n) { return if (z < 0) { [] } else { acc }; }
+    List(UInt(8)) next = last.concat([(UInt(8))(i % 200)]);
+    Str g = junk(i);
+    return bchain(i + 1, n, next, acc.concat([next]), z + str_len(g) % 3);
+}
+
+Int bad_bytes(List(List(UInt(8))) ls, Int k, Int acc) {
+    if (k >= ls.len()) { return acc; }
+    List(UInt(8)) xs = ls[k];
+    List(UInt(8)) a = xs.concat([(UInt(8))255]);
+    Bool ok = xs.len() == k + 1 && a.len() == k + 2 && a[k + 1] == (UInt(8))255 && bytes_ok(a, 0, k + 1);
+    return bad_bytes(ls, k + 1, acc + (if (ok) { 0 } else { 1 }));
+}
+
+Bool bytes_ok(List(UInt(8)) xs, Int i, Int m) {
+    if (i >= m) { return true; }
+    if (xs[i] != (UInt(8))(i % 200)) { return false; }
+    return bytes_ok(xs, i + 1, m);
+}
+
+// Records sharing a record and a list, made in a loop and returned.
+type Inner = { Int id; List(Int) tags; };
+type Pair = { Inner a; Inner b; List(Int) common; };
+
+List(Pair) pairs(Int i, Int n, Inner shared, List(Int) common, List(Pair) acc) {
+    if (i >= n) { return acc; }
+    List(Int) mine = common.concat([i]);
+    Pair p = Pair {.a = shared, .b = Inner {.id = i, .tags = mine}, .common = mine};
+    return pairs(i + 1, n, shared, mine, acc.concat([p]));
+}
+
+Int bad_pairs(List(Pair) ps, Int i, Int acc) {
+    if (i >= ps.len()) { return acc; }
+    Pair p = ps[i];
+    Bool ok = p.a.id == 7 && p.a.tags.len() == 3 && p.a.tags[2] == 3 && p.b.id == i && p.b.tags.len() == i + 1 && p.common.len() == i + 1 && p.common[i] == i && p.b.tags[i] == i;
+    return bad_pairs(ps, i + 1, acc + (if (ok) { 0 } else { 1 }));
+}
+
+Int sum(List(Int) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return sum(xs, i + 1, acc + xs[i]);
+}
+
+Int main() {
+    List(Int) none = [];
+    Int n = 300;
+    List(List(Int)) none2 = [];
+    List(List(Int)) ls = levels(node(none, n), none2);
+    println(f"levels {ls.len()} bad {bad_levels(ls, n, 0, 0)} appends bad {bad_appends(ls, n, 0, 0)} after bad {bad_levels(ls, n, 0, 0)}");
+
+    // The longest level appends in place once; a second append copies.
+    List(Int) top = ls[ls.len() - 1];
+    List(Int) x = top.concat([1001]);
+    List(Int) y = top.concat([1002]);
+    List(Int) z = ls[ls.len() - 2].concat([1003]);
+    println(f"tip {top.len()} {x[x.len() - 1]} {y[y.len() - 1]} {z[z.len() - 1]} {x.len()} {y.len()} {z.len()} {sum(top, 0, 0)} after bad {bad_levels(ls, n, 0, 0)}");
+
+    List(List(Int)) cs = chain(0, 3000, none, none2, 0);
+    println(f"chain {cs.len()} bad {bad_levels(cs, 3000, 0, 0)} appends bad {bad_appends(cs, 3000, 0, 0)} after bad {bad_levels(cs, 3000, 0, 0)}");
+
+    List(UInt(8)) nb = [];
+    List(List(UInt(8))) nbs = [];
+    List(List(UInt(8))) bs = bchain(0, 3000, nb, nbs, 0);
+    println(f"bytes {bs.len()} bad {bad_bytes(bs, 0, 0)} after bad {bad_bytes(bs, 0, 0)}");
+
+    Inner sh = Inner {.id = 7, .tags = [1, 2, 3]};
+    List(Pair) np = [];
+    List(Pair) ps = pairs(0, 500, sh, none, np);
+    Pair p0 = ps[0];
+    Pair q = Pair {.a = Inner {.id = 8, .tags = p0.a.tags.concat([4])}, .b = p0.b, .common = p0.common.concat([99])};
+    println(f"pairs {ps.len()} bad {bad_pairs(ps, 0, 0)} q {q.a.id} {q.a.tags.len()} {q.common.len()} after bad {bad_pairs(ps, 0, 0)}");
+    return 0;
+}

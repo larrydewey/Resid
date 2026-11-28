@@ -647,6 +647,28 @@ if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/cbor_bytes.resid -o "$W/cbor_byt
 else
     fail=$((fail + 1)); echo "FAIL CBOR encoding of a large byte string: $(tail -1 "$W/cbor_bytes.out" "$W/cbor_bytes.log" 2>/dev/null | tr '\n' ' ')"
 fi
+# Lists sharing a buffer (each level's list its parent's plus one, built
+# through a self-recursive helper whose region is left once per level)
+# share one copy when the loop exits move them (map.resid, flat_more;
+# RB-31): 16000 levels peak at about 35 MB, under 64 MB here. Copying the
+# buffer once per list took 2.4 GB. With "chain", a compacting loop
+# settles 30000 byte lists sharing a buffer into its old generation in
+# about 9 MB (mv_into_fw); one copy per list took 842 MB.
+if (cd "$ROOT" && "$COMPILER" tests/runtime/mem/shared_prefix.resid -o "$W/shared_prefix") > "$W/shared_prefix.log" 2>&1 \
+    && python3 -I -c '
+import resource, subprocess, sys
+r = subprocess.run([sys.argv[1], "16000"], capture_output=True, text=True, timeout=120)
+p1 = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+c = subprocess.run([sys.argv[1], "30000", "chain"], capture_output=True, text=True, timeout=120)
+p2 = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+print(f"rc {r.returncode} {c.returncode} peak {p1} {p2} KB: {r.stdout.strip()} {c.stdout.strip()} {r.stderr.strip()} {c.stderr.strip()}")
+ok = r.returncode == 0 and r.stdout == "16000256016000\n" and p1 < 64 * 1024
+ok = ok and c.returncode == 0 and c.stdout == "30000 30000 15001 2985000 995000\n" and p2 < 64 * 1024
+sys.exit(0 if ok else 1)' "$W/shared_prefix" > "$W/shared_prefix.out" 2>&1; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL lists sharing a buffer share one copy at a loop exit: $(tail -1 "$W/shared_prefix.out" "$W/shared_prefix.log" 2>/dev/null | tr '\n' ' ')"
+fi
 # Volatile raw loads and stores (lower.resid): two processes pass a counter
 # through a shared page, each polling with resid_raw_loadv64; a plain load
 # is hoisted out of the loop and the program never ends. Built from its own

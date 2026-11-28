@@ -446,6 +446,7 @@ write of `network`. Every other guarantee above holds unchanged
 | A code point outside the Unicode scalar values encodes as U+FFFD, so a `Str` stays valid UTF-8. | (runtime code) |
 | A record held by a value still being built in the same expression (a constructor payload, `Some(r)`, a struct field, an earlier call operand) is never rebuilt in place by a later operand. | `own_held_in_ctor` |
 | A record held inside a value of a type the ownership analysis does not write in place (a sum payload, an `Option`, a map, a field or element of a call result) stays aliased through copies of that value, so it is never rebuilt in place under it. A sum whose payloads can reach no record, list or map (recursively; generic sums, closures and a sum name two modules declare count as reaching one) has no such object to protect and is shared freely. | `own_held_in_holder`, `own_scalar_sum_holder`, `tests/own/fuzz.sh` (holder ops in `gen.py`) |
+| Lists sharing a buffer keep sharing one copy through a loop region's move, and each still sees exactly its own elements: the copy holds the longest moved prefix (no slot past it is read, so a dead list's slots never are), and its fill is that length, so only one list can append into it in place. | `loop_region_shared_prefix`, `tests/runtime/mem/shared_prefix.resid` |
 
 The runtime is Resid (`runtime/rt/`), built on the compiler-only raw
 memory primitives, with no C library underneath. It is compiled as the

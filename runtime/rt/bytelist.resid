@@ -400,11 +400,22 @@ pub Int bl_move(Int l, Int ctx) {
     // A transient byte list is not adopted (map.resid, list_move): its
     // buffer holds no pointers, so a store into it never needs a move,
     // and an older buffer stays where it is.
-    Int nroot = if (root != 0 && mv_src(ctx, root)) { bl_copy_to(root, n, ctx) } else { root };
+    Int nroot = if (root != 0 && mv_src(ctx, root)) { bl_move_buf(root, n, ctx) } else { root };
     if (nroot == root && !mv_src(ctx, l)) { return l; }
     Int out = mv_alloc(ctx, 32);
     _ = mcopy(out, l, 32);
     return st64(out + 16, nroot) * 0 + out;
+}
+
+// Byte lists sharing a buffer share one copy in a loop's move, which
+// holds the longest of their prefixes (flat_more in map.resid, RB-31).
+Int bl_move_buf(Int f, Int n, Int ctx) {
+    Int g = fwb_get(ctx, f);
+    if (g == 0) { return fwb_put(ctx, f, bl_copy_to(f, n, ctx)); }
+    Int have = ld64(g + 16);
+    if (g == f || n <= have) { return g; }
+    _ = mcopy(g + 24 + have, f + 24 + have, n - have);
+    return (st64(g, n) + st64(g + 16, n)) * 0 + g;
 }
 
 // A copy of byte buffer f in the move's destination, same capacity.
