@@ -1,0 +1,15 @@
+option-call 2 2000
+closure-call 2 21
+sum-call 2 2000
+ret-option 7 70
+ret-closure 7 71
+generic-box 7 70
+optlist 7 70
+optlist-binder 71 70
+mutual 7 70
+closure-binder 71 71
+result 7 70
+generic-fn 7 70
+option-binder-call 71 70
+option-binder 71 70
+option-match 71 70

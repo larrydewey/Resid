@@ -1,0 +1,114 @@
+// A record literal rebuilt in place (own.resid) must not take the record
+// of a binder handed over whole to something whose alias entries the
+// analysis does not track (RB26-OWN-1): an Option, Result, sum or closure
+// a call returns, a generic function's result, a value passed through a
+// match, a closure bound before the literal. ow_holds_src now refuses a
+// rebuild of a self-reaching type when the source (or what it aliases) is
+// mentioned other than as the base of a field read, or at all inside a
+// closure or spawn. Each line is what --no-ownership prints.
+type N5 = { Int n; Option(N5) o; };
+type N6 = { Int n; Int closure(Int) f; };
+type SumH = Leaf(Int) | Hold(N9);
+type N9 = { Int n; SumH s; };
+type Box(A) = { A v; Int k; };
+type NB = { Int n; List(Box(NB)) bs; };
+type HoldL = { Option(List(NM)) xs; };
+type NM = { Int n; HoldL h; };
+type PA = { Int n; List(PB) bs; };
+type PB = { Int k; PA a; };
+type NR = { Int n; Result(NR, Str) r; };
+type NG = { Int n; Option(NG) o; };
+
+// In tail-recursive loops.
+Option(N5) wrap(N5 x) { return Some(x); }
+N5 r5(N5 t, Int i, Int n) {
+    if (i >= n) { return t; }
+    N5 e = N5 { .n = i * 10, .o = None };
+    return r5(N5 { .n = i, .o = wrap(e) }, i + 1, n);
+}
+
+Int closure(Int) mk(N6 e) { return lambda(k) { e.n + k }; }
+N6 r6(N6 t, Int i, Int n) {
+    if (i >= n) { return t; }
+    N6 e = N6 { .n = i * 10, .f = lambda(k) { k } };
+    return r6(N6 { .n = i, .f = mk(e) }, i + 1, n);
+}
+
+SumH hold(N9 x) { return Hold(x); }
+N9 r9(N9 t, Int i, Int n) {
+    if (i >= n) { return t; }
+    N9 e = N9 { .n = i * 10, .s = Leaf(0) };
+    return r9(N9 { .n = i, .s = hold(e) }, i + 1, n);
+}
+
+// Returned directly.
+N5 s5(Int i) {
+    N5 e = N5 { .n = i * 10, .o = None };
+    return N5 { .n = i, .o = wrap(e) };
+}
+
+N6 s6(Int i) {
+    N6 e = N6 { .n = i * 10, .f = lambda(k) { k } };
+    return N6 { .n = i, .f = mk(e) };
+}
+
+List(Box(NB)) mkb(NB x) { return [Box { .v = x, .k = 1 }]; }
+NB sb(Int i) { List(Box(NB)) none = []; NB e = NB { .n = i * 10, .bs = none }; return NB { .n = i, .bs = mkb(e) }; }
+
+HoldL mh(NM x) { return HoldL { .xs = Some([x]) }; }
+NM sm(Int i) { NM e = NM { .n = i * 10, .h = HoldL { .xs = None } }; return NM { .n = i, .h = mh(e) }; }
+NM sm2(Int i) { NM e = NM { .n = i * 10, .h = HoldL { .xs = None } }; HoldL h = mh(e); return NM { .n = e.n + 1, .h = h }; }
+
+List(PB) mp(PA x) { return [PB { .k = 1, .a = x }]; }
+PA sp(Int i) { List(PB) none = []; PA e = PA { .n = i * 10, .bs = none }; return PA { .n = i, .bs = mp(e) }; }
+
+N6 c_binder(Int i) {
+    N6 e = N6 { .n = i * 10, .f = lambda(k) { k } };
+    Int closure(Int) g = lambda(k) { e.n + k };
+    return N6 { .n = e.n + 1, .f = g };
+}
+
+Result(NR, Str) okr(NR x) { return Ok(x); }
+NR res(Int i) { NR e = NR { .n = i * 10, .r = Err("x") }; return NR { .n = i, .r = okr(e) }; }
+
+Option(A) gen_some(A x) { return Some(x); }
+NG gen(Int i) { NG e = NG { .n = i * 10, .o = None }; return NG { .n = i, .o = gen_some(e) }; }
+
+Option(NG) id_opt(Option(NG) o) { return o; }
+NG viaopt(Int i) { NG e = NG { .n = i * 10, .o = None }; Option(NG) w = Some(e); return NG { .n = e.n + 1, .o = id_opt(w) }; }
+NG direct(Int i) { NG e = NG { .n = i * 10, .o = None }; Option(NG) w = Some(e); return NG { .n = e.n + 1, .o = w }; }
+NG viamatch(Int i) { NG e = NG { .n = i * 10, .o = None }; Option(NG) w = Some(e); Option(NG) w2 = match w { Some(v) => Some(v), None => None }; return NG { .n = e.n + 1, .o = w2 }; }
+
+Int o5in(Option(N5) o) { return match o { Some(_) => 1, None => 0 }; }
+Int o5(Option(N5) o) { return match o { Some(v) => v.n * 100 + o5in(v.o), None => -1 }; }
+Int s9in(SumH s) { return match s { Hold(_) => 1, Leaf(_) => 0 }; }
+Int s9(SumH s) { return match s { Hold(v) => v.n * 100 + s9in(v.s), Leaf(k) => -1 }; }
+Int inner(Option(N5) o) { return match o { Some(v) => v.n, None => -1 }; }
+Int hl(Option(List(NM)) o) { return match o { Some(l) => l[0].n, None => -1 }; }
+Int hn(HoldL h) { return hl(h.xs); }
+Int rn(Result(NR, Str) r) { return match r { Ok(v) => v.n, Err(_) => -1 }; }
+Int gn(Option(NG) o) { return match o { Some(v) => v.n, None => -1 }; }
+
+Int main() {
+    Int n = rt 3;
+    N5 f5 = r5(N5 { .n = 0, .o = None }, 0, n);
+    println(f"option-call {f5.n} {o5(f5.o)}");
+    N6 g = r6(N6 { .n = 0, .f = lambda(k) { k } }, 0, n);
+    println(f"closure-call {g.n} {g.f(1)}");
+    N9 h = r9(N9 { .n = 0, .s = Leaf(0) }, 0, n);
+    println(f"sum-call {h.n} {s9(h.s)}");
+    Int i = rt 7;
+    N5 a = s5(i); println(f"ret-option {a.n} {inner(a.o)}");
+    N6 c = s6(i); println(f"ret-closure {c.n} {c.f(1)}");
+    NB b = sb(i); println(f"generic-box {b.n} {b.bs[0].v.n}");
+    NM m = sm(i); println(f"optlist {m.n} {hn(m.h)}");
+    NM m2 = sm2(i); println(f"optlist-binder {m2.n} {hn(m2.h)}");
+    PA p = sp(i); println(f"mutual {p.n} {p.bs[0].a.n}");
+    N6 cb = c_binder(i); println(f"closure-binder {cb.n} {cb.f(1)}");
+    NR r = res(i); println(f"result {r.n} {rn(r.r)}");
+    NG gg = gen(i); println(f"generic-fn {gg.n} {gn(gg.o)}");
+    NG v = viaopt(i); println(f"option-binder-call {v.n} {gn(v.o)}");
+    NG d = direct(i); println(f"option-binder {d.n} {gn(d.o)}");
+    NG vm = viamatch(i); println(f"option-match {vm.n} {gn(vm.o)}");
+    return 0;
+}

@@ -1,0 +1,67 @@
+// NEEDS the lr_is_clo mover fix (fix-r2-mem-a 29934c15 / fix-r2-mem-rt
+// efc9e4f3, merged on release-r2): fails on fix-r2-rb25 alone.
+//
+// Loop regions carrying closures inside containers (RB25-MOVERS-1): a
+// List(Int closure(Int)), an Option(Int closure(Int)) and a record with a
+// List(List(Int closure(Int))) field. lr_move's is_fn_type test matched
+// " closure(" anywhere in the type's text, so each container was moved as
+// if it were a closure environment (resid_mv_clo, a call through a word
+// of the heap) instead of by its own mover. Each loop runs well past a
+// compaction, and junk() fills freed pages before the closures are
+// called.
+type Fn = { Int n; List(List(Int closure(Int))) fs; List(List(Fn)) more; };
+
+List(Str) junk(Int i, Int n, List(Str) acc) {
+    if (i >= n) { return acc; }
+    return junk(i + 1, n, acc.concat([f"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz{i}"]));
+}
+
+List(Int closure(Int)) rlist(Int i, Int n, List(Int closure(Int)) fs) {
+    if (i >= n) { return fs; }
+    Str cap = f"cap{i}-xxxxxxxxxxxxxxxxxxxx";
+    Int closure(Int) f = lambda(v) { v + cap.len() };
+    List(Int closure(Int)) k = if (i % 1000 == 0) { [f] } else { fs };
+    return rlist(i + 1, n, k);
+}
+
+Option(Int closure(Int)) ropt(Int i, Int n, Option(Int closure(Int)) fs) {
+    if (i >= n) { return fs; }
+    Str cap = f"cap{i}-xxxxxxxxxxxxxxxxxxxx";
+    Int closure(Int) f = lambda(v) { v + cap.len() };
+    Option(Int closure(Int)) k = if (i % 1000 == 0) { Some(f) } else { fs };
+    return ropt(i + 1, n, k);
+}
+
+Fn rfn(Int i, Int n, Fn t) {
+    if (i >= n) { return t; }
+    Str s = f"{i}-{i * 7}";
+    Str cap = f"cap{i}xxxxxxxxxxxxxxxxxxxxxxxx";
+    List(List(Int closure(Int))) e = [];
+    List(List(Fn)) em = [];
+    Int closure(Int) lf = lambda(v) { v + cap.len() };
+    List(List(Int closure(Int))) k = if (i == 0) { [[lf]] } else { t.fs };
+    List(List(Fn)) km = if (i == 0) { [[Fn { .n = 106, .fs = e, .more = em }]] } else { t.more };
+    return rfn(i + 1, n, Fn { .n = t.n + s.len() % 2, .fs = k, .more = km });
+}
+
+Int main() {
+    Int n = rt 200000;
+    List(Int closure(Int)) e1 = [];
+    List(Int closure(Int)) fs = rlist(0, n, e1);
+    List(Str) j1 = junk(0, 30000, []);
+    Int closure(Int) g1 = fs[0];
+    println(f"list {fs.len()} {g1(1)} {j1.len()}");
+    Option(Int closure(Int)) e2 = None;
+    Option(Int closure(Int)) o = ropt(0, n, e2);
+    List(Str) j2 = junk(0, 30000, []);
+    Int closure(Int) z = lambda(v) { 0 };
+    Int closure(Int) g2 = o else { z };
+    println(f"option {g2(1)} {j2.len()}");
+    List(List(Int closure(Int))) e3 = [];
+    List(List(Fn)) e3m = [];
+    Fn f = rfn(0, n, Fn { .n = 0, .fs = e3, .more = e3m });
+    List(Str) j3 = junk(0, 30000, []);
+    Int closure(Int) g3 = f.fs[0][0];
+    println(f"record {g3(1)} {f.more[0][0].n} {j3.len()}");
+    return 0;
+}
